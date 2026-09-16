@@ -179,4 +179,96 @@ mod tests {
             Err(IrError::JumpOutOfRange { target: 4, .. })
         ));
     }
+
+    #[test]
+    fn rejects_empty_artifact_hash() {
+        let mut artifact = Artifact::minimal_return("abc");
+        artifact.envelope.artifact_hash.clear();
+        assert!(matches!(
+            validate(&artifact, &EngineCaps::current()),
+            Err(IrError::EmptyArtifactHash)
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_program() {
+        let artifact = Artifact {
+            envelope: Envelope::typescript_v1("abc"),
+            program: Program {
+                entry: FuncId(0),
+                functions: vec![],
+            },
+        };
+        assert!(matches!(
+            validate(&artifact, &EngineCaps::current()),
+            Err(IrError::EmptyProgram)
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_function() {
+        let artifact = Artifact {
+            envelope: Envelope::typescript_v1("abc"),
+            program: Program {
+                entry: FuncId(0),
+                functions: vec![
+                    Function {
+                        id: FuncId(0),
+                        name: "a".to_string(),
+                        param_count: 0,
+                        local_count: 0,
+                        instructions: vec![Instruction::Return],
+                        spans: vec![None],
+                    },
+                    Function {
+                        id: FuncId(0),
+                        name: "b".to_string(),
+                        param_count: 0,
+                        local_count: 0,
+                        instructions: vec![Instruction::Return],
+                        spans: vec![None],
+                    },
+                ],
+            },
+        };
+        assert!(matches!(
+            validate(&artifact, &EngineCaps::current()),
+            Err(IrError::DuplicateFunction(0))
+        ));
+    }
+
+    #[test]
+    fn rejects_span_length_mismatch() {
+        let artifact = Artifact {
+            envelope: Envelope::typescript_v1("abc"),
+            program: Program {
+                entry: FuncId(0),
+                functions: vec![Function {
+                    id: FuncId(0),
+                    name: "main".to_string(),
+                    param_count: 0,
+                    local_count: 0,
+                    instructions: vec![Instruction::Return],
+                    spans: vec![],
+                }],
+            },
+        };
+        assert!(matches!(
+            validate(&artifact, &EngineCaps::current()),
+            Err(IrError::SpanLengthMismatch { func: 0, index: 0 })
+        ));
+    }
+
+    #[test]
+    fn rejects_unsupported_host_capability() {
+        let mut artifact = Artifact::minimal_return("abc");
+        artifact
+            .envelope
+            .required_host_capabilities
+            .push(HostCapability("host.made_up".to_string()));
+        assert!(matches!(
+            validate(&artifact, &EngineCaps::current()),
+            Err(IrError::UnsupportedHostCapability(id)) if id == "host.made_up"
+        ));
+    }
 }
