@@ -1,0 +1,20 @@
+{
+  "name": "@tcc-engine/frontend-typescript",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "TypeScript frontend: compile supported programs into TCC artifacts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "tsc --noEmit",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}
