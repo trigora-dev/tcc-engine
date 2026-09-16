@@ -10,12 +10,14 @@ A library call is not a durable operation unless a frontend lowers it to one of 
 |---|---|---|---|
 | Effect | `Effect` | `{execution_id}:{key}` | `run_effect`, then `persist_effect` |
 | Sleep | `Sleep` | timer wait on this execution | `register_timer` |
-| Event wait | `WaitForEvent` | `{execution_id}:{name}:{pc}` | `register_wait` |
+| Event wait | `WaitForEvent` | `{execution_id}:{name}:{correlation_key}:{pc}` | `register_wait` |
 | Child invoke | `Invoke` | `{parent}:invoke:{pc}` | `create_child` |
 
 If an effect journal record is `completed`, the engine returns the stored result and must not invoke the external operation again.
 
 A wake delivered to a wait or child that is already terminal is a no-op.
+
+An absent event-wait correlation key is an empty field: `{execution_id}:{name}::{pc}`.
 
 ## Effects
 

@@ -34,7 +34,7 @@ Requests are coarse. A persist of wait registration and continuation suspend mus
 | `persist_confirmed` | Checkpoint committed at `revision` |
 | `effect_result` | Effect succeeded |
 | `effect_failed` | Effect failed |
-| `event_payload` | Matching event delivered |
+| `event_payload` | Matching event delivered. Valid when the continuation is `suspended` on an event wait and no persist request is outstanding |
 | `child_result` | Child execution completed |
 | `artifact` | Requested artifact identity |
 

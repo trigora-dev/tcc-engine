@@ -95,4 +95,4 @@ In this repository, validation is `tcc_ir::validate`.
 
 ## Status
 
-Format version `1` is the TypeScript subset identified by `language_semantics_version` `ts.subset.v1`. Control, locals, constants, and durable-operation instructions are defined. Exception instructions are encoded in the format; execution of `Call`, `Throw`, `PushTry`, and `PopTry` is not implemented.
+Format version `1` is the TypeScript subset identified by `language_semantics_version` `ts.subset.v1`. Control, locals, constants, and durable-operation instructions are defined. Exception instructions are encoded in the format; execution of `Call`, `Throw`, `PushTry`, and `PopTry` is not implemented. The Phase 1 first example is [spec/examples/first.md](examples/first.md).

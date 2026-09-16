@@ -78,7 +78,7 @@ The repository is under development. Present:
 - Artifact envelope and validation
 - Continuation encoding
 - Host protocol
-- Minimal stepper
+- Minimal stepper and a hand-authored first example
 
 Not present: a TypeScript compiler frontend, a persistent reference host, crash-recovery tests, and language bindings beyond the WASM export surface.
 
@@ -100,6 +100,7 @@ pnpm --dir frontends/typescript test
 
 - [Program format](spec/program-format.md)
 - [Execution semantics](spec/execution-semantics.md)
+- [First example](spec/examples/first.md)
 - [Continuation format](spec/continuation-format.md)
 - [Host protocol](spec/host-protocol.md)
 - [Durable operations](spec/durable-operations.md)
