@@ -1,0 +1,10 @@
+[package]
+name = "tcc-core"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "TCC execution and durable-operation semantics"
+
+[dependencies]
+tcc-ir = { path = "../tcc-ir" }
+tcc-state = { path = "../tcc-state" }

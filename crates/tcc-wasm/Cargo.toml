@@ -1,0 +1,13 @@
+[package]
+name = "tcc-wasm"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "WASM exports and boundary conversion for the TCC core"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+tcc-core = { path = "../tcc-core" }
+tcc-ir = { path = "../tcc-ir" }

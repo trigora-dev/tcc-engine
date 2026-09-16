@@ -1,0 +1,6 @@
+[package]
+name = "tcc-state"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "TCC values, frames, and continuation encoding"

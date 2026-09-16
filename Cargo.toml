@@ -1,0 +1,9 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tcc-ir",
+    "crates/tcc-state",
+    "crates/tcc-core",
+    "crates/tcc-host",
+    "crates/tcc-wasm",
+]

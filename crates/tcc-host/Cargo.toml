@@ -1,0 +1,11 @@
+[package]
+name = "tcc-host"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "TCC host protocol driver and Host trait"
+
+[dependencies]
+tcc-core = { path = "../tcc-core" }
+tcc-ir = { path = "../tcc-ir" }
+tcc-state = { path = "../tcc-state" }

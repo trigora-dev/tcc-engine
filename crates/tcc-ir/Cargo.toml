@@ -1,0 +1,6 @@
+[package]
+name = "tcc-ir"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "TCC program representation, artifact envelope, and validation"
