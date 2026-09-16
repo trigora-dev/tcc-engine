@@ -82,6 +82,7 @@ impl<H: Host> Driver<H> {
                 }
                 EngineOutcome::Failed { message } => return Ok(DriverOutcome::Failed { message }),
                 EngineOutcome::BudgetExhausted => return Ok(DriverOutcome::BudgetExhausted),
+                EngineOutcome::Suspended => return Ok(DriverOutcome::Suspended),
                 EngineOutcome::Host(request) => {
                     let suspend = matches!(
                         request,

@@ -14,6 +14,7 @@ pub enum EngineOutcome {
     Completed { result: Value },
     Failed { message: String },
     BudgetExhausted,
+    Suspended,
 }
 
 #[derive(Debug)]
@@ -88,6 +89,9 @@ impl Engine {
     }
 
     pub fn apply_host_response(&mut self, response: HostResponse) -> Result<(), CoreError> {
+        if self.outstanding.is_none() {
+            return self.apply_wake(response);
+        }
         let request = self
             .outstanding
             .take()
@@ -167,6 +171,33 @@ impl Engine {
         }
     }
 
+    fn apply_wake(&mut self, response: HostResponse) -> Result<(), CoreError> {
+        let waiting_for_event = matches!(
+            (&self.continuation.status, &self.continuation.pending),
+            (
+                ContinuationStatus::Suspended,
+                Some(PendingOp::Wait {
+                    kind: WaitKind::Event { .. },
+                })
+            )
+        );
+        match (waiting_for_event, response) {
+            (true, HostResponse::EventPayload { value }) => {
+                self.continuation.stack.push(value);
+                self.continuation.pending = None;
+                self.continuation.status = ContinuationStatus::Runnable;
+                self.outstanding = Some(HostRequest::PersistCheckpoint {
+                    revision: self.continuation.revision + 1,
+                });
+                Ok(())
+            }
+            (_, response) => Err(CoreError::UnexpectedHostResponse {
+                expected: "event_payload",
+                got: response.kind_name(),
+            }),
+        }
+    }
+
     pub fn run_until_host(&mut self, budget: u32) -> EngineOutcome {
         if let Some(request) = &self.outstanding {
             return EngineOutcome::Host(request.clone());
@@ -189,9 +220,7 @@ impl Engine {
                 };
             }
             ContinuationStatus::Suspended => {
-                return EngineOutcome::Host(HostRequest::PersistCheckpoint {
-                    revision: self.continuation.revision,
-                });
+                return EngineOutcome::Suspended;
             }
             ContinuationStatus::Runnable | ContinuationStatus::Running => {
                 self.continuation.status = ContinuationStatus::Running;
@@ -335,11 +364,11 @@ impl Engine {
 
     fn yield_wait(&mut self) -> Result<Option<EngineOutcome>, CoreError> {
         let event_name = expect_string(self.pop()?)?;
-        let wait_id = format!(
-            "{}:{}:{}",
-            self.continuation.execution_id,
-            event_name,
-            self.frame()?.pc
+        let wait_id = event_wait_id(
+            &self.continuation.execution_id,
+            &event_name,
+            None,
+            self.frame()?.pc,
         );
         self.advance_pc()?;
         self.continuation.pending = Some(PendingOp::Wait {
@@ -463,6 +492,21 @@ fn expect_number(value: Value) -> Result<f64, CoreError> {
     }
 }
 
+fn event_wait_id(
+    execution_id: &str,
+    event_name: &str,
+    correlation_key: Option<&str>,
+    pc: u32,
+) -> String {
+    format!(
+        "{}:{}:{}:{}",
+        execution_id,
+        event_name,
+        correlation_key.unwrap_or(""),
+        pc
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -517,5 +561,31 @@ mod tests {
         let mut engine = Engine::start(artifact, "exec-c", &caps()).unwrap();
         assert_eq!(engine.run_until_host(0), EngineOutcome::BudgetExhausted);
         assert_eq!(engine.continuation().frames[0].pc, 0);
+        assert_eq!(engine.continuation().revision, 0);
+    }
+
+    #[test]
+    fn persist_ack_does_not_commit_revision() {
+        let artifact = Artifact::minimal_return("hash-ack");
+        let mut engine = Engine::start(artifact, "exec-ack", &caps()).unwrap();
+        assert!(matches!(
+            engine.run_until_host(16),
+            EngineOutcome::Host(HostRequest::PersistCheckpoint { .. })
+        ));
+        engine.apply_host_response(HostResponse::Ack).unwrap();
+        assert_eq!(engine.continuation().revision, 0);
+        assert_eq!(engine.continuation().status, ContinuationStatus::Completed);
+    }
+
+    #[test]
+    fn persist_confirmed_sets_revision() {
+        let artifact = Artifact::minimal_return("hash-confirm");
+        let mut engine = Engine::start(artifact, "exec-confirm", &caps()).unwrap();
+        engine.run_until_host(16);
+        engine
+            .apply_host_response(HostResponse::PersistConfirmed { revision: 7 })
+            .unwrap();
+        assert_eq!(engine.continuation().revision, 7);
+        assert_eq!(engine.continuation().status, ContinuationStatus::Completed);
     }
 }
