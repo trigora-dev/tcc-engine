@@ -44,7 +44,9 @@ The host owns durable state. The engine’s in-memory `outstanding` request is n
 | `effect_result` | Effect succeeded |
 | `effect_failed` | Effect failed |
 | `event_payload` | Matching event delivered. Valid when the continuation is `suspended` on an event wait and no persist request is outstanding |
-| `child_result` | Child execution completed |
+| `timer_fired` | Matching timer delivered. Valid when the continuation is `suspended` on a timer wait |
+| `child_result` | Child execution completed. Valid when the continuation is `suspended` on a child wait |
+| `cancel` | Host-delivered cancellation. Takes effect at a durable boundary; does not interrupt an in-flight `run_effect` |
 | `artifact` | Requested artifact identity |
 
 A response that does not match the outstanding request is an error.

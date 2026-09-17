@@ -24,7 +24,11 @@ A continuation resumes only with the artifact identified by `artifact.hash`. See
 
 ## TypeScript subset
 
-For `language_semantics_version` `ts.subset.v1`, `JumpIfTrue` and `JumpIfFalse` use JavaScript truthiness. The following values are falsy: `undefined`, `null`, `false`, `+0`, `-0`, `NaN`, and `""`. Objects are truthy. All other current value types are truthy.
+For `language_semantics_version` `ts.subset.v1`, `JumpIfTrue` and `JumpIfFalse` use JavaScript truthiness. The following values are falsy: `undefined`, `null`, `false`, `+0`, `-0`, `NaN`, and `""`. Objects and arrays are truthy. All other current value types are truthy.
+
+A construct is supported only when compile, native execution, WASM execution, and SIGKILL/resume at every durable boundary agree. Untaken branches and completed journaled effects must not run after resume. The supported source subset is [TypeScript subset](typescript-subset.md).
+
+Same-key effects and same-pc waits keep frozen identities (`{execution_id}:{key}` and `{execution_id}:{name}:{correlation}:{pc}`). A loop that re-executes the same `Effect` instruction therefore hits the journal skip path rather than a new provider call.
 
 A different language must not reuse these instructions for a different truthiness rule without a new engine feature.
 
@@ -47,4 +51,4 @@ The first example, including expected host requests and continuation snapshots, 
 
 ## Implemented instructions
 
-The stepper implements `Nop`, jumps, locals, constants, `Pop`, `NewObject`, `SetProp`, `Return`, durable-operation yield, and event-wait wake via `event_payload`. `Call` and exception instructions are defined in the format and are not executed.
+The stepper implements `Nop`, jumps, locals, constants, `Pop`, `NewObject`, `SetProp`, `GetProp`, `NewArray`, `ArrayPush`, `StrictEq` / `StrictNeq`, numeric compare, `Not`, `Return`, `Throw` / `PushTry` / `PopTry`, durable-operation yield, event-wait wake via `event_payload`, timer wake via `timer_fired`, child wake via `child_result`, and host `cancel`. `Call` is defined in the format and is not executed.

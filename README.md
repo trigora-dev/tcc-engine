@@ -79,10 +79,10 @@ The repository is under development. Present:
 - Artifact envelope and validation
 - Continuation encoding
 - Host protocol
-- Stepper, object values, and a documented first example
-- TypeScript frontend that compiles `@trigora/sdk` durable operations
+- Stepper, objects, arrays, control flow, exceptions, timers, cancellation, and child invoke
+- TypeScript frontend that compiles `@trigora/sdk` durable operations (`effect`, `waitForEvent`, `sleep`, `invoke`)
 - WASM C ABI, JavaScript binding, and an in-memory Node host
-- SQLite Node host with process-restart recovery
+- SQLite Node host with process-restart recovery and a conformance helper
 
 Not present: a published SDK.
 
@@ -100,13 +100,14 @@ pnpm --dir frontends/typescript install
 pnpm --dir frontends/typescript test
 cargo build -p tcc-wasm --target wasm32-unknown-unknown --release
 node --experimental-strip-types --test hosts/node-memory/src/host.test.ts
-node --experimental-sqlite --experimental-strip-types --test hosts/node/src/host.test.ts hosts/node/src/restart.test.ts
+node --experimental-sqlite --experimental-strip-types --test hosts/node/src/host.test.ts hosts/node/src/restart.test.ts hosts/node/src/conformance.test.ts
 ```
 
 ## Specifications
 
 - [Program format](spec/program-format.md)
 - [Execution semantics](spec/execution-semantics.md)
+- [TypeScript subset](spec/typescript-subset.md)
 - [First example](spec/examples/first.md)
 - [Continuation format](spec/continuation-format.md)
 - [Host protocol](spec/host-protocol.md)

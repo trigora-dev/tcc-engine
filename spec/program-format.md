@@ -57,6 +57,13 @@ Locals and constants:
 - `Pop`
 - `NewObject`
 - `SetProp { key }`
+- `GetProp { key }`
+- `NewArray`
+- `ArrayPush`
+- `StrictEq`
+- `StrictNeq`
+- `Lt` / `Le` / `Gt` / `Ge`
+- `Not`
 
 Durable operations:
 
@@ -71,7 +78,7 @@ Exceptions:
 - `PushTry { catch, finally }`
 - `PopTry`
 
-Constants are `undefined`, `null`, boolean, IEEE-754 binary64 number, and string. Runtime values may also be one-level objects (`NewObject` / `SetProp`) whose fields are those value types. Nested identity, cycles, and arrays are not in this format version’s executed subset. These are JavaScript value semantics. They are not a universal language value model.
+Constants are `undefined`, `null`, boolean, IEEE-754 binary64 number, and string. Runtime values may also be objects (`NewObject` / `SetProp` / `GetProp`) and arrays (`NewArray` / `ArrayPush`) whose elements are those value types. Nested identity and cycles are not in this format version’s executed subset. `===` / `!==` compare values structurally (there is no object identity). Numeric compare requires two numbers. These are JavaScript-inspired value semantics. They are not a universal language value model.
 
 ## Language semantics
 
@@ -97,4 +104,4 @@ In this repository, validation is `tcc_ir::validate`. `tcc_ir::encode_artifact` 
 
 ## Current coverage
 
-Format version `1` is the TypeScript subset identified by `language_semantics_version` `ts.subset.v1`. Control, locals, constants, object literals, and durable-operation instructions are defined. Exception instructions are encoded in the format; execution of `Call`, `Throw`, `PushTry`, and `PopTry` is not implemented. The first example is [spec/examples/first.md](examples/first.md).
+Format version `1` is the TypeScript subset identified by `language_semantics_version` `ts.subset.v1`. Control, locals, constants, objects, arrays, comparisons, exceptions, and durable-operation instructions are defined. `Call` is encoded in the format and is not executed. The supported source language is [TypeScript subset](typescript-subset.md). The first example is [spec/examples/first.md](examples/first.md).

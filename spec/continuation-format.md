@@ -16,8 +16,9 @@ A continuation is the explicit program state required to resume an execution. It
 | `stack` | Operand stack |
 | `pending` | Outstanding durable operation, if any |
 | `result` | Result value when status is `completed` |
+| `try_stack` | Active exception handlers (`catch` pc, optional `finally` pc, stack depth). Absent or empty when none. |
 
-Values in frames and on the stack use the encoding defined for the continuation's `language_semantics_version`. For `ts.subset.v1` that is `undefined`, `null`, boolean, IEEE-754 binary64 number, string, and objects with string keys (no cycles).
+Values in frames and on the stack use the encoding defined for the continuation's `language_semantics_version`. For `ts.subset.v1` that is `undefined`, `null`, boolean, IEEE-754 binary64 number, string, objects with string keys, and arrays (no cycles).
 
 Unknown value tags must fail decode. They must not be coerced.
 
