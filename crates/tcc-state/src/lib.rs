@@ -8,7 +8,7 @@
 pub mod continuation;
 pub mod encode;
 pub mod error;
-mod json;
+pub mod json;
 pub mod value;
 
 pub use continuation::{ArtifactId, Continuation, ContinuationStatus, Frame, PendingOp, WaitKind};

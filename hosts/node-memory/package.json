@@ -1,0 +1,10 @@
+{
+  "name": "@tcc-engine/host-node-memory",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "In-memory Node host with a fake effect provider",
+  "scripts": {
+    "test": "node --experimental-strip-types --test src/host.test.ts"
+  }
+}

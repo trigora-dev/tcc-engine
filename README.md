@@ -65,6 +65,7 @@ Use this repository to:
 | `crates/tcc-wasm` | WebAssembly exports |
 | `frontends/` | Language frontends |
 | `bindings/` | Language embeddings of the engine |
+| `hosts/` | Reference hosts (in-memory Node; SQLite later) |
 | `spec/` | Specifications |
 
 A frontend compiles source to a TCC artifact. A binding loads the engine in a host language. They are not the same thing.
@@ -78,9 +79,11 @@ The repository is under development. Present:
 - Artifact envelope and validation
 - Continuation encoding
 - Host protocol
-- Minimal stepper and a hand-authored first example
+- Minimal stepper, object values, and a hand-authored first example
+- TypeScript frontend that lowers intended `@trigora/sdk` imports
+- WASM C ABI, JS binding, and an in-memory Node host
 
-Not present: a TypeScript compiler frontend, a persistent reference host, crash-recovery tests, and language bindings beyond the WASM export surface.
+Not present: a published SDK, a persistent reference host, crash-recovery tests, and SQLite.
 
 ## Development
 
@@ -94,6 +97,8 @@ cargo clippy --workspace --all-targets
 ```sh
 pnpm --dir frontends/typescript install
 pnpm --dir frontends/typescript test
+cargo build -p tcc-wasm --target wasm32-unknown-unknown --release
+node --experimental-strip-types --test hosts/node-memory/src/host.test.ts
 ```
 
 ## Specifications

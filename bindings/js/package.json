@@ -1,0 +1,14 @@
+{
+  "name": "@tcc-engine/bindings-js",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "JavaScript binding for the TCC WASM engine",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build:wasm": "cargo build -p tcc-wasm --target wasm32-unknown-unknown --release",
+    "test": "node --experimental-strip-types --test src/index.test.ts"
+  }
+}

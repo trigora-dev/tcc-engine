@@ -11,3 +11,4 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 tcc-core = { path = "../tcc-core" }
 tcc-ir = { path = "../tcc-ir" }
+tcc-state = { path = "../tcc-state" }
