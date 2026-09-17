@@ -17,8 +17,8 @@ pub use tcc_core::{
 pub use tcc_ir::{validate, Artifact};
 
 thread_local! {
-    static ENGINE: RefCell<Option<Engine>> = RefCell::new(None);
-    static LAST: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+    static ENGINE: RefCell<Option<Engine>> = const { RefCell::new(None) };
+    static LAST: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Stable numeric export for host bindings that load the module.
