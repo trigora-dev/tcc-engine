@@ -6,4 +6,4 @@ A host supplies persistence, effects, events, and scheduling. It is not a fronte
 |---|---|
 | `hosts/node-memory` | In-memory Node driver with a fake effect provider |
 
-This host is for Phase 2 equivalence tests. It does not survive process restart. SQLite persistence is Phase 3.
+This host keeps execution state in process memory and does not survive restart. A persistent host is not in this repository yet.

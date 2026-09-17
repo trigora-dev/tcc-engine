@@ -43,8 +43,8 @@ A different language must not reuse these instructions for a different truthines
 
 A suspended execution does not proceed until the host delivers the matching wake. Wake delivery is host-driven.
 
-The hand-authored first example, including expected host requests and continuation snapshots, is [First example](examples/first.md).
+The first example, including expected host requests and continuation snapshots, is [First example](examples/first.md).
 
-## Status
+## Implemented instructions
 
-The stepper implements `Nop`, jumps, locals, constants, `Pop`, `NewObject`, `SetProp`, `Return`, durable-operation yield, and event-wait wake via `event_payload`. `Call` and exception instructions are not executed.
+The stepper implements `Nop`, jumps, locals, constants, `Pop`, `NewObject`, `SetProp`, `Return`, durable-operation yield, and event-wait wake via `event_payload`. `Call` and exception instructions are defined in the format and are not executed.

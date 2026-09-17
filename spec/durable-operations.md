@@ -4,7 +4,7 @@ Durable operations are explicit instructions. Ordinary computation is not journa
 
 A library call is not a durable operation unless a frontend lowers it to one of the operations below, or the host exposes it as a capability.
 
-For the TypeScript frontend, durable operations are **resolved imports** of the intended `@trigora/sdk` exports `effect` and `waitForEvent`. The SDK package is not required at compile time or at runtime. Aliased imports (`import { effect as durableEffect } from "@trigora/sdk"`) are durable. A function that is merely named `effect` is not. There is no injected `ctx` and no `workflow()` wrapper.
+For the TypeScript frontend, durable operations are **resolved imports** of `@trigora/sdk` exports `effect` and `waitForEvent`. The SDK package is not required at compile time or at runtime. Aliased imports (`import { effect as durableEffect } from "@trigora/sdk"`) are durable. A function that is merely named `effect` is not. Durable operations are imports, not a context object or a `workflow()` wrapper.
 
 The effect callback is not compiled into the artifact. The host performs the work identified by the string-literal key.
 
