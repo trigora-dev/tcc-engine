@@ -54,4 +54,4 @@ jobs:
       - run: cargo build -p tcc-wasm --target wasm32-unknown-unknown --release
       - run: pnpm --dir frontends/typescript install --frozen-lockfile
       - run: node --experimental-strip-types --test bindings/js/src/index.test.ts hosts/node-memory/src/host.test.ts
-      - run: node --experimental-sqlite --experimental-strip-types --test hosts/node/src/host.test.ts hosts/node/src/restart.test.ts
+      - run: node --experimental-sqlite --experimental-strip-types --test hosts/node/src/host.test.ts hosts/node/src/restart.test.ts hosts/node/src/conformance.test.ts

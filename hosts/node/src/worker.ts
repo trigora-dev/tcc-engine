@@ -1,6 +1,6 @@
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 
-import { resumeExecution, startExecution } from "./host.ts";
+import { resumeExecution, startExecution, type FakeEffects } from "./host.ts";
 
 const mode = process.env.TCC_MODE ?? "start";
 const dbPath = required("TCC_DB_PATH");
@@ -9,10 +9,24 @@ const executionId = process.env.TCC_EXECUTION_ID ?? "first";
 const ownerToken = process.env.TCC_OWNER_TOKEN ?? "owner-1";
 const resultPath = process.env.TCC_RESULT_PATH;
 const effectLogPath = process.env.TCC_EFFECT_LOG_PATH;
+const config = process.env.TCC_CONFIG_PATH
+  ? (JSON.parse(readFileSync(process.env.TCC_CONFIG_PATH, "utf8")) as {
+      effects?: FakeEffects;
+      failCounts?: Record<string, number>;
+      eventPayload?: unknown;
+      autoDeliverEvent?: boolean;
+      childArtifacts?: Record<string, string>;
+      cancel?: boolean;
+    })
+  : {};
 const eventPayload = process.env.TCC_EVENT_PAYLOAD
   ? JSON.parse(process.env.TCC_EVENT_PAYLOAD)
-  : undefined;
-const autoDeliverEvent = process.env.TCC_AUTO_EVENT !== "0";
+  : config.eventPayload;
+const autoDeliverEvent =
+  process.env.TCC_AUTO_EVENT !== undefined ? process.env.TCC_AUTO_EVENT !== "0" : (config.autoDeliverEvent ?? true);
+const effects = process.env.TCC_EFFECTS
+  ? (JSON.parse(process.env.TCC_EFFECTS) as FakeEffects)
+  : (config.effects ?? { generate: 42 });
 
 const options = {
   dbPath,
@@ -22,7 +36,10 @@ const options = {
   eventPayload,
   autoDeliverEvent,
   effectLogPath,
-  effects: { generate: 42 },
+  effects,
+  failCounts: config.failCounts,
+  childArtifacts: config.childArtifacts,
+  cancel: config.cancel ?? process.env.TCC_CANCEL === "1",
 };
 
 const result =

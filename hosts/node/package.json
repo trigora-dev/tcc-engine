@@ -5,6 +5,6 @@
   "type": "module",
   "description": "Node host with SQLite persistence",
   "scripts": {
-    "test": "node --experimental-sqlite --experimental-strip-types --test src/host.test.ts src/restart.test.ts"
+    "test": "node --experimental-sqlite --experimental-strip-types --test src/host.test.ts src/restart.test.ts src/conformance.test.ts"
   }
 }

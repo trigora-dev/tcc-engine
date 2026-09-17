@@ -18,6 +18,9 @@ export type RunOptions = {
   budget?: number;
   autoDeliverEvent?: boolean;
   effectLogPath?: string;
+  failCounts?: Record<string, number>;
+  childArtifacts?: Record<string, string>;
+  cancel?: boolean;
 };
 
 export type ResumeOptions = Omit<RunOptions, "artifactJson"> & {
@@ -69,10 +72,10 @@ export async function resumeExecution(options: ResumeOptions): Promise<RunResult
     if (!artifactJson) {
       throw new Error(`missing artifact \`${execution.artifact_hash}\``);
     }
-    if (execution.status === "completed" && saved) {
+    if ((execution.status === "completed" || execution.status === "cancelled" || execution.status === "failed") && saved) {
       const parsed = JSON.parse(saved.json) as { result: unknown };
       return {
-        status: "completed",
+        status: execution.status,
         result: parsed.result,
         continuationJson: saved.json,
         revision: saved.revision,
@@ -93,6 +96,9 @@ export async function resumeExecution(options: ResumeOptions): Promise<RunResult
       autoDeliverEvent: options.autoDeliverEvent ?? true,
       effectLogPath: options.effectLogPath,
       leaseMs: options.leaseMs,
+      failCounts: options.failCounts,
+      childArtifacts: options.childArtifacts,
+      cancel: options.cancel,
     });
   } finally {
     store.close();
@@ -106,10 +112,12 @@ function drive(
 ): RunResult {
   const effects = options.effects ?? { generate: 42 };
   const budget = options.budget ?? 256;
+  const state = { engine };
+  const failCounts = { ...(options.failCounts ?? {}) };
 
   for (;;) {
-    const outcome = engine.runUntilHost(budget);
-    const next = handleOutcome(store, engine, outcome, effects, options);
+    const outcome = state.engine.runUntilHost(budget);
+    const next = handleOutcome(store, state, outcome, effects, failCounts, options);
     if (next === "continue") {
       continue;
     }
@@ -117,36 +125,52 @@ function drive(
   }
 }
 
+type EngineState = { engine: EngineBinding };
+
 function handleOutcome(
   store: Store,
-  engine: EngineBinding,
+  state: EngineState,
   outcome: Outcome,
   effects: FakeEffects,
+  failCounts: Record<string, number>,
   options: RunOptions & { ownerToken: string; executionId: string },
 ): "continue" | RunResult {
   switch (outcome.type) {
     case "completed":
       return snapshot(store, options.executionId, "completed", outcome.result);
     case "failed":
-      throw new Error(outcome.message);
+      return snapshot(store, options.executionId, "failed", outcome.message);
+    case "cancelled":
+      return snapshot(store, options.executionId, "cancelled", undefined);
     case "budget_exhausted":
       throw new Error("instruction budget exhausted");
     case "suspended":
-      return deliverEvent(store, engine, options);
+      return deliverWake(store, state, options);
     case "host": {
       const request = outcome.request;
       switch (request.type) {
         case "run_effect":
-          return runEffect(store, engine, request, effects, options);
+          return runEffect(store, state.engine, request, effects, failCounts, options);
         case "persist_effect":
-          return persistEffect(store, engine, request, options.executionId);
+          return persistEffect(store, state.engine, request, options.executionId);
         case "register_wait":
-          return registerWait(store, engine, request, options.executionId);
+          return registerWait(store, state.engine, request, options.executionId);
         case "persist_checkpoint":
-          return persistCheckpoint(store, engine, request, options);
+          return persistCheckpoint(store, state.engine, request, options);
         case "register_timer":
+          store.upsertTimer(options.executionId, Number(request.resume_at_ms ?? 0));
+          maybeCrash("after_register_timer");
+          state.engine.applyHostResponse({ type: "ack" });
+          return "continue";
         case "create_child":
-          engine.applyHostResponse({ type: "ack" });
+          store.upsertChild(
+            String(request.invoke_id),
+            options.executionId,
+            String(request.child_execution_id),
+            String(request.flow_name),
+          );
+          maybeCrash("after_create_child");
+          state.engine.applyHostResponse({ type: "ack" });
           return "continue";
         default:
           throw new Error(`unsupported host request \`${String(request.type)}\``);
@@ -162,6 +186,7 @@ function runEffect(
   engine: EngineBinding,
   request: Record<string, unknown>,
   effects: FakeEffects,
+  failCounts: Record<string, number>,
   options: RunOptions & { executionId: string },
 ): "continue" {
   const key = String(request.key);
@@ -176,6 +201,15 @@ function runEffect(
     return "continue";
   }
   store.markEffectStarted(options.executionId, key, idempotencyKey);
+  if ((failCounts[key] ?? 0) > 0) {
+    failCounts[key] = (failCounts[key] ?? 0) - 1;
+    if (options.effectLogPath) {
+      appendFileSync(options.effectLogPath, `${key}\n`);
+    }
+    store.failEffect(options.executionId, key, idempotencyKey, JSON.stringify({ t: "string", v: "failed" }));
+    maybeCrash("after_persist_effect", key);
+    return runEffect(store, engine, request, effects, failCounts, options);
+  }
   if (!(key in effects)) {
     throw new Error(`no fake effect for \`${key}\``);
   }
@@ -198,8 +232,12 @@ function persistEffect(
   const key = String(request.key);
   const idempotencyKey = String(request.idempotency_key ?? `${executionId}:${key}`);
   const resultJson = JSON.stringify(request.result ?? null);
-  store.completeEffect(executionId, key, idempotencyKey, resultJson);
-  maybeCrash("after_persist_effect");
+  if (request.status === "failed") {
+    store.failEffect(executionId, key, idempotencyKey, resultJson);
+  } else {
+    store.completeEffect(executionId, key, idempotencyKey, resultJson);
+  }
+  maybeCrash("after_persist_effect", key);
   engine.applyHostResponse({ type: "ack" });
   return "continue";
 }
@@ -236,6 +274,99 @@ function persistCheckpoint(
     maybeCrash("after_wait_checkpoint");
   }
   engine.applyHostResponse({ type: "persist_confirmed", revision });
+  return "continue";
+}
+
+function deliverWake(
+  store: Store,
+  state: EngineState,
+  options: RunOptions & { ownerToken: string; executionId: string },
+): "continue" | RunResult {
+  if (options.cancel) {
+    maybeCrash("before_cancel");
+    state.engine.applyHostResponse({ type: "cancel" });
+    return "continue";
+  }
+  const continuation = JSON.parse(state.engine.continuationJson()) as {
+    pending?: { kind?: { type?: string; invoke_id?: string } };
+  };
+  const waitKind = continuation.pending?.kind?.type;
+  if (waitKind === "timer") {
+    const timer = store.pendingTimer(options.executionId);
+    if (!timer || timer.status !== "pending") {
+      return snapshot(store, options.executionId, "suspended", undefined);
+    }
+    maybeCrash("before_timer_fired");
+    store.resolveTimer(options.executionId);
+    state.engine.applyHostResponse({ type: "timer_fired" });
+    return "continue";
+  }
+  if (waitKind === "child") {
+    return deliverChild(store, state, options, continuation.pending?.kind?.invoke_id);
+  }
+  return deliverEvent(store, state.engine, options);
+}
+
+function deliverChild(
+  store: Store,
+  state: EngineState,
+  options: RunOptions & { ownerToken: string; executionId: string },
+  invokeId: string | undefined,
+): "continue" | RunResult {
+  if (!invokeId) {
+    return snapshot(store, options.executionId, "suspended", undefined);
+  }
+  const child = store.getChild(invokeId);
+  if (!child) {
+    return snapshot(store, options.executionId, "suspended", undefined);
+  }
+  if (child.status === "completed" && child.result_json) {
+    maybeCrash("before_child_result");
+    state.engine.applyHostResponse({
+      type: "child_result",
+      value: JSON.parse(child.result_json),
+    });
+    return "continue";
+  }
+  const artifactJson = options.childArtifacts?.[child.flow_name];
+  if (!artifactJson) {
+    throw new Error(`no child artifact for \`${child.flow_name}\``);
+  }
+  const parentJson = state.engine.continuationJson();
+  const parentArtifact = options.artifactJson;
+  store.putArtifact(JSON.parse(artifactJson).envelope.artifact_hash, artifactJson);
+  const existing = store.getExecution(child.child_execution_id);
+  if (!existing) {
+    store.createExecution(
+      child.child_execution_id,
+      JSON.parse(artifactJson).envelope.artifact_hash,
+      options.ownerToken,
+      Date.now() + (options.leaseMs ?? 60_000),
+    );
+  }
+  const childEngine = existing
+    ? (() => {
+        const saved = store.getContinuation(child.child_execution_id);
+        return saved
+          ? EngineBinding.resume(artifactJson, saved.json)
+          : new EngineBinding(artifactJson, child.child_execution_id);
+      })()
+    : new EngineBinding(artifactJson, child.child_execution_id);
+  const childResult = drive(store, childEngine, {
+    ...options,
+    executionId: child.child_execution_id,
+    artifactJson,
+    cancel: false,
+    childArtifacts: options.childArtifacts,
+    autoDeliverEvent: options.autoDeliverEvent,
+  });
+  store.completeChild(invokeId, JSON.stringify(childResult.result ?? { t: "undefined" }));
+  state.engine = EngineBinding.resume(parentArtifact, parentJson);
+  maybeCrash("before_child_result");
+  state.engine.applyHostResponse({
+    type: "child_result",
+    value: childResult.result,
+  });
   return "continue";
 }
 
@@ -304,7 +435,10 @@ export function encodeValue(value: unknown): { t: string; v?: unknown } {
   if (typeof value === "string") {
     return { t: "string", v: value };
   }
-  if (value && typeof value === "object" && !Array.isArray(value)) {
+  if (Array.isArray(value)) {
+    return { t: "array", v: value.map(encodeValue) };
+  }
+  if (value && typeof value === "object") {
     const fields: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {
       fields[key] = encodeValue(item);

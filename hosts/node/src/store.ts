@@ -73,6 +73,19 @@ export class Store {
         payload_json TEXT NOT NULL,
         consumed INTEGER NOT NULL DEFAULT 0
       );
+      CREATE TABLE IF NOT EXISTS timers (
+        execution_id TEXT PRIMARY KEY,
+        resume_at_ms INTEGER NOT NULL,
+        status TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS children (
+        invoke_id TEXT PRIMARY KEY,
+        parent_execution_id TEXT NOT NULL,
+        child_execution_id TEXT NOT NULL,
+        flow_name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        result_json TEXT
+      );
     `);
   }
 
@@ -204,6 +217,20 @@ export class Store {
       .run(executionId, key, idempotencyKey, resultJson);
   }
 
+  failEffect(executionId: string, key: string, idempotencyKey: string, resultJson: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO effects(execution_id, key, idempotency_key, status, result_json)
+         VALUES (?, ?, ?, 'failed', ?)
+         ON CONFLICT(execution_id, key) DO UPDATE SET
+           status = 'failed',
+           idempotency_key = excluded.idempotency_key,
+           result_json = excluded.result_json
+         WHERE effects.status != 'completed'`,
+      )
+      .run(executionId, key, idempotencyKey, resultJson);
+  }
+
   upsertWait(waitId: string, executionId: string, eventName: string): void {
     this.db
       .prepare(
@@ -245,5 +272,66 @@ export class Store {
     }
     this.db.prepare("UPDATE events SET consumed = 1 WHERE id = ?").run(row.id);
     return row;
+  }
+
+  upsertTimer(executionId: string, resumeAtMs: number): void {
+    this.db
+      .prepare(
+        `INSERT INTO timers(execution_id, resume_at_ms, status)
+         VALUES (?, ?, 'pending')
+         ON CONFLICT(execution_id) DO NOTHING`,
+      )
+      .run(executionId, resumeAtMs);
+  }
+
+  pendingTimer(executionId: string): { resume_at_ms: number; status: string } | undefined {
+    return this.db
+      .prepare("SELECT resume_at_ms, status FROM timers WHERE execution_id = ?")
+      .get(executionId) as { resume_at_ms: number; status: string } | undefined;
+  }
+
+  resolveTimer(executionId: string): void {
+    this.db.prepare("UPDATE timers SET status = 'resolved' WHERE execution_id = ?").run(executionId);
+  }
+
+  upsertChild(
+    invokeId: string,
+    parentExecutionId: string,
+    childExecutionId: string,
+    flowName: string,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT INTO children(invoke_id, parent_execution_id, child_execution_id, flow_name, status, result_json)
+         VALUES (?, ?, ?, ?, 'pending', NULL)
+         ON CONFLICT(invoke_id) DO NOTHING`,
+      )
+      .run(invokeId, parentExecutionId, childExecutionId, flowName);
+  }
+
+  getChild(invokeId: string): {
+    invoke_id: string;
+    parent_execution_id: string;
+    child_execution_id: string;
+    flow_name: string;
+    status: string;
+    result_json: string | null;
+  } | undefined {
+    return this.db.prepare("SELECT * FROM children WHERE invoke_id = ?").get(invokeId) as
+      | {
+          invoke_id: string;
+          parent_execution_id: string;
+          child_execution_id: string;
+          flow_name: string;
+          status: string;
+          result_json: string | null;
+        }
+      | undefined;
+  }
+
+  completeChild(invokeId: string, resultJson: string): void {
+    this.db
+      .prepare("UPDATE children SET status = 'completed', result_json = ? WHERE invoke_id = ?")
+      .run(resultJson, invokeId);
   }
 }
