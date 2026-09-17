@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "tcc-engine"
+version = "0.0.0"
+description = "Native Python embedding of the TCC engine"
+requires-python = ">=3.9"
+
+[tool.maturin]
+manifest-path = "../../crates/tcc-python/Cargo.toml"
+module-name = "tcc_engine"

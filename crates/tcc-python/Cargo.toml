@@ -1,0 +1,16 @@
+[package]
+name = "tcc-python"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Native Python binding for the TCC core"
+
+[lib]
+name = "tcc_engine"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module"] }
+tcc-core = { path = "../tcc-core" }
+tcc-ir = { path = "../tcc-ir" }
+tcc-state = { path = "../tcc-state" }

@@ -37,5 +37,12 @@ frontends/**/dist/
 bindings/javascript/pkg/
 .pnpm-store/
 
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.venv/
+
 # misc
 .DS_Store

@@ -6,4 +6,5 @@ members = [
     "crates/tcc-core",
     "crates/tcc-host",
     "crates/tcc-wasm",
+    "crates/tcc-python",
 ]

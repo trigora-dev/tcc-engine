@@ -14,6 +14,9 @@ jobs:
         with:
           components: clippy
           targets: wasm32-unknown-unknown
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo build -p tcc-wasm --target wasm32-unknown-unknown --release
@@ -55,3 +58,22 @@ jobs:
       - run: pnpm --dir frontends/typescript install --frozen-lockfile
       - run: node --experimental-strip-types --test bindings/javascript/src/index.test.ts hosts/node-memory/src/host.test.ts
       - run: node --experimental-sqlite --experimental-strip-types --test hosts/node/src/host.test.ts hosts/node/src/restart.test.ts hosts/node/src/conformance.test.ts
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cargo build -p tcc-wasm --target wasm32-unknown-unknown --release
+      - run: python -m venv .venv
+      - run: .venv/bin/pip install maturin pytest
+      - run: .venv/bin/maturin develop --manifest-path crates/tcc-python/Cargo.toml
+      - run: .venv/bin/pytest frontends/python hosts/python
