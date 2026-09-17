@@ -55,6 +55,8 @@ Locals and constants:
 - `StoreLocal { local }`
 - `LoadConst { value }`
 - `Pop`
+- `NewObject`
+- `SetProp { key }`
 
 Durable operations:
 
@@ -69,7 +71,7 @@ Exceptions:
 - `PushTry { catch, finally }`
 - `PopTry`
 
-Constants are `undefined`, `null`, boolean, IEEE-754 binary64 number, and string. These are JavaScript value semantics. They are not a universal language value model.
+Constants are `undefined`, `null`, boolean, IEEE-754 binary64 number, and string. Runtime values may also be one-level objects (`NewObject` / `SetProp`) whose fields are those value types. Nested identity, cycles, and arrays are not in this format version’s executed subset. These are JavaScript value semantics. They are not a universal language value model.
 
 ## Language semantics
 
@@ -91,8 +93,8 @@ Validation must run before execution. It checks:
 - span array length equal to instruction count
 - call targets present
 
-In this repository, validation is `tcc_ir::validate`.
+In this repository, validation is `tcc_ir::validate`. `tcc_ir::encode_artifact` / `decode_artifact` serialize the envelope as JSON. `artifact_hash` is SHA-256 of the canonical JSON of the artifact with an empty `artifact_hash` field, hex-encoded. The frontend computes the hash; the engine validates the envelope and does not re-hash.
 
 ## Status
 
-Format version `1` is the TypeScript subset identified by `language_semantics_version` `ts.subset.v1`. Control, locals, constants, and durable-operation instructions are defined. Exception instructions are encoded in the format; execution of `Call`, `Throw`, `PushTry`, and `PopTry` is not implemented. The Phase 1 first example is [spec/examples/first.md](examples/first.md).
+Format version `1` is the TypeScript subset identified by `language_semantics_version` `ts.subset.v1`. Control, locals, constants, object literals, and durable-operation instructions are defined. Exception instructions are encoded in the format; execution of `Call`, `Throw`, `PushTry`, and `PopTry` is not implemented. The first example is [spec/examples/first.md](examples/first.md).

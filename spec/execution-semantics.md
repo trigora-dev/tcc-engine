@@ -24,7 +24,7 @@ A continuation resumes only with the artifact identified by `artifact.hash`. See
 
 ## TypeScript subset
 
-For `language_semantics_version` `ts.subset.v1`, `JumpIfTrue` and `JumpIfFalse` use JavaScript truthiness. The following values are falsy: `undefined`, `null`, `false`, `+0`, `-0`, `NaN`, and `""`. All other current value types are truthy.
+For `language_semantics_version` `ts.subset.v1`, `JumpIfTrue` and `JumpIfFalse` use JavaScript truthiness. The following values are falsy: `undefined`, `null`, `false`, `+0`, `-0`, `NaN`, and `""`. Objects are truthy. All other current value types are truthy.
 
 A different language must not reuse these instructions for a different truthiness rule without a new engine feature.
 
@@ -47,4 +47,4 @@ The hand-authored first example, including expected host requests and continuati
 
 ## Status
 
-The stepper implements `Nop`, jumps, locals, constants, `Pop`, `Return`, durable-operation yield, and event-wait wake via `event_payload`. `Call` and exception instructions are not executed.
+The stepper implements `Nop`, jumps, locals, constants, `Pop`, `NewObject`, `SetProp`, `Return`, durable-operation yield, and event-wait wake via `event_payload`. `Call` and exception instructions are not executed.
