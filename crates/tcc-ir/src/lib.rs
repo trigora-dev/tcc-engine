@@ -19,8 +19,8 @@ pub use artifact::{
 pub use encode::{canonical_artifact_json, decode_artifact, encode_artifact};
 pub use error::IrError;
 pub use features::{
-    EngineFeature, FeatureSet, HostCapability, ENGINE_FORMAT_VERSION, FRONTEND_TYPESCRIPT,
-    LANGUAGE_SEMANTICS_TS,
+    EngineFeature, FeatureSet, HostCapability, ENGINE_FORMAT_VERSION, FRONTEND_PYTHON,
+    FRONTEND_TYPESCRIPT, LANGUAGE_SEMANTICS_PY, LANGUAGE_SEMANTICS_TS,
 };
 pub use instruction::{ConstValue, Instruction};
 pub use validate::{validate, EngineCaps};

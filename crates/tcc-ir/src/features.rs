@@ -5,8 +5,14 @@ pub const ENGINE_FORMAT_VERSION: u32 = 1;
 /// First-party TypeScript frontend identity.
 pub const FRONTEND_TYPESCRIPT: &str = "typescript";
 
+/// First-party Python frontend identity.
+pub const FRONTEND_PYTHON: &str = "python";
+
 /// Language-semantics version for the implemented TypeScript subset.
 pub const LANGUAGE_SEMANTICS_TS: &str = "ts.subset.v1";
+
+/// Language-semantics version for the implemented Python subset.
+pub const LANGUAGE_SEMANTICS_PY: &str = "py.subset.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EngineFeature(pub String);

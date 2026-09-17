@@ -1,0 +1,121 @@
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from compile import CompileError, compile
+
+FIRST = """
+from trigora import effect, wait_for_event
+
+async def run():
+    result = await effect("generate", generate_something)
+    approval = await wait_for_event("approved")
+    return {"result": result, "approval": approval}
+"""
+
+
+def test_compiles_the_first_example():
+    artifact = compile(FIRST, filename="first.py")
+    ops = [instruction["op"] for instruction in artifact["program"]["functions"][0]["instructions"]]
+    assert artifact["program"]["functions"][0]["name"] == "run"
+    assert ops == [
+        "LoadConst",
+        "Effect",
+        "StoreLocal",
+        "LoadConst",
+        "WaitForEvent",
+        "StoreLocal",
+        "NewObject",
+        "LoadLocal",
+        "SetProp",
+        "LoadLocal",
+        "SetProp",
+        "Return",
+    ]
+    assert len(artifact["envelope"]["artifact_hash"]) == 64
+    assert "durable.effect" in artifact["envelope"]["required_engine_features"]
+    assert artifact["envelope"]["frontend_id"] == "python"
+    assert artifact["envelope"]["language_semantics_version"] == "py.subset.v1"
+
+
+def test_accepts_aliased_imports():
+    source = """
+from trigora import effect as durable_effect, wait_for_event as wait
+
+async def run():
+    result = await durable_effect("generate", lambda: 1)
+    approval = await wait("approved")
+    return {"result": result, "approval": approval}
+"""
+    artifact = compile(source)
+    assert artifact["program"]["functions"][0]["instructions"][1]["op"] == "Effect"
+
+
+def test_rejects_local_function_named_effect():
+    source = """
+async def run():
+    async def effect(key, fn):
+        return fn()
+    result = await effect("generate", lambda: 1)
+    return result
+"""
+    with pytest.raises(CompileError):
+        compile(source)
+
+
+def test_rejects_ctx_style_entry():
+    source = """
+async def run(ctx):
+    await ctx.effect("generate", lambda: 1)
+"""
+    with pytest.raises(CompileError):
+        compile(source)
+
+
+def test_compiles_if_else():
+    source = """
+from trigora import effect
+
+async def run():
+    flag = await effect("flag", lambda: 1)
+    if flag:
+        result = await effect("taken", lambda: 42)
+        return result
+    else:
+        result = await effect("skipped", lambda: 99)
+        return result
+"""
+    artifact = compile(source)
+    ops = [instruction["op"] for instruction in artifact["program"]["functions"][0]["instructions"]]
+    assert "JumpIfFalse" in ops
+
+
+def test_rejects_list_truthiness():
+    source = """
+from trigora import effect
+
+async def run():
+    flag = await effect("flag", lambda: 1)
+    if []:
+        return flag
+    return flag
+"""
+    with pytest.raises(CompileError):
+        compile(source)
+
+
+def test_rejects_for():
+    source = """
+from trigora import effect
+
+async def run():
+    xs = await effect("xs", lambda: 1)
+    for x in xs:
+        return x
+    return 0
+"""
+    with pytest.raises(CompileError):
+        compile(source)
