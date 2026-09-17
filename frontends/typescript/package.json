@@ -11,10 +11,13 @@
     "src"
   ],
   "scripts": {
-    "test": "tsc --noEmit",
+    "test": "tsc --noEmit && node --experimental-strip-types --test src/compile.test.ts",
     "typecheck": "tsc --noEmit"
   },
-  "devDependencies": {
+  "dependencies": {
     "typescript": "^5.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0"
   }
 }

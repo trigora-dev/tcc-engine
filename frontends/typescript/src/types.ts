@@ -33,6 +33,8 @@ export type Instruction =
   | { op: "StoreLocal"; local: number }
   | { op: "LoadConst"; value: ConstValue }
   | { op: "Pop" }
+  | { op: "NewObject" }
+  | { op: "SetProp"; key: string }
   | { op: "Return" }
   | { op: "Call"; func: number; argc: number }
   | { op: "Effect" }

@@ -1,4 +1,4 @@
-export { compile, CompileError, CompileNotImplementedError } from "./compile.ts";
+export { compile, CompileError } from "./compile.ts";
 export {
   ENGINE_FORMAT_VERSION,
   FRONTEND_ID,
