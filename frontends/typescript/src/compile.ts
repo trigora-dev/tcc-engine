@@ -10,7 +10,10 @@ import {
   LANGUAGE_SEMANTICS_VERSION,
   type Artifact,
   type CompileOptions,
+  type ConstValue,
+  type EngineFeature,
   type FunctionDecl,
+  type HostCapability,
   type Instruction,
 } from "./types.ts";
 
@@ -20,7 +23,19 @@ const INPUT_PATH = "/__tcc/input.ts";
 
 const SDK_SOURCE = `export declare function effect<T>(key: string, fn: () => T | Promise<T>): Promise<T>;
 export declare function waitForEvent(name: string): Promise<unknown>;
+export declare function sleep(ms: number): Promise<void>;
+export declare function invoke(name: string): Promise<unknown>;
 `;
+
+type DurableName = "effect" | "waitForEvent" | "sleep" | "invoke";
+
+type Binding = { slot: number; kind: "const" | "let" };
+
+type Loop = {
+  breaks: number[];
+  continues: number[];
+  continueTarget?: number;
+};
 
 export class CompileError extends Error {
   constructor(message: string) {
@@ -40,6 +55,7 @@ export function compile(source: string, options: CompileOptions = {}): Artifact 
 
   const entry = findDefaultExport(sourceFile);
   const functionDecl = lowerFunction(entry, sourceFile, checker, filename);
+  const { engine, host } = requiredFrom(functionDecl.instructions);
   const artifact: Artifact = {
     envelope: {
       artifact_hash: "",
@@ -47,16 +63,8 @@ export function compile(source: string, options: CompileOptions = {}): Artifact 
       frontend_version: FRONTEND_VERSION,
       language_semantics_version: LANGUAGE_SEMANTICS_VERSION,
       engine_format_version: ENGINE_FORMAT_VERSION,
-      required_engine_features: [
-        "ts.control_flow",
-        "durable.effect",
-        "durable.wait_for_event",
-      ],
-      required_host_capabilities: [
-        "host.persist_checkpoint",
-        "host.effect",
-        "host.event",
-      ],
+      required_engine_features: engine,
+      required_host_capabilities: host,
       runtime_modules: [],
     },
     program: {
@@ -171,130 +179,580 @@ function lowerFunction(
   checker: ts.TypeChecker,
   filename: string,
 ): FunctionDecl {
-  const locals = new Map<string, number>();
-  const instructions: Instruction[] = [];
-  const spans: FunctionDecl["spans"] = [];
-
-  const emit = (instruction: Instruction, node: ts.Node) => {
-    instructions.push(instruction);
-    spans.push(spanOf(sourceFile, filename, node));
-  };
-
+  const lower = new Lowerer(sourceFile, checker, filename);
+  lower.pushScope();
   for (const statement of entry.body!.statements) {
-    if (ts.isVariableStatement(statement)) {
-      if (statement.declarationList.declarations.length !== 1) {
-        throw new CompileError("declare one local per statement");
-      }
-      const declaration = statement.declarationList.declarations[0]!;
-      if (!ts.isIdentifier(declaration.name)) {
-        throw new CompileError("locals must be simple identifiers");
-      }
-      if (!declaration.initializer) {
-        throw new CompileError(`local \`${declaration.name.text}\` needs an initializer`);
-      }
-      const local = locals.size;
-      locals.set(declaration.name.text, local);
-      lowerAwaitInit(declaration.initializer, checker, emit);
-      emit({ op: "StoreLocal", local }, declaration);
-      continue;
-    }
-    if (ts.isReturnStatement(statement)) {
-      if (!statement.expression) {
-        emit({ op: "Return" }, statement);
-        continue;
-      }
-      lowerReturnValue(statement.expression, locals, emit);
-      emit({ op: "Return" }, statement);
-      continue;
-    }
-    throw new CompileError(`unsupported statement: ${kindName(statement)}`);
+    lower.statement(statement);
   }
-
+  lower.popScope();
+  lower.seal();
   return {
     id: 0,
     name: entry.name?.text ?? "default",
     param_count: 0,
-    local_count: locals.size,
-    instructions,
-    spans,
+    local_count: lower.maxSlots,
+    instructions: lower.instructions,
+    spans: lower.spans,
   };
 }
 
-function lowerAwaitInit(
-  expression: ts.Expression,
-  checker: ts.TypeChecker,
-  emit: (instruction: Instruction, node: ts.Node) => void,
-): void {
-  if (!ts.isAwaitExpression(expression) || !ts.isCallExpression(expression.expression)) {
-    throw new CompileError("locals must be initialized with `await effect(...)` or `await waitForEvent(...)`");
-  }
-  const call = expression.expression;
-  const durable = resolveDurable(call.expression, checker);
-  if (durable === "effect") {
-    if (call.arguments.length !== 2) {
-      throw new CompileError("`effect` takes a key and a callback");
-    }
-    const key = stringLiteral(call.arguments[0]!, "effect key");
-    emit({ op: "LoadConst", value: { t: "string", v: key } }, call);
-    emit({ op: "Effect" }, call);
-    return;
-  }
-  if (durable === "waitForEvent") {
-    if (call.arguments.length !== 1) {
-      throw new CompileError("`waitForEvent` takes an event name");
-    }
-    const name = stringLiteral(call.arguments[0]!, "event name");
-    emit({ op: "LoadConst", value: { t: "string", v: name } }, call);
-    emit({ op: "WaitForEvent" }, call);
-    return;
-  }
-  throw new CompileError("call is not a resolved `@trigora/sdk` durable operation");
-}
+class Lowerer {
+  readonly instructions: Instruction[] = [];
+  readonly spans: FunctionDecl["spans"] = [];
+  readonly scopes: Array<Map<string, Binding>> = [];
+  readonly loops: Loop[] = [];
+  readonly sourceFile: ts.SourceFile;
+  readonly checker: ts.TypeChecker;
+  readonly filename: string;
+  nextSlot = 0;
+  maxSlots = 0;
 
-function lowerReturnValue(
-  expression: ts.Expression,
-  locals: Map<string, number>,
-  emit: (instruction: Instruction, node: ts.Node) => void,
-): void {
-  if (ts.isIdentifier(expression)) {
-    emit({ op: "LoadLocal", local: localId(locals, expression.text) }, expression);
-    return;
+  constructor(sourceFile: ts.SourceFile, checker: ts.TypeChecker, filename: string) {
+    this.sourceFile = sourceFile;
+    this.checker = checker;
+    this.filename = filename;
   }
-  if (ts.isObjectLiteralExpression(expression)) {
-    emit({ op: "NewObject" }, expression);
+
+  pc(): number {
+    return this.instructions.length;
+  }
+
+  emit(instruction: Instruction, node: ts.Node): number {
+    const index = this.instructions.length;
+    this.instructions.push(instruction);
+    this.spans.push(spanOf(this.sourceFile, this.filename, node));
+    return index;
+  }
+
+  patch(index: number, target: number): void {
+    const instruction = this.instructions[index];
+    if (!instruction || !("target" in instruction)) {
+      throw new CompileError("internal: patch target missing");
+    }
+    instruction.target = target;
+  }
+
+  pushScope(): void {
+    this.scopes.push(new Map());
+  }
+
+  popScope(): void {
+    if (!this.scopes.pop()) {
+      throw new CompileError("internal: scope underflow");
+    }
+  }
+
+  alloc(): number {
+    const slot = this.nextSlot;
+    this.nextSlot += 1;
+    this.maxSlots = Math.max(this.maxSlots, this.nextSlot);
+    return slot;
+  }
+
+  declare(name: string, kind: "const" | "let"): number {
+    const scope = this.scopes[this.scopes.length - 1];
+    if (!scope) {
+      throw new CompileError("internal: no scope");
+    }
+    if (scope.has(name)) {
+      throw new CompileError(`duplicate binding \`${name}\``);
+    }
+    const slot = this.alloc();
+    scope.set(name, { slot, kind });
+    return slot;
+  }
+
+  lookup(name: string): Binding {
+    for (let index = this.scopes.length - 1; index >= 0; index -= 1) {
+      const found = this.scopes[index]?.get(name);
+      if (found) {
+        return found;
+      }
+    }
+    throw new CompileError(`unknown local \`${name}\``);
+  }
+
+  statement(statement: ts.Statement): void {
+    if (ts.isEmptyStatement(statement)) {
+      return;
+    }
+    if (ts.isBlock(statement)) {
+      this.pushScope();
+      for (const child of statement.statements) {
+        this.statement(child);
+      }
+      this.popScope();
+      return;
+    }
+    if (ts.isVariableStatement(statement)) {
+      this.variableStatement(statement);
+      return;
+    }
+    if (ts.isExpressionStatement(statement)) {
+      this.expressionStatement(statement.expression);
+      return;
+    }
+    if (ts.isReturnStatement(statement)) {
+      if (!statement.expression) {
+        this.emit({ op: "LoadConst", value: { t: "undefined" } }, statement);
+      } else {
+        this.expression(statement.expression);
+      }
+      this.emit({ op: "Return" }, statement);
+      return;
+    }
+    if (ts.isIfStatement(statement)) {
+      this.ifStatement(statement);
+      return;
+    }
+    if (ts.isWhileStatement(statement)) {
+      this.whileStatement(statement);
+      return;
+    }
+    if (ts.isForStatement(statement)) {
+      this.forStatement(statement);
+      return;
+    }
+    if (ts.isBreakStatement(statement)) {
+      if (statement.label) {
+        throw new CompileError("labeled break is not supported");
+      }
+      const loop = this.loops[this.loops.length - 1];
+      if (!loop) {
+        throw new CompileError("`break` outside a loop");
+      }
+      loop.breaks.push(this.emit({ op: "Jump", target: 0 }, statement));
+      return;
+    }
+    if (ts.isContinueStatement(statement)) {
+      if (statement.label) {
+        throw new CompileError("labeled continue is not supported");
+      }
+      const loop = this.loops[this.loops.length - 1];
+      if (!loop) {
+        throw new CompileError("`continue` outside a loop");
+      }
+      if (loop.continueTarget !== undefined) {
+        this.emit({ op: "Jump", target: loop.continueTarget }, statement);
+      } else {
+        loop.continues.push(this.emit({ op: "Jump", target: 0 }, statement));
+      }
+      return;
+    }
+    if (ts.isThrowStatement(statement)) {
+      this.expression(statement.expression);
+      this.emit({ op: "Throw" }, statement);
+      return;
+    }
+    if (ts.isTryStatement(statement)) {
+      this.tryStatement(statement);
+      return;
+    }
+    if (ts.isForInStatement(statement) || ts.isForOfStatement(statement)) {
+      throw new CompileError("for-in and for-of are not supported");
+    }
+    if (ts.isLabeledStatement(statement)) {
+      throw new CompileError("labeled statements are not supported");
+    }
+    throw new CompileError(`unsupported statement: ${kindName(statement)}`);
+  }
+
+  variableStatement(statement: ts.VariableStatement): void {
+    this.variableList(statement.declarationList);
+  }
+
+  variableList(list: ts.VariableDeclarationList): void {
+    if (list.declarations.length !== 1) {
+      throw new CompileError("declare one local per statement");
+    }
+    const declaration = list.declarations[0]!;
+    if (!ts.isIdentifier(declaration.name)) {
+      throw new CompileError("locals must be simple identifiers");
+    }
+    if (!declaration.initializer) {
+      throw new CompileError(`local \`${declaration.name.text}\` needs an initializer`);
+    }
+    const kind = (list.flags & ts.NodeFlags.Const) !== 0 ? "const" : "let";
+    const slot = this.declare(declaration.name.text, kind);
+    this.expression(declaration.initializer);
+    this.emit({ op: "StoreLocal", local: slot }, declaration);
+  }
+
+  expressionStatement(expression: ts.Expression): void {
+    if (ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      if (!ts.isIdentifier(expression.left)) {
+        throw new CompileError("assignment target must be a local");
+      }
+      const binding = this.lookup(expression.left.text);
+      if (binding.kind === "const") {
+        throw new CompileError(`cannot assign to const \`${expression.left.text}\``);
+      }
+      this.expression(expression.right);
+      this.emit({ op: "StoreLocal", local: binding.slot }, expression);
+      return;
+    }
+    this.expression(expression);
+    this.emit({ op: "Pop" }, expression);
+  }
+
+  ifStatement(statement: ts.IfStatement): void {
+    this.expression(statement.expression);
+    const jumpFalse = this.emit({ op: "JumpIfFalse", target: 0 }, statement.expression);
+    this.statement(statement.thenStatement);
+    if (statement.elseStatement) {
+      const jumpEnd = this.emit({ op: "Jump", target: 0 }, statement);
+      this.patch(jumpFalse, this.pc());
+      this.statement(statement.elseStatement);
+      this.patch(jumpEnd, this.pc());
+    } else {
+      this.patch(jumpFalse, this.pc());
+    }
+  }
+
+  whileStatement(statement: ts.WhileStatement): void {
+    const start = this.pc();
+    const loop: Loop = { breaks: [], continues: [], continueTarget: start };
+    this.loops.push(loop);
+    this.expression(statement.expression);
+    const jumpFalse = this.emit({ op: "JumpIfFalse", target: 0 }, statement.expression);
+    this.statement(statement.statement);
+    this.emit({ op: "Jump", target: start }, statement);
+    const end = this.pc();
+    this.patch(jumpFalse, end);
+    for (const index of loop.breaks) {
+      this.patch(index, end);
+    }
+    this.loops.pop();
+  }
+
+  forStatement(statement: ts.ForStatement): void {
+    this.pushScope();
+    if (statement.initializer) {
+      if (ts.isVariableDeclarationList(statement.initializer)) {
+        this.variableList(statement.initializer);
+      } else {
+        this.expressionStatement(statement.initializer);
+      }
+    }
+    const condPc = this.pc();
+    const loop: Loop = { breaks: [], continues: [] };
+    this.loops.push(loop);
+    if (statement.condition) {
+      this.expression(statement.condition);
+    } else {
+      this.emit({ op: "LoadConst", value: { t: "bool", v: true } }, statement);
+    }
+    const jumpFalse = this.emit({ op: "JumpIfFalse", target: 0 }, statement);
+    this.statement(statement.statement);
+    const incrPc = this.pc();
+    loop.continueTarget = incrPc;
+    for (const index of loop.continues) {
+      this.patch(index, incrPc);
+    }
+    if (statement.incrementor) {
+      this.expressionStatement(statement.incrementor);
+    }
+    this.emit({ op: "Jump", target: condPc }, statement);
+    const end = this.pc();
+    this.patch(jumpFalse, end);
+    for (const index of loop.breaks) {
+      this.patch(index, end);
+    }
+    this.loops.pop();
+    this.popScope();
+  }
+
+  tryStatement(statement: ts.TryStatement): void {
+    if (!statement.catchClause && !statement.finallyBlock) {
+      throw new CompileError("try requires catch or finally");
+    }
+    const push = this.emit({ op: "PushTry", catch: 0, finally: null }, statement);
+    this.statement(statement.tryBlock);
+    this.emit({ op: "PopTry" }, statement);
+    const jumpJoin = this.emit({ op: "Jump", target: 0 }, statement);
+    const handlerPc = this.pc();
+    const pushInstr = this.instructions[push];
+    if (pushInstr && pushInstr.op === "PushTry") {
+      pushInstr.catch = handlerPc;
+    }
+    if (statement.catchClause) {
+      this.pushScope();
+      const variable = statement.catchClause.variableDeclaration;
+      if (variable) {
+        if (!ts.isIdentifier(variable.name)) {
+          throw new CompileError("catch binding must be a simple identifier");
+        }
+        const slot = this.declare(variable.name.text, "let");
+        this.emit({ op: "StoreLocal", local: slot }, variable);
+      } else {
+        this.emit({ op: "Pop" }, statement.catchClause);
+      }
+      this.statement(statement.catchClause.block);
+      this.popScope();
+    } else if (statement.finallyBlock) {
+      const ex = this.alloc();
+      this.emit({ op: "StoreLocal", local: ex }, statement);
+      this.statement(statement.finallyBlock);
+      this.emit({ op: "LoadLocal", local: ex }, statement);
+      this.emit({ op: "Throw" }, statement);
+    }
+    this.patch(jumpJoin, this.pc());
+    if (statement.finallyBlock) {
+      this.statement(statement.finallyBlock);
+    }
+  }
+
+  expression(expression: ts.Expression): void {
+    expression = unwrap(expression);
+    if (ts.isIdentifier(expression)) {
+      if (expression.text === "undefined" && !this.hasBinding("undefined")) {
+        this.emit({ op: "LoadConst", value: { t: "undefined" } }, expression);
+        return;
+      }
+      this.emit({ op: "LoadLocal", local: this.lookup(expression.text).slot }, expression);
+      return;
+    }
+    const literal = constValue(expression);
+    if (literal) {
+      this.emit({ op: "LoadConst", value: literal }, expression);
+      return;
+    }
+    if (ts.isAwaitExpression(expression)) {
+      this.durable(expression);
+      return;
+    }
+    if (ts.isPrefixUnaryExpression(expression) && expression.operator === ts.SyntaxKind.ExclamationToken) {
+      this.expression(expression.operand);
+      this.emit({ op: "Not" }, expression);
+      return;
+    }
+    if (
+      ts.isPrefixUnaryExpression(expression) &&
+      expression.operator === ts.SyntaxKind.MinusToken &&
+      ts.isNumericLiteral(expression.operand)
+    ) {
+      this.emit(
+        { op: "LoadConst", value: { t: "number", v: -Number(expression.operand.text) } },
+        expression,
+      );
+      return;
+    }
+    if (ts.isBinaryExpression(expression)) {
+      this.binary(expression);
+      return;
+    }
+    if (ts.isObjectLiteralExpression(expression)) {
+      this.objectLiteral(expression);
+      return;
+    }
+    if (ts.isArrayLiteralExpression(expression)) {
+      this.emit({ op: "NewArray" }, expression);
+      for (const element of expression.elements) {
+        if (ts.isSpreadElement(element)) {
+          throw new CompileError("spread is not supported");
+        }
+        this.expression(element);
+        this.emit({ op: "ArrayPush" }, element);
+      }
+      return;
+    }
+    if (ts.isPropertyAccessExpression(expression)) {
+      this.expression(expression.expression);
+      if (!ts.isIdentifier(expression.name)) {
+        throw new CompileError("property names must be identifiers");
+      }
+      this.emit({ op: "GetProp", key: expression.name.text }, expression);
+      return;
+    }
+    throw new CompileError(`unsupported expression: ${kindName(expression)}`);
+  }
+
+  binary(expression: ts.BinaryExpression): void {
+    const op = expression.operatorToken.kind;
+    const map: Partial<Record<ts.SyntaxKind, Instruction["op"]>> = {
+      [ts.SyntaxKind.EqualsEqualsEqualsToken]: "StrictEq",
+      [ts.SyntaxKind.ExclamationEqualsEqualsToken]: "StrictNeq",
+      [ts.SyntaxKind.LessThanToken]: "Lt",
+      [ts.SyntaxKind.LessThanEqualsToken]: "Le",
+      [ts.SyntaxKind.GreaterThanToken]: "Gt",
+      [ts.SyntaxKind.GreaterThanEqualsToken]: "Ge",
+    };
+    const instruction = map[op];
+    if (!instruction) {
+      throw new CompileError(`unsupported operator: ${kindName(expression.operatorToken)}`);
+    }
+    this.expression(expression.left);
+    this.expression(expression.right);
+    this.emit({ op: instruction } as Instruction, expression);
+  }
+
+  objectLiteral(expression: ts.ObjectLiteralExpression): void {
+    this.emit({ op: "NewObject" }, expression);
     for (const property of expression.properties) {
       if (!ts.isShorthandPropertyAssignment(property) && !ts.isPropertyAssignment(property)) {
-        throw new CompileError("object returns support identifier properties only");
+        throw new CompileError("object literals support identifier properties only");
       }
-      const key = property.name.getText();
       if (!ts.isIdentifier(property.name)) {
         throw new CompileError("object keys must be identifiers");
       }
       const valueExpr = ts.isShorthandPropertyAssignment(property)
         ? property.name
         : property.initializer;
-      if (!ts.isIdentifier(valueExpr)) {
-        throw new CompileError("object values must be locals");
-      }
-      emit({ op: "LoadLocal", local: localId(locals, valueExpr.text) }, valueExpr);
-      emit({ op: "SetProp", key }, property);
+      this.expression(valueExpr);
+      this.emit({ op: "SetProp", key: property.name.text }, property);
     }
-    return;
   }
-  throw new CompileError("return a local or a shallow object of locals");
+
+  durable(expression: ts.AwaitExpression): void {
+    if (!ts.isCallExpression(expression.expression)) {
+      throw new CompileError("await a `@trigora/sdk` call");
+    }
+    const call = expression.expression;
+    const durable = resolveDurable(call.expression, this.checker);
+    if (durable === "effect") {
+      if (call.arguments.length !== 2) {
+        throw new CompileError("`effect` takes a key and a callback");
+      }
+      const key = stringLiteral(call.arguments[0]!, "effect key");
+      this.emit({ op: "LoadConst", value: { t: "string", v: key } }, call);
+      this.emit({ op: "Effect" }, call);
+      return;
+    }
+    if (durable === "waitForEvent") {
+      if (call.arguments.length !== 1) {
+        throw new CompileError("`waitForEvent` takes an event name");
+      }
+      const name = stringLiteral(call.arguments[0]!, "event name");
+      this.emit({ op: "LoadConst", value: { t: "string", v: name } }, call);
+      this.emit({ op: "WaitForEvent" }, call);
+      return;
+    }
+    if (durable === "sleep") {
+      if (call.arguments.length !== 1) {
+        throw new CompileError("`sleep` takes a duration in milliseconds");
+      }
+      this.expression(call.arguments[0]!);
+      this.emit({ op: "Sleep" }, call);
+      return;
+    }
+    if (durable === "invoke") {
+      if (call.arguments.length !== 1) {
+        throw new CompileError("`invoke` takes a flow name");
+      }
+      const name = stringLiteral(call.arguments[0]!, "invoke name");
+      this.emit({ op: "LoadConst", value: { t: "string", v: name } }, call);
+      this.emit({ op: "Invoke" }, call);
+      return;
+    }
+    throw new CompileError("call is not a resolved `@trigora/sdk` durable operation");
+  }
+
+  hasBinding(name: string): boolean {
+    return this.scopes.some((scope) => scope.has(name));
+  }
+
+  seal(): void {
+    const len = this.instructions.length;
+    const needsNop = this.instructions.some((instruction) => {
+      if ("target" in instruction && instruction.target === len) {
+        return true;
+      }
+      if (instruction.op === "PushTry") {
+        return instruction.catch === len || instruction.finally === len;
+      }
+      return false;
+    });
+    if (needsNop) {
+      this.instructions.push({ op: "Nop" });
+      this.spans.push(null);
+    }
+  }
+}
+
+function unwrap(expression: ts.Expression): ts.Expression {
+  while (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression)) {
+    expression = expression.expression;
+  }
+  return expression;
+}
+
+function constValue(expression: ts.Expression): ConstValue | undefined {
+  switch (expression.kind) {
+    case ts.SyntaxKind.TrueKeyword:
+      return { t: "bool", v: true };
+    case ts.SyntaxKind.FalseKeyword:
+      return { t: "bool", v: false };
+    case ts.SyntaxKind.NullKeyword:
+      return { t: "null" };
+    default:
+      break;
+  }
+  if (ts.isNumericLiteral(expression)) {
+    return { t: "number", v: Number(expression.text) };
+  }
+  if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
+    return { t: "string", v: expression.text };
+  }
+  return undefined;
+}
+
+function requiredFrom(instructions: Instruction[]): {
+  engine: EngineFeature[];
+  host: HostCapability[];
+} {
+  const engine: EngineFeature[] = ["ts.control_flow"];
+  const host: HostCapability[] = ["host.persist_checkpoint"];
+  const addEngine = (feature: EngineFeature) => {
+    if (!engine.includes(feature)) {
+      engine.push(feature);
+    }
+  };
+  const addHost = (capability: HostCapability) => {
+    if (!host.includes(capability)) {
+      host.push(capability);
+    }
+  };
+  for (const instruction of instructions) {
+    switch (instruction.op) {
+      case "Effect":
+        addEngine("durable.effect");
+        addHost("host.effect");
+        break;
+      case "WaitForEvent":
+        addEngine("durable.wait_for_event");
+        addHost("host.event");
+        break;
+      case "Sleep":
+        addEngine("durable.sleep");
+        addHost("host.timer");
+        break;
+      case "Invoke":
+        addEngine("durable.invoke");
+        addHost("host.child");
+        break;
+      case "Throw":
+      case "PushTry":
+      case "PopTry":
+        addEngine("ts.exceptions");
+        break;
+      default:
+        break;
+    }
+  }
+  return { engine, host };
 }
 
 function resolveDurable(
   expression: ts.Expression,
   checker: ts.TypeChecker,
-): "effect" | "waitForEvent" | undefined {
+): DurableName | undefined {
   const symbol = checker.getSymbolAtLocation(expression);
   if (!symbol) {
     return undefined;
   }
   const resolved = symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
   const name = resolved.getName();
-  if (name !== "effect" && name !== "waitForEvent") {
+  if (name !== "effect" && name !== "waitForEvent" && name !== "sleep" && name !== "invoke") {
     return undefined;
   }
   const declaration = resolved.getDeclarations()?.[0];
@@ -306,14 +764,6 @@ function resolveDurable(
     return undefined;
   }
   return name;
-}
-
-function localId(locals: Map<string, number>, name: string): number {
-  const id = locals.get(name);
-  if (id === undefined) {
-    throw new CompileError(`unknown local \`${name}\``);
-  }
-  return id;
 }
 
 function stringLiteral(node: ts.Expression, label: string): string {

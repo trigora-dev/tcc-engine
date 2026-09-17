@@ -35,6 +35,16 @@ export type Instruction =
   | { op: "Pop" }
   | { op: "NewObject" }
   | { op: "SetProp"; key: string }
+  | { op: "GetProp"; key: string }
+  | { op: "NewArray" }
+  | { op: "ArrayPush" }
+  | { op: "StrictEq" }
+  | { op: "StrictNeq" }
+  | { op: "Lt" }
+  | { op: "Le" }
+  | { op: "Gt" }
+  | { op: "Ge" }
+  | { op: "Not" }
   | { op: "Return" }
   | { op: "Call"; func: number; argc: number }
   | { op: "Effect" }
