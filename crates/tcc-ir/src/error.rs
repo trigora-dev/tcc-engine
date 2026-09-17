@@ -11,6 +11,7 @@ pub enum IrError {
     JumpOutOfRange { func: u32, target: u32, len: usize },
     SpanLengthMismatch { func: u32, index: usize },
     EmptyArtifactHash,
+    InvalidEncoding(String),
 }
 
 impl fmt::Display for IrError {
@@ -38,6 +39,7 @@ impl fmt::Display for IrError {
                 "instruction {index} in function {func} has no matching source span"
             ),
             IrError::EmptyArtifactHash => write!(f, "artifact hash must not be empty"),
+            IrError::InvalidEncoding(message) => write!(f, "{message}"),
         }
     }
 }

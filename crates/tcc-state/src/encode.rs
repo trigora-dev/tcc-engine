@@ -48,6 +48,14 @@ fn value_to_json(value: &Value) -> Json {
             map.insert("t".to_string(), Json::String("string".to_string()));
             map.insert("v".to_string(), Json::String(text.clone()));
         }
+        Value::Object(fields) => {
+            map.insert("t".to_string(), Json::String("object".to_string()));
+            let mut object = BTreeMap::new();
+            for (key, value) in fields {
+                object.insert(key.clone(), value_to_json(value));
+            }
+            map.insert("v".to_string(), Json::Object(object));
+        }
     }
     Json::Object(map)
 }
@@ -66,6 +74,14 @@ fn json_to_value(json: &Json) -> Result<Value, StateError> {
             _ => Err(StateError::InvalidEncoding("number value".to_string())),
         },
         "string" => Ok(Value::String(Json::get(map, "v")?.as_str()?.to_string())),
+        "object" => {
+            let fields = Json::get(map, "v")?.as_object()?;
+            let mut object = BTreeMap::new();
+            for (key, value) in fields {
+                object.insert(key.clone(), json_to_value(value)?);
+            }
+            Ok(Value::Object(object))
+        }
         _ => Err(StateError::UnsupportedValue),
     }
 }
@@ -316,6 +332,10 @@ mod tests {
             Value::Bool(true),
             Value::Number(1.5),
             Value::String("ok".to_string()),
+            Value::Object(BTreeMap::from([(
+                "result".to_string(),
+                Value::Number(42.0),
+            )])),
         ];
         for value in values {
             let bytes = encode_value(&value).unwrap();

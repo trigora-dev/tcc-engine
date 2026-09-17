@@ -296,6 +296,28 @@ impl Engine {
                 self.pop()?;
                 self.advance_pc().map(|()| None)
             }
+            Instruction::NewObject => {
+                self.continuation
+                    .stack
+                    .push(Value::Object(std::collections::BTreeMap::new()));
+                self.advance_pc().map(|()| None)
+            }
+            Instruction::SetProp { key } => {
+                let value = self.pop()?;
+                let mut object = self.pop()?;
+                match &mut object {
+                    Value::Object(fields) => {
+                        fields.insert(key, value);
+                    }
+                    _ => {
+                        return Err(CoreError::TypeError(
+                            "SetProp requires an object".to_string(),
+                        ))
+                    }
+                }
+                self.continuation.stack.push(object);
+                self.advance_pc().map(|()| None)
+            }
             Instruction::Return => {
                 let result = if self.continuation.stack.is_empty() {
                     Value::Undefined
@@ -475,6 +497,7 @@ fn is_truthy(value: &Value) -> bool {
         Value::Bool(flag) => *flag,
         Value::Number(number) => *number != 0.0 && !number.is_nan(),
         Value::String(text) => !text.is_empty(),
+        Value::Object(_) => true,
     }
 }
 

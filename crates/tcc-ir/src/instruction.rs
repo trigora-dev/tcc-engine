@@ -23,6 +23,8 @@ pub enum Instruction {
     StoreLocal { local: LocalId },
     LoadConst { value: ConstValue },
     Pop,
+    NewObject,
+    SetProp { key: String },
     Return,
     Call { func: FuncId, argc: u32 },
     Effect,

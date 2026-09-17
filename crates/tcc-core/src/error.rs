@@ -19,6 +19,7 @@ pub enum CoreError {
         got: &'static str,
     },
     StackUnderflow,
+    TypeError(String),
     UnknownInstruction {
         func: u32,
         pc: u32,
@@ -44,6 +45,7 @@ impl fmt::Display for CoreError {
                 "host response `{got}` does not match outstanding request `{expected}`"
             ),
             CoreError::StackUnderflow => write!(f, "operand stack underflow"),
+            CoreError::TypeError(message) => write!(f, "{message}"),
             CoreError::UnknownInstruction { func, pc } => {
                 write!(f, "unknown instruction in function {func} at pc {pc}")
             }

@@ -124,6 +124,64 @@ impl Artifact {
             },
         }
     }
+
+    pub fn sdk_first_example(artifact_hash: impl Into<String>) -> Self {
+        use crate::artifact::{Envelope, Function, LocalId, Program};
+        use crate::instruction::ConstValue;
+
+        Self {
+            envelope: Envelope {
+                artifact_hash: artifact_hash.into(),
+                frontend_id: crate::FRONTEND_TYPESCRIPT.to_string(),
+                frontend_version: "0.0.0".to_string(),
+                language_semantics_version: crate::LANGUAGE_SEMANTICS_TS.to_string(),
+                engine_format_version: ENGINE_FORMAT_VERSION,
+                required_engine_features: vec![
+                    EngineFeature(EngineFeature::TS_CONTROL_FLOW.to_string()),
+                    EngineFeature(EngineFeature::DURABLE_EFFECT.to_string()),
+                    EngineFeature(EngineFeature::DURABLE_WAIT_FOR_EVENT.to_string()),
+                ],
+                required_host_capabilities: vec![
+                    HostCapability(HostCapability::PERSIST_CHECKPOINT.to_string()),
+                    HostCapability(HostCapability::EFFECT.to_string()),
+                    HostCapability(HostCapability::EVENT.to_string()),
+                ],
+                runtime_modules: Vec::new(),
+            },
+            program: Program {
+                entry: FuncId(0),
+                functions: vec![Function {
+                    id: FuncId(0),
+                    name: "run".to_string(),
+                    param_count: 0,
+                    local_count: 2,
+                    instructions: vec![
+                        Instruction::LoadConst {
+                            value: ConstValue::String("generate".to_string()),
+                        },
+                        Instruction::Effect,
+                        Instruction::StoreLocal { local: LocalId(0) },
+                        Instruction::LoadConst {
+                            value: ConstValue::String("approved".to_string()),
+                        },
+                        Instruction::WaitForEvent,
+                        Instruction::StoreLocal { local: LocalId(1) },
+                        Instruction::NewObject,
+                        Instruction::LoadLocal { local: LocalId(0) },
+                        Instruction::SetProp {
+                            key: "result".to_string(),
+                        },
+                        Instruction::LoadLocal { local: LocalId(1) },
+                        Instruction::SetProp {
+                            key: "approval".to_string(),
+                        },
+                        Instruction::Return,
+                    ],
+                    spans: vec![None; 12],
+                }],
+            },
+        }
+    }
 }
 
 #[cfg(test)]

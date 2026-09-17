@@ -6,14 +6,17 @@
 #![allow(clippy::derive_partial_eq_without_eq)]
 
 pub mod artifact;
+pub mod encode;
 pub mod error;
 pub mod features;
 pub mod instruction;
+mod json;
 pub mod validate;
 
 pub use artifact::{
     Artifact, Envelope, FuncId, Function, LocalId, Pc, Program, RuntimeModule, SourceSpan,
 };
+pub use encode::{canonical_artifact_json, decode_artifact, encode_artifact};
 pub use error::IrError;
 pub use features::{
     EngineFeature, FeatureSet, HostCapability, ENGINE_FORMAT_VERSION, FRONTEND_TYPESCRIPT,
