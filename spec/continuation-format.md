@@ -31,7 +31,7 @@ A continuation is committed when the host confirms `persist_checkpoint` (or an e
 
 If a host reconstructs continuation bytes from a log or deltas, the result must be a continuation in this format. That reconstruction is not execution of completed program instructions.
 
-Recovery uses the latest committed continuation for the execution.
+Recovery uses the latest committed continuation for the execution. Resume is `Engine::resume` with that continuation and the artifact whose hash matches `artifact.hash`.
 
 ## Encoding
 

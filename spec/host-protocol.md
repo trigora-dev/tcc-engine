@@ -24,7 +24,16 @@ The engine does not depend on a particular database, operating system, or cloud 
 | `create_child` | Create the child execution. Wake the parent when the child is terminal |
 | `fetch_artifact` | Return the artifact for the given hash |
 
-Requests are coarse. A persist of wait registration and continuation suspend must be atomic, or must follow an order from which the host can recover. A committed wait must have a durable wakeup registration.
+Requests are coarse. A persist of wait registration and continuation suspend must be atomic, or must follow an order from which the host can recover (for example an idempotent upsert of `wait_id` so a crash between `register_wait` and `persist_checkpoint` can re-register). A committed wait must have a durable wakeup registration.
+
+## Recovery
+
+The host owns durable state. The engine’s in-memory `outstanding` request is not recoverable.
+
+- Reply `persist_confirmed` only after the continuation (and any wait or effect rows in the same commit) is durable. `ack` on `persist_checkpoint` does not commit.
+- A crash during a persistence transaction must not leave an execution looking as if that revision committed.
+- Resume loads the latest committed continuation and the artifact named by `artifact.hash`. The host supplies that artifact blob; it must not substitute whatever source is currently compiled.
+- Exactly one worker may advance an execution. Enforce with a lease or owner token and a revision compare-and-swap on continuation writes.
 
 ## Responses
 

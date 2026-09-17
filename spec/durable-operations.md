@@ -17,7 +17,7 @@ The effect callback is not compiled into the artifact. The host performs the wor
 | Event wait | `WaitForEvent` | `{execution_id}:{name}:{correlation_key}:{pc}` | `register_wait` |
 | Child invoke | `Invoke` | `{parent}:invoke:{pc}` | `create_child` |
 
-If an effect journal record is `completed`, the engine returns the stored result and must not invoke the external operation again.
+If an effect journal record is `completed`, a later `run_effect` for that identity must return the stored result and must not invoke the external operation again. The host looks up the journal by `{execution_id}:{key}` when the engine emits `run_effect`. After a crash the engine may emit `run_effect` again because in-memory outstanding requests are not part of the continuation.
 
 A wake delivered to a wait or child that is already terminal is a no-op.
 
@@ -34,7 +34,7 @@ Commit order:
 
 If the process stops after step 2 and before step 3, the engine cannot determine whether the external operation occurred. Retry uses the same identity. This is not exactly-once external I/O.
 
-Hosts should pass the idempotency key to providers that accept one. Ambiguous outcomes remain explicit in the protocol.
+Hosts should pass the idempotency key to providers that accept one. Ambiguous outcomes remain explicit in the protocol. A host that records `started` then crashes before `completed` may call the provider again with that key.
 
 ## Waits
 
@@ -42,7 +42,7 @@ The engine registers the wait, suspends the continuation, and yields to the host
 
 Resume occurs when the host delivers a matching timer, event, child completion, or cancellation.
 
-A wait has exactly one terminal outcome: resolved, timed out, or cancelled.
+A wait has exactly one terminal outcome: resolved, timed out, or cancelled. A wake delivered to a wait that is already resolved is a no-op. The host must not apply `event_payload` to a terminal wait.
 
 A committed wait must have a durable wakeup registration.
 
