@@ -23,6 +23,13 @@ pub struct Frame {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TryHandler {
+    pub catch: u32,
+    pub finally: Option<u32>,
+    pub stack_len: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WaitKind {
     Timer {
         resume_at_ms: u64,
@@ -61,6 +68,7 @@ pub struct Continuation {
     pub stack: Vec<Value>,
     pub pending: Option<PendingOp>,
     pub result: Option<Value>,
+    pub try_stack: Vec<TryHandler>,
 }
 
 impl Continuation {
@@ -89,6 +97,7 @@ impl Continuation {
             stack: Vec::new(),
             pending: None,
             result: None,
+            try_stack: Vec::new(),
         }
     }
 }

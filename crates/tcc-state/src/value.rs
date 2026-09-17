@@ -10,4 +10,5 @@ pub enum Value {
     Number(f64),
     String(String),
     Object(BTreeMap<String, Value>),
+    Array(Vec<Value>),
 }

@@ -13,6 +13,7 @@ pub enum EngineOutcome {
     Host(HostRequest),
     Completed { result: Value },
     Failed { message: String },
+    Cancelled,
     BudgetExhausted,
     Suspended,
 }
@@ -109,7 +110,9 @@ impl Engine {
                     Some(_) => ContinuationStatus::Suspended,
                     None if matches!(
                         self.continuation.status,
-                        ContinuationStatus::Completed | ContinuationStatus::Failed
+                        ContinuationStatus::Completed
+                            | ContinuationStatus::Failed
+                            | ContinuationStatus::Cancelled
                     ) =>
                     {
                         self.continuation.status
@@ -139,7 +142,32 @@ impl Engine {
                 });
                 Ok(())
             }
-            (HostRequest::PersistEffect { .. }, HostResponse::Ack) => {
+            (
+                HostRequest::RunEffect {
+                    key,
+                    idempotency_key,
+                },
+                HostResponse::EffectFailed { message },
+            ) => {
+                self.continuation.pending = None;
+                self.outstanding = Some(HostRequest::PersistEffect {
+                    record: EffectRecord {
+                        key,
+                        idempotency_key,
+                        status: EffectStatus::Failed,
+                        result: Some(Value::String(message)),
+                    },
+                });
+                Ok(())
+            }
+            (HostRequest::PersistEffect { record }, HostResponse::Ack) => {
+                if record.status == EffectStatus::Failed {
+                    let message = match record.result {
+                        Some(Value::String(text)) => text,
+                        _ => "effect failed".to_string(),
+                    };
+                    return self.throw_value(Value::String(message)).map(|_| ());
+                }
                 self.outstanding = Some(HostRequest::PersistCheckpoint {
                     revision: self.continuation.revision + 1,
                 });
@@ -172,30 +200,65 @@ impl Engine {
     }
 
     fn apply_wake(&mut self, response: HostResponse) -> Result<(), CoreError> {
-        let waiting_for_event = matches!(
-            (&self.continuation.status, &self.continuation.pending),
+        match (
+            &self.continuation.status,
+            &self.continuation.pending,
+            response,
+        ) {
             (
                 ContinuationStatus::Suspended,
                 Some(PendingOp::Wait {
                     kind: WaitKind::Event { .. },
-                })
-            )
-        );
-        match (waiting_for_event, response) {
-            (true, HostResponse::EventPayload { value }) => {
+                }),
+                HostResponse::EventPayload { value },
+            ) => {
                 self.continuation.stack.push(value);
+                self.clear_wait_and_persist();
+                Ok(())
+            }
+            (
+                ContinuationStatus::Suspended,
+                Some(PendingOp::Wait {
+                    kind: WaitKind::Timer { .. },
+                }),
+                HostResponse::TimerFired,
+            ) => {
+                self.continuation.stack.push(Value::Undefined);
+                self.clear_wait_and_persist();
+                Ok(())
+            }
+            (
+                ContinuationStatus::Suspended,
+                Some(PendingOp::Wait {
+                    kind: WaitKind::Child { .. },
+                }),
+                HostResponse::ChildResult { value },
+            ) => {
+                self.continuation.stack.push(value);
+                self.clear_wait_and_persist();
+                Ok(())
+            }
+            (_, _, HostResponse::Cancel) => {
+                self.continuation.status = ContinuationStatus::Cancelled;
                 self.continuation.pending = None;
-                self.continuation.status = ContinuationStatus::Runnable;
                 self.outstanding = Some(HostRequest::PersistCheckpoint {
                     revision: self.continuation.revision + 1,
                 });
                 Ok(())
             }
-            (_, response) => Err(CoreError::UnexpectedHostResponse {
-                expected: "event_payload",
+            (_, _, response) => Err(CoreError::UnexpectedHostResponse {
+                expected: "wake",
                 got: response.kind_name(),
             }),
         }
+    }
+
+    fn clear_wait_and_persist(&mut self) {
+        self.continuation.pending = None;
+        self.continuation.status = ContinuationStatus::Runnable;
+        self.outstanding = Some(HostRequest::PersistCheckpoint {
+            revision: self.continuation.revision + 1,
+        });
     }
 
     pub fn run_until_host(&mut self, budget: u32) -> EngineOutcome {
@@ -211,13 +274,14 @@ impl Engine {
             }
             ContinuationStatus::Failed => {
                 return EngineOutcome::Failed {
-                    message: "execution failed".to_string(),
+                    message: match &self.continuation.result {
+                        Some(Value::String(text)) => text.clone(),
+                        _ => "execution failed".to_string(),
+                    },
                 };
             }
             ContinuationStatus::Cancelled => {
-                return EngineOutcome::Failed {
-                    message: "execution cancelled".to_string(),
-                };
+                return EngineOutcome::Cancelled;
             }
             ContinuationStatus::Suspended => {
                 return EngineOutcome::Suspended;
@@ -318,6 +382,50 @@ impl Engine {
                 self.continuation.stack.push(object);
                 self.advance_pc().map(|()| None)
             }
+            Instruction::GetProp { key } => {
+                let object = self.pop()?;
+                let value = match object {
+                    Value::Object(fields) => fields.get(&key).cloned().unwrap_or(Value::Undefined),
+                    _ => {
+                        return Err(CoreError::TypeError(
+                            "GetProp requires an object".to_string(),
+                        ))
+                    }
+                };
+                self.continuation.stack.push(value);
+                self.advance_pc().map(|()| None)
+            }
+            Instruction::NewArray => {
+                self.continuation.stack.push(Value::Array(Vec::new()));
+                self.advance_pc().map(|()| None)
+            }
+            Instruction::ArrayPush => {
+                let value = self.pop()?;
+                let mut array = self.pop()?;
+                match &mut array {
+                    Value::Array(items) => items.push(value),
+                    _ => {
+                        return Err(CoreError::TypeError(
+                            "ArrayPush requires an array".to_string(),
+                        ))
+                    }
+                }
+                self.continuation.stack.push(array);
+                self.advance_pc().map(|()| None)
+            }
+            Instruction::StrictEq => self.binary(|left, right| Ok(Value::Bool(left == right))),
+            Instruction::StrictNeq => self.binary(|left, right| Ok(Value::Bool(left != right))),
+            Instruction::Lt => self.numeric_cmp(|a, b| a < b),
+            Instruction::Le => self.numeric_cmp(|a, b| a <= b),
+            Instruction::Gt => self.numeric_cmp(|a, b| a > b),
+            Instruction::Ge => self.numeric_cmp(|a, b| a >= b),
+            Instruction::Not => {
+                let value = self.pop()?;
+                self.continuation
+                    .stack
+                    .push(Value::Bool(!is_truthy(&value)));
+                self.advance_pc().map(|()| None)
+            }
             Instruction::Return => {
                 let result = if self.continuation.stack.is_empty() {
                     Value::Undefined
@@ -343,15 +451,29 @@ impl Engine {
             Instruction::Sleep => self.yield_sleep(),
             Instruction::WaitForEvent => self.yield_wait(),
             Instruction::Invoke => self.yield_invoke(),
-            Instruction::Call { .. }
-            | Instruction::Throw
-            | Instruction::PushTry { .. }
-            | Instruction::PopTry => {
+            Instruction::Call { .. } => {
                 let frame = self.frame()?;
                 Err(CoreError::UnknownInstruction {
                     func: frame.func_id,
                     pc: frame.pc,
                 })
+            }
+            Instruction::Throw => {
+                let value = self.pop()?;
+                self.throw_value(value)
+            }
+            Instruction::PushTry { catch, finally } => {
+                let stack_len = self.continuation.stack.len() as u32;
+                self.continuation.try_stack.push(tcc_state::TryHandler {
+                    catch: catch.0,
+                    finally: finally.map(|pc| pc.0),
+                    stack_len,
+                });
+                self.advance_pc().map(|()| None)
+            }
+            Instruction::PopTry => {
+                self.continuation.try_stack.pop();
+                self.advance_pc().map(|()| None)
             }
         }
     }
@@ -436,6 +558,45 @@ impl Engine {
         Ok(Some(EngineOutcome::Host(request)))
     }
 
+    fn throw_value(&mut self, value: Value) -> Result<Option<EngineOutcome>, CoreError> {
+        if let Some(handler) = self.continuation.try_stack.pop() {
+            self.continuation.stack.truncate(handler.stack_len as usize);
+            self.continuation.stack.push(value);
+            self.set_pc(handler.catch)?;
+            return Ok(None);
+        }
+        self.continuation.status = ContinuationStatus::Failed;
+        self.continuation.result = Some(value);
+        self.outstanding = Some(HostRequest::PersistCheckpoint {
+            revision: self.continuation.revision + 1,
+        });
+        Ok(Some(EngineOutcome::Host(
+            self.outstanding.clone().expect("just queued"),
+        )))
+    }
+
+    fn binary(
+        &mut self,
+        op: impl FnOnce(Value, Value) -> Result<Value, CoreError>,
+    ) -> Result<Option<EngineOutcome>, CoreError> {
+        let right = self.pop()?;
+        let left = self.pop()?;
+        self.continuation.stack.push(op(left, right)?);
+        self.advance_pc().map(|()| None)
+    }
+
+    fn numeric_cmp(
+        &mut self,
+        op: impl FnOnce(f64, f64) -> bool,
+    ) -> Result<Option<EngineOutcome>, CoreError> {
+        self.binary(|left, right| match (left, right) {
+            (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(op(a, b))),
+            _ => Err(CoreError::TypeError(
+                "numeric compare requires numbers".to_string(),
+            )),
+        })
+    }
+
     fn current_instruction(&self) -> Result<&Instruction, CoreError> {
         let frame = self.frame()?;
         let function = self
@@ -497,7 +658,7 @@ fn is_truthy(value: &Value) -> bool {
         Value::Bool(flag) => *flag,
         Value::Number(number) => *number != 0.0 && !number.is_nan(),
         Value::String(text) => !text.is_empty(),
-        Value::Object(_) => true,
+        Value::Object(_) | Value::Array(_) => true,
     }
 }
 

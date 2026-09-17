@@ -65,7 +65,9 @@ pub enum HostResponse {
     EffectResult { value: Value },
     EffectFailed { message: String },
     EventPayload { value: Value },
+    TimerFired,
     ChildResult { value: Value },
+    Cancel,
     Artifact { hash: String },
 }
 
@@ -77,7 +79,9 @@ impl HostResponse {
             HostResponse::EffectResult { .. } => "effect_result",
             HostResponse::EffectFailed { .. } => "effect_failed",
             HostResponse::EventPayload { .. } => "event_payload",
+            HostResponse::TimerFired => "timer_fired",
             HostResponse::ChildResult { .. } => "child_result",
+            HostResponse::Cancel => "cancel",
             HostResponse::Artifact { .. } => "artifact",
         }
     }

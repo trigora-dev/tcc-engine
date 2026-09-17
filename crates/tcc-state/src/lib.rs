@@ -11,7 +11,9 @@ pub mod error;
 pub mod json;
 pub mod value;
 
-pub use continuation::{ArtifactId, Continuation, ContinuationStatus, Frame, PendingOp, WaitKind};
+pub use continuation::{
+    ArtifactId, Continuation, ContinuationStatus, Frame, PendingOp, TryHandler, WaitKind,
+};
 pub use encode::{decode_continuation, decode_value, encode_continuation, encode_value};
 pub use error::StateError;
 pub use value::Value;

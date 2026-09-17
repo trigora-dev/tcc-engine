@@ -195,6 +195,37 @@ fn instruction_to_json(instruction: &Instruction) -> Json {
             map.insert("op".to_string(), Json::String("SetProp".to_string()));
             map.insert("key".to_string(), Json::String(key.clone()));
         }
+        Instruction::GetProp { key } => {
+            map.insert("op".to_string(), Json::String("GetProp".to_string()));
+            map.insert("key".to_string(), Json::String(key.clone()));
+        }
+        Instruction::NewArray => {
+            map.insert("op".to_string(), Json::String("NewArray".to_string()));
+        }
+        Instruction::ArrayPush => {
+            map.insert("op".to_string(), Json::String("ArrayPush".to_string()));
+        }
+        Instruction::StrictEq => {
+            map.insert("op".to_string(), Json::String("StrictEq".to_string()));
+        }
+        Instruction::StrictNeq => {
+            map.insert("op".to_string(), Json::String("StrictNeq".to_string()));
+        }
+        Instruction::Lt => {
+            map.insert("op".to_string(), Json::String("Lt".to_string()));
+        }
+        Instruction::Le => {
+            map.insert("op".to_string(), Json::String("Le".to_string()));
+        }
+        Instruction::Gt => {
+            map.insert("op".to_string(), Json::String("Gt".to_string()));
+        }
+        Instruction::Ge => {
+            map.insert("op".to_string(), Json::String("Ge".to_string()));
+        }
+        Instruction::Not => {
+            map.insert("op".to_string(), Json::String("Not".to_string()));
+        }
         Instruction::Return => {
             map.insert("op".to_string(), Json::String("Return".to_string()));
         }
@@ -378,6 +409,18 @@ fn json_to_instruction(json: &Json) -> Result<Instruction, IrError> {
         "SetProp" => Ok(Instruction::SetProp {
             key: Json::get(map, "key")?.as_str()?.to_string(),
         }),
+        "GetProp" => Ok(Instruction::GetProp {
+            key: Json::get(map, "key")?.as_str()?.to_string(),
+        }),
+        "NewArray" => Ok(Instruction::NewArray),
+        "ArrayPush" => Ok(Instruction::ArrayPush),
+        "StrictEq" => Ok(Instruction::StrictEq),
+        "StrictNeq" => Ok(Instruction::StrictNeq),
+        "Lt" => Ok(Instruction::Lt),
+        "Le" => Ok(Instruction::Le),
+        "Gt" => Ok(Instruction::Gt),
+        "Ge" => Ok(Instruction::Ge),
+        "Not" => Ok(Instruction::Not),
         "Return" => Ok(Instruction::Return),
         "Call" => Ok(Instruction::Call {
             func: FuncId(Json::get(map, "func")?.as_u32()?),

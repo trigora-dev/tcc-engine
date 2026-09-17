@@ -20,6 +20,9 @@ pub fn encode_outcome(outcome: &EngineOutcome) -> Result<String, CoreError> {
             map.insert("type".into(), Json::String("failed".into()));
             map.insert("message".into(), Json::String(message.clone()));
         }
+        EngineOutcome::Cancelled => {
+            map.insert("type".into(), Json::String("cancelled".into()));
+        }
         EngineOutcome::BudgetExhausted => {
             map.insert("type".into(), Json::String("budget_exhausted".into()));
         }
@@ -157,9 +160,11 @@ fn json_to_response(json: &Json) -> Result<HostResponse, CoreError> {
         "event_payload" => Ok(HostResponse::EventPayload {
             value: json_value(Json::get(map, "value").map_err(core_state)?)?,
         }),
+        "timer_fired" => Ok(HostResponse::TimerFired),
         "child_result" => Ok(HostResponse::ChildResult {
             value: json_value(Json::get(map, "value").map_err(core_state)?)?,
         }),
+        "cancel" => Ok(HostResponse::Cancel),
         "artifact" => Ok(HostResponse::Artifact {
             hash: Json::get(map, "hash")
                 .map_err(core_state)?

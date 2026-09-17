@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::continuation::{
-    ArtifactId, Continuation, ContinuationStatus, Frame, PendingOp, WaitKind,
+    ArtifactId, Continuation, ContinuationStatus, Frame, PendingOp, TryHandler, WaitKind,
 };
 use crate::error::StateError;
 use crate::json::Json;
@@ -56,6 +56,13 @@ fn value_to_json(value: &Value) -> Json {
             }
             map.insert("v".to_string(), Json::Object(object));
         }
+        Value::Array(items) => {
+            map.insert("t".to_string(), Json::String("array".to_string()));
+            map.insert(
+                "v".to_string(),
+                Json::Array(items.iter().map(value_to_json).collect()),
+            );
+        }
     }
     Json::Object(map)
 }
@@ -81,6 +88,14 @@ fn json_to_value(json: &Json) -> Result<Value, StateError> {
                 object.insert(key.clone(), json_to_value(value)?);
             }
             Ok(Value::Object(object))
+        }
+        "array" => {
+            let items = Json::get(map, "v")?.as_array()?;
+            let mut array = Vec::new();
+            for item in items {
+                array.push(json_to_value(item)?);
+            }
+            Ok(Value::Array(array))
         }
         _ => Err(StateError::UnsupportedValue),
     }
@@ -134,6 +149,16 @@ fn continuation_to_json(continuation: &Continuation) -> Json {
             None => Json::Null,
         },
     );
+    map.insert(
+        "try_stack".to_string(),
+        Json::Array(
+            continuation
+                .try_stack
+                .iter()
+                .map(try_handler_to_json)
+                .collect(),
+        ),
+    );
     Json::Object(map)
 }
 
@@ -168,6 +193,43 @@ fn json_to_continuation(json: &Json) -> Result<Continuation, StateError> {
             Json::Null => None,
             other => Some(json_to_value(other)?),
         },
+        try_stack: match map.get("try_stack") {
+            None | Some(Json::Null) => Vec::new(),
+            Some(other) => other
+                .as_array()?
+                .iter()
+                .map(json_to_try_handler)
+                .collect::<Result<_, _>>()?,
+        },
+    })
+}
+
+fn try_handler_to_json(handler: &TryHandler) -> Json {
+    let mut map = BTreeMap::new();
+    map.insert("catch".to_string(), Json::Number(handler.catch as f64));
+    map.insert(
+        "finally".to_string(),
+        match handler.finally {
+            Some(pc) => Json::Number(pc as f64),
+            None => Json::Null,
+        },
+    );
+    map.insert(
+        "stack_len".to_string(),
+        Json::Number(handler.stack_len as f64),
+    );
+    Json::Object(map)
+}
+
+fn json_to_try_handler(json: &Json) -> Result<TryHandler, StateError> {
+    let map = json.as_object()?;
+    Ok(TryHandler {
+        catch: Json::get(map, "catch")?.as_u32()?,
+        finally: match Json::get(map, "finally")? {
+            Json::Null => None,
+            other => Some(other.as_u32()?),
+        },
+        stack_len: Json::get(map, "stack_len")?.as_u32()?,
     })
 }
 
@@ -336,6 +398,7 @@ mod tests {
                 "result".to_string(),
                 Value::Number(42.0),
             )])),
+            Value::Array(vec![Value::Number(1.0), Value::Bool(true)]),
         ];
         for value in values {
             let bytes = encode_value(&value).unwrap();

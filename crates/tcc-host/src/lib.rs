@@ -61,6 +61,7 @@ pub struct Driver<H> {
 pub enum DriverOutcome {
     Completed { result: tcc_state::Value },
     Failed { message: String },
+    Cancelled,
     BudgetExhausted,
     Suspended,
 }
@@ -81,6 +82,7 @@ impl<H: Host> Driver<H> {
                     return Ok(DriverOutcome::Completed { result });
                 }
                 EngineOutcome::Failed { message } => return Ok(DriverOutcome::Failed { message }),
+                EngineOutcome::Cancelled => return Ok(DriverOutcome::Cancelled),
                 EngineOutcome::BudgetExhausted => return Ok(DriverOutcome::BudgetExhausted),
                 EngineOutcome::Suspended => return Ok(DriverOutcome::Suspended),
                 EngineOutcome::Host(request) => {

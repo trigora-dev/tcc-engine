@@ -19,6 +19,7 @@ export type Outcome =
   | { type: "host"; request: Record<string, unknown> }
   | { type: "completed"; result: unknown }
   | { type: "failed"; message: string }
+  | { type: "cancelled" }
   | { type: "budget_exhausted" }
   | { type: "suspended" };
 
