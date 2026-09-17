@@ -9,6 +9,7 @@ type WasmExports = {
   tcc_json_ptr: () => number;
   tcc_json_len: () => number;
   tcc_start: (aPtr: number, aLen: number, ePtr: number, eLen: number) => number;
+  tcc_resume: (aPtr: number, aLen: number, cPtr: number, cLen: number) => number;
   tcc_run_until_host: (budget: number) => number;
   tcc_apply_response: (ptr: number, len: number) => number;
   tcc_continuation: () => number;
@@ -43,6 +44,24 @@ export class EngineBinding {
     if (code !== 0) {
       throw new Error(readLast());
     }
+  }
+
+  static resume(artifactJson: string, continuationJson: string): EngineBinding {
+    const binding = Object.create(EngineBinding.prototype) as EngineBinding;
+    const artifact = writeString(artifactJson);
+    const continuation = writeString(continuationJson);
+    const code = api().tcc_resume(
+      artifact.ptr,
+      artifact.len,
+      continuation.ptr,
+      continuation.len,
+    );
+    api().tcc_free(artifact.ptr, artifact.len);
+    api().tcc_free(continuation.ptr, continuation.len);
+    if (code !== 0) {
+      throw new Error(readLast());
+    }
+    return binding;
   }
 
   runUntilHost(budget = 256): Outcome {

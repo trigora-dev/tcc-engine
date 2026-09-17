@@ -8,7 +8,7 @@ use std::slice;
 
 use tcc_core::{decode_response, encode_outcome, Engine};
 use tcc_ir::{decode_artifact, EngineCaps, ENGINE_FORMAT_VERSION};
-use tcc_state::encode_continuation;
+use tcc_state::{decode_continuation, encode_continuation};
 
 pub use tcc_core::{
     ChildSpec, EffectRecord, EffectStatus, Engine as CoreEngine, EngineOutcome, HostRequest,
@@ -73,6 +73,22 @@ pub extern "C" fn tcc_start(
 }
 
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub extern "C" fn tcc_resume(
+    artifact_ptr: *const u8,
+    artifact_len: u32,
+    continuation_ptr: *const u8,
+    continuation_len: u32,
+) -> i32 {
+    let artifact_json = unsafe { read_str(artifact_ptr, artifact_len) };
+    let continuation_json = unsafe { read_str(continuation_ptr, continuation_len) };
+    match resume_engine(artifact_json, continuation_json) {
+        Ok(()) => 0,
+        Err(message) => set_error(&message),
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn tcc_run_until_host(budget: u32) -> i32 {
     ENGINE.with(|slot| {
         let mut slot = slot.borrow_mut();
@@ -125,6 +141,18 @@ pub extern "C" fn tcc_continuation() -> i32 {
 fn start_engine(artifact_json: &str, execution_id: &str) -> Result<(), String> {
     let artifact = decode_artifact(artifact_json).map_err(|err| err.to_string())?;
     let engine = Engine::start(artifact, execution_id, &EngineCaps::current())
+        .map_err(|err| err.to_string())?;
+    ENGINE.with(|slot| {
+        *slot.borrow_mut() = Some(engine);
+    });
+    Ok(())
+}
+
+fn resume_engine(artifact_json: &str, continuation_json: &str) -> Result<(), String> {
+    let artifact = decode_artifact(artifact_json).map_err(|err| err.to_string())?;
+    let continuation =
+        decode_continuation(continuation_json.as_bytes()).map_err(|err| err.to_string())?;
+    let engine = Engine::resume(artifact, continuation, &EngineCaps::current())
         .map_err(|err| err.to_string())?;
     ENGINE.with(|slot| {
         *slot.borrow_mut() = Some(engine);
@@ -206,6 +234,45 @@ mod tests {
         assert_eq!(tcc_continuation(), 0);
         let continuation = last_json();
         assert!(continuation.contains("\"status\":\"completed\""));
+    }
+
+    #[test]
+    fn c_abi_resume_does_not_replay_committed_prefix() {
+        let artifact = encode_artifact(&Artifact::sdk_first_example("sdk-first")).unwrap();
+        start(&artifact, "first");
+        apply_effect_and_wait();
+        assert_eq!(tcc_continuation(), 0);
+        let snapshot = last_json();
+        resume(&artifact, &snapshot);
+        let outcome = run(32);
+        assert!(outcome.contains("\"type\":\"suspended\""));
+        assert!(!outcome.contains("\"type\":\"run_effect\""));
+    }
+
+    fn apply_effect_and_wait() {
+        let first = run(32);
+        assert!(first.contains("\"type\":\"run_effect\""));
+        apply(r#"{"type":"effect_result","value":{"t":"number","v":42}}"#);
+        let persist_effect = run(32);
+        assert!(persist_effect.contains("\"type\":\"persist_effect\""));
+        apply(r#"{"type":"ack"}"#);
+        assert!(run(32).contains("\"type\":\"persist_checkpoint\""));
+        apply(r#"{"type":"persist_confirmed","revision":1}"#);
+        let wait = run(32);
+        assert!(wait.contains("\"wait_id\":\"first:approved::4\""));
+        apply(r#"{"type":"ack"}"#);
+        assert!(run(32).contains("\"type\":\"persist_checkpoint\""));
+        apply(r#"{"type":"persist_confirmed","revision":2}"#);
+        assert!(run(32).contains("\"type\":\"suspended\""));
+    }
+
+    fn resume(artifact: &str, continuation: &str) {
+        let artifact_buf = write_str(artifact);
+        let cont_buf = write_str(continuation);
+        let code = tcc_resume(artifact_buf.0, artifact_buf.1, cont_buf.0, cont_buf.1);
+        tcc_free(artifact_buf.0, artifact_buf.1);
+        tcc_free(cont_buf.0, cont_buf.1);
+        assert_eq!(code, 0, "{}", last_json());
     }
 
     fn start(artifact: &str, execution_id: &str) {
