@@ -34,7 +34,7 @@ MIGRATION.md
 node_modules/
 dist/
 frontends/**/dist/
-bindings/js/pkg/
+bindings/javascript/pkg/
 .pnpm-store/
 
 # misc

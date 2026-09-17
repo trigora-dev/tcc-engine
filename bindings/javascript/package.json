@@ -1,5 +1,5 @@
 {
-  "name": "@tcc-engine/bindings-js",
+  "name": "@tcc-engine/bindings-javascript",
   "version": "0.0.0",
   "private": true,
   "type": "module",

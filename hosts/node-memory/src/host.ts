@@ -1,4 +1,4 @@
-import { EngineBinding, loadEngine, type Outcome } from "../../../bindings/js/src/index.ts";
+import { EngineBinding, loadEngine, type Outcome } from "../../../bindings/javascript/src/index.ts";
 
 export type FakeEffects = Record<string, unknown>;
 

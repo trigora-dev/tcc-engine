@@ -1,6 +1,6 @@
 import { appendFileSync } from "node:fs";
 
-import { EngineBinding, loadEngine, type Outcome } from "../../../bindings/js/src/index.ts";
+import { EngineBinding, loadEngine, type Outcome } from "../../../bindings/javascript/src/index.ts";
 import { maybeCrash } from "./crash.ts";
 import { Store } from "./store.ts";
 
