@@ -63,6 +63,7 @@ Use this repository to:
 | `crates/tcc-core` | Execution |
 | `crates/tcc-host` | Host protocol types and driver |
 | `crates/tcc-wasm` | WebAssembly exports |
+| `crates/tcc-python` | Native Python (PyO3) embedding |
 | `frontends/` | Language frontends |
 | `bindings/` | Language embeddings of the engine |
 | `hosts/` | Reference hosts |
@@ -70,7 +71,7 @@ Use this repository to:
 
 A frontend compiles source to a TCC artifact. A binding loads the engine in a host language. They are not the same thing.
 
-The execution core does not depend on a particular database, cloud provider, or SDK. The WASM target is `wasm32-unknown-unknown` and does not use WASI networking, filesystems, or threads.
+The execution core does not depend on a particular database, cloud provider, or SDK. WASM is a delivery and conformance target for that core, not TCC itself. Native embedding is the other path. The WASM target is `wasm32-unknown-unknown` and does not use WASI networking, filesystems, or threads.
 
 ## Status
 
@@ -81,7 +82,9 @@ The repository is under development. Present:
 - Host protocol
 - Stepper, objects, arrays, control flow, exceptions, timers, cancellation, and child invoke
 - TypeScript frontend that compiles `@trigora/sdk` durable operations (`effect`, `waitForEvent`, `sleep`, `invoke`)
+- Python frontend that compiles `trigora` durable operations (`effect`, `wait_for_event`, `sleep`, `invoke`)
 - WASM C ABI, JavaScript binding, and an in-memory Node host
+- Native PyO3 binding and a SQLite Python host
 - SQLite Node host with process-restart recovery and a conformance helper
 
 Not present: a published SDK.
@@ -103,12 +106,21 @@ node --experimental-strip-types --test hosts/node-memory/src/host.test.ts
 node --experimental-sqlite --experimental-strip-types --test hosts/node/src/host.test.ts hosts/node/src/restart.test.ts hosts/node/src/conformance.test.ts
 ```
 
+```sh
+python -m venv .venv
+.venv/bin/pip install maturin pytest
+.venv/bin/maturin develop --manifest-path crates/tcc-python/Cargo.toml
+.venv/bin/pytest frontends/python hosts/python
+```
+
 ## Specifications
 
 - [Program format](spec/program-format.md)
 - [Execution semantics](spec/execution-semantics.md)
 - [TypeScript subset](spec/typescript-subset.md)
+- [Python subset](spec/python-subset.md)
 - [First example](spec/examples/first.md)
+- [First example (Python)](spec/examples/first-python.md)
 - [Continuation format](spec/continuation-format.md)
 - [Host protocol](spec/host-protocol.md)
 - [Durable operations](spec/durable-operations.md)

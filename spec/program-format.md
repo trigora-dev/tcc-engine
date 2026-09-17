@@ -104,4 +104,4 @@ In this repository, validation is `tcc_ir::validate`. `tcc_ir::encode_artifact` 
 
 ## Current coverage
 
-Format version `1` is the TypeScript subset identified by `language_semantics_version` `ts.subset.v1`. Control, locals, constants, objects, arrays, comparisons, exceptions, and durable-operation instructions are defined. `Call` is encoded in the format and is not executed. The supported source language is [TypeScript subset](typescript-subset.md). The first example is [spec/examples/first.md](examples/first.md).
+Format version `1` is shared by `ts.subset.v1` and `py.subset.v1`. Control, locals, constants, objects, arrays, comparisons, exceptions, and durable-operation instructions are defined. `Call` is encoded in the format and is not executed. Supported source languages are [TypeScript subset](typescript-subset.md) and [Python subset](python-subset.md). First examples: [TypeScript](examples/first.md), [Python](examples/first-python.md).

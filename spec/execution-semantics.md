@@ -32,6 +32,12 @@ Same-key effects and same-pc waits keep frozen identities (`{execution_id}:{key}
 
 A different language must not reuse these instructions for a different truthiness rule without a new engine feature.
 
+## Python subset
+
+For `language_semantics_version` `py.subset.v1`, the frontend maps Python onto the same instructions and value tags. `None` is `null`. Collection truthiness is not compiled (`if []` / `if {}` are errors) so `JumpIf*` keeps JavaScript truthiness for bool, number, string, and `null`. Integers that are not exact IEEE-754 binary64 values are compile errors.
+
+A construct is supported only when compile, native PyO3 execution, WASM execution of the same artifact, and SIGKILL/resume at every durable boundary agree. The supported source subset is [Python subset](python-subset.md). The first example is [First example (Python)](examples/first-python.md).
+
 ## Statuses
 
 | Status | Meaning |

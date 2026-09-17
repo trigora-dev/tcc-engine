@@ -23,7 +23,7 @@ Native and WASM builds execute the same core. For a given artifact, continuation
 
 ## Frontends
 
-Every frontend must emit the artifact envelope in [Program format](program-format.md). A frontend may add instructions only by declaring new required engine features. Unsupported source constructs must fail at compile time.
+Every frontend must emit the artifact envelope in [Program format](program-format.md). A frontend may add instructions only by declaring new required engine features. Unsupported source constructs must fail at compile time. TypeScript and Python both target the same instruction set; they are not required to emit byte-identical artifacts.
 
 Third-party libraries are not executed by the engine unless the frontend compiles them or the host exposes them as a capability.
 

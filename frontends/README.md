@@ -8,7 +8,7 @@ A frontend compiles a source language into a TCC program artifact. It is not a b
 | Binding | Embed and control the engine from a host language |
 | Host | Persistence, effects, events, scheduling |
 
-A Python frontend and a Python binding are different components. This tree currently has a TypeScript frontend at `frontends/typescript`. Further languages belong in `frontends/<language>/`.
+A Python frontend and a Python binding are different components. This tree has TypeScript at `frontends/typescript` (`ts.subset.v1`) and Python at `frontends/python` (`py.subset.v1`). Further languages belong in `frontends/<language>/`.
 
 ## Artifact
 
@@ -27,7 +27,7 @@ Unknown required features are rejected by `tcc_ir::validate`.
 
 Sharing an instruction format does not make languages identical. JavaScript numbers, Python integers, exception handling, object identity, and truthiness are not interchangeable. A frontend either lowers those differences into explicit instructions or runtime helpers, or it refuses to compile them.
 
-The TypeScript frontend implements `ts.subset.v1`. A frontend that needs different numeric types, truthiness, or object identity declares new engine features rather than overloading TypeScript’s.
+The TypeScript frontend implements `ts.subset.v1`. The Python frontend implements `py.subset.v1` by mapping onto the same value tags and instructions, or refusing what does not map. A frontend that needs different numeric types, truthiness, or object identity declares new engine features rather than overloading TypeScript’s.
 
 ## Libraries
 
