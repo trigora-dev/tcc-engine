@@ -82,8 +82,9 @@ The repository is under development. Present:
 - Stepper, object values, and a documented first example
 - TypeScript frontend that compiles `@trigora/sdk` durable operations
 - WASM C ABI, JavaScript binding, and an in-memory Node host
+- SQLite Node host with process-restart recovery
 
-Not present: a published SDK, a persistent reference host, or crash-recovery tests.
+Not present: a published SDK.
 
 ## Development
 
@@ -99,6 +100,7 @@ pnpm --dir frontends/typescript install
 pnpm --dir frontends/typescript test
 cargo build -p tcc-wasm --target wasm32-unknown-unknown --release
 node --experimental-strip-types --test hosts/node-memory/src/host.test.ts
+node --experimental-sqlite --experimental-strip-types --test hosts/node/src/host.test.ts hosts/node/src/restart.test.ts
 ```
 
 ## Specifications
