@@ -56,6 +56,7 @@ jobs:
           cache-dependency-path: frontends/typescript/pnpm-lock.yaml
       - run: cargo build -p tcc-wasm --target wasm32-unknown-unknown --release
       - run: pnpm --dir frontends/typescript install --frozen-lockfile
+      - run: node frontends/typescript/node_modules/typescript/bin/tsc --noEmit -p bindings/javascript/tsconfig.json
       - run: node --experimental-strip-types --test bindings/javascript/src/index.test.ts hosts/node-memory/src/host.test.ts
       - run: node --experimental-sqlite --experimental-strip-types --test hosts/node/src/host.test.ts hosts/node/src/restart.test.ts hosts/node/src/conformance.test.ts
 

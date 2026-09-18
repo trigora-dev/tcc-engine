@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build:wasm": "cargo build -p tcc-wasm --target wasm32-unknown-unknown --release",
-    "test": "node --experimental-strip-types --test src/index.test.ts"
+    "typecheck": "node ../../frontends/typescript/node_modules/typescript/bin/tsc --noEmit",
+    "test": "node ../../frontends/typescript/node_modules/typescript/bin/tsc --noEmit && node --experimental-strip-types --test src/index.test.ts"
   }
 }
