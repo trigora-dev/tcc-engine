@@ -41,3 +41,12 @@ export function benchScale(): BenchScale {
 
 export const DISCLAIMER =
   "These benchmarks characterize the portable TCC engine on the local host. They are not the research-prototype measurements and do not represent a hosted service.";
+
+/** Internal A/B: TCC_BENCH_STORAGE=naive|optimized limits the persist loop. */
+export function persistModes(): Array<"naive" | "optimized"> {
+  const raw = process.env.TCC_BENCH_STORAGE;
+  if (raw === "naive" || raw === "optimized") {
+    return [raw];
+  }
+  return ["naive", "optimized"];
+}

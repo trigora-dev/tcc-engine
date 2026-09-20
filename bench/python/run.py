@@ -63,6 +63,13 @@ def scale() -> dict:
     }
 
 
+def persist_modes() -> list[str]:
+    raw = os.environ.get("TCC_BENCH_STORAGE")
+    if raw in ("naive", "optimized"):
+        return [raw]
+    return ["naive", "optimized"]
+
+
 def latency(samples: list[float]) -> dict:
     ordered = sorted(samples)
 
@@ -139,6 +146,16 @@ def accounting(metrics: dict) -> dict:
     }
 
 
+def packing_fields(store: Store, persist: str) -> dict:
+    if persist != "optimized":
+        return {"packing": "n/a", "packingMinFullBytes": None, "packingMaxDeltaRatio": None}
+    return {
+        "packing": store.packing,
+        "packingMinFullBytes": store.min_full_bytes,
+        "packingMaxDeltaRatio": store.max_delta_ratio,
+    }
+
+
 FIRST = """
 from trigora import effect, wait_for_event
 
@@ -152,7 +169,7 @@ async def run():
 def healthy_path(cfg: dict) -> list[dict]:
     artifact = artifact_json(compile(FIRST, filename="first.py"))
     rows = []
-    for persist in ("naive", "optimized"):
+    for persist in persist_modes():
         store = Store(db_path(), persist)
         store.reset_metrics()
         try:
@@ -183,6 +200,7 @@ def healthy_path(cfg: dict) -> list[dict]:
                     "scenario": "healthy_path_persistence",
                     "workload": "A",
                     "storage": persist,
+                    **packing_fields(store, persist),
                     **latency(samples),
                     "executionsPerSec": round(cfg["measured"] / (total_ms / 1000), 2),
                     **accounting(store.metrics()),
@@ -197,7 +215,7 @@ def concurrency(cfg: dict) -> list[dict]:
     artifact = artifact_json(compile(FIRST, filename="first.py"))
     rows = []
     waves = max(1, cfg["measured"] // max(cfg["concurrency"]))
-    for persist in ("naive", "optimized"):
+    for persist in persist_modes():
         for conc in cfg["concurrency"]:
             store = Store(db_path(), persist)
             store.reset_metrics()
@@ -225,6 +243,7 @@ def concurrency(cfg: dict) -> list[dict]:
                     {
                         "scenario": "concurrency_group_commit",
                         "storage": persist,
+                        **packing_fields(store, persist),
                         "concurrency": conc,
                         "completed": completed,
                         **latency(samples),

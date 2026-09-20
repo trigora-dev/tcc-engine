@@ -1,7 +1,7 @@
 import { ensureEngineLoaded, runBatchOnStore, runOnStore } from "../hosts/node/src/host.ts";
 import { Store, type PersistMode } from "../hosts/node/src/store.ts";
 import { buildMeta, printReport } from "./lib/report.ts";
-import { benchScale } from "./lib/scale.ts";
+import { benchScale, persistModes } from "./lib/scale.ts";
 import { latencyStats, throughputPerSec } from "./lib/stats.ts";
 import { dbFile, persistAccounting, wasmPath } from "./lib/store_metrics.ts";
 import { loadWorkloads } from "./lib/workloads.ts";
@@ -19,7 +19,7 @@ export async function runConcurrencyGroupCommit(): Promise<unknown[]> {
   const rows: unknown[] = [];
   const waves = Math.max(1, Math.floor(scale.measured / Math.max(...scale.concurrencyLevels)));
 
-  for (const persist of ["naive", "optimized"] as PersistMode[]) {
+  for (const persist of persistModes()) {
     for (const concurrency of scale.concurrencyLevels) {
       const store = new Store(dbFile(), persist);
       store.resetMetrics();
@@ -56,6 +56,9 @@ export async function runConcurrencyGroupCommit(): Promise<unknown[]> {
           scenario: "concurrency_group_commit",
           workload: workload.id,
           storage: persist,
+          packing: persist === "optimized" ? store.packing : "n/a",
+          packingMinFullBytes: persist === "optimized" ? store.packingThresholds.minFullBytes : null,
+          packingMaxDeltaRatio: persist === "optimized" ? store.packingThresholds.maxDeltaRatio : null,
           concurrency,
           waves,
           completed,

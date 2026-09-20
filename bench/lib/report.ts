@@ -55,6 +55,9 @@ export function buildMeta(opts: {
 }
 
 export function printReport(suite: string, meta: BenchMeta, rows: unknown[]): void {
+  if (process.env.TCC_BENCH_QUIET === "1") {
+    return;
+  }
   const finishedAt = new Date().toISOString();
   const finished = { ...meta, finishedAt, durationMs: Date.parse(finishedAt) - Date.parse(meta.startedAt) };
   console.log(`\n=== ${suite} ===`);

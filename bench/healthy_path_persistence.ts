@@ -1,7 +1,7 @@
 import { ensureEngineLoaded, runOnStore } from "../hosts/node/src/host.ts";
 import { Store, type PersistMode } from "../hosts/node/src/store.ts";
 import { buildMeta, printReport } from "./lib/report.ts";
-import { benchScale } from "./lib/scale.ts";
+import { benchScale, persistModes } from "./lib/scale.ts";
 import { latencyStats, throughputPerSec, timedLoop } from "./lib/stats.ts";
 import { dbFile, persistAccounting, wasmPath } from "./lib/store_metrics.ts";
 import { loadWorkloads } from "./lib/workloads.ts";
@@ -15,7 +15,7 @@ export async function runHealthyPathPersistence(): Promise<unknown[]> {
   const rows: unknown[] = [];
 
   for (const workload of workloads) {
-    for (const persist of ["naive", "optimized"] as PersistMode[]) {
+    for (const persist of persistModes()) {
       const store = new Store(dbFile(), persist);
       store.resetMetrics();
       try {
@@ -38,6 +38,9 @@ export async function runHealthyPathPersistence(): Promise<unknown[]> {
           label: workload.label,
           shape: workload.shape,
           storage: persist,
+          packing: persist === "optimized" ? store.packing : "n/a",
+          packingMinFullBytes: persist === "optimized" ? store.packingThresholds.minFullBytes : null,
+          packingMaxDeltaRatio: persist === "optimized" ? store.packingThresholds.maxDeltaRatio : null,
           ...latency,
           executionsPerSec: throughputPerSec(scale.measured, totalMeasuredMs),
           ...persistAccounting(store.metrics()),
