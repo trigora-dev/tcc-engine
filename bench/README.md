@@ -1,6 +1,6 @@
 # Persistence benchmarks
 
-These benchmarks characterize the portable TCC engine on the local host. They are not the research-prototype measurements and are not intended to model production Cloud latency.
+These benchmarks characterize the portable TCC engine on the local host. They are not the research-prototype measurements and do not represent a hosted service.
 
 ## Public suite (canonical: Node / WASM)
 
