@@ -25,13 +25,37 @@ export type Outcome =
 
 let wasm: WasmExports | undefined;
 
-export async function loadEngine(wasmPath?: string): Promise<void> {
+export type EngineSource = string | BufferSource | WebAssembly.Module | WebAssembly.Instance;
+
+function isBufferSource(value: unknown): value is BufferSource {
+  return value instanceof ArrayBuffer || ArrayBuffer.isView(value);
+}
+
+async function instantiateEngine(source?: EngineSource): Promise<WebAssembly.Instance> {
+  if (source instanceof WebAssembly.Instance) {
+    return source;
+  }
+
+  if (source instanceof WebAssembly.Module) {
+    return WebAssembly.instantiate(source, {});
+  }
+
+  if (isBufferSource(source)) {
+    const result = await WebAssembly.instantiate(source, {});
+    return result.instance;
+  }
+
   const { readFile } = await import("node:fs/promises");
   const { fileURLToPath } = await import("node:url");
-  const resolved = wasmPath ?? fileURLToPath(new URL("./tcc_wasm.wasm", import.meta.url));
+  const resolved = source ?? fileURLToPath(new URL("./tcc_wasm.wasm", import.meta.url));
   const bytes = await readFile(resolved);
   const result = await WebAssembly.instantiate(bytes, {});
-  wasm = result.instance.exports as unknown as WasmExports;
+  return result.instance;
+}
+
+export async function loadEngine(source?: EngineSource): Promise<void> {
+  const instance = await instantiateEngine(source);
+  wasm = instance.exports as unknown as WasmExports;
 }
 
 export function engineFormatVersion(): number {

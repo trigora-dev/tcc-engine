@@ -8,7 +8,8 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./tcc_wasm.wasm": "./dist/tcc_wasm.wasm"
   },
   "files": [
     "dist"
