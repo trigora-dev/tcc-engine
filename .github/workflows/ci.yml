@@ -26,8 +26,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -44,8 +42,6 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -75,7 +71,7 @@ jobs:
       - run: cargo build -p tcc-wasm --target wasm32-unknown-unknown --release
       - run: python -m venv .venv
       - run: .venv/bin/pip install maturin pytest
-      - run: .venv/bin/maturin develop
+      - run: ${{ github.workspace }}/.venv/bin/maturin develop
         working-directory: bindings/python
       - run: .venv/bin/pytest frontends/python hosts/python
 
@@ -87,8 +83,6 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -101,7 +95,7 @@ jobs:
       - run: pnpm pack:js
       - run: python -m venv .venv
       - run: .venv/bin/pip install maturin
-      - run: .venv/bin/maturin build --release --out ../../dist-packages
+      - run: ${{ github.workspace }}/.venv/bin/maturin build --release --out ${{ github.workspace }}/dist-packages
         working-directory: bindings/python
       - run: node --experimental-sqlite scripts/verify-local-packages.mjs
       - run: .venv/bin/python scripts/verify-local-wheel.py
