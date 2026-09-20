@@ -2,7 +2,7 @@ import { appendFileSync } from "node:fs";
 
 import { EngineBinding, loadEngine, type Outcome } from "@tcc-engine/bindings-javascript";
 import { maybeCrash } from "./crash.ts";
-import { Store } from "./store.ts";
+import { Store, type PersistMode } from "./store.ts";
 
 export type FakeEffects = Record<string, unknown>;
 export type EffectRunner = (key: string) => unknown;
@@ -25,6 +25,7 @@ export type RunOptions = {
   failCounts?: Record<string, number>;
   childArtifacts?: Record<string, string>;
   cancel?: boolean;
+  persist?: PersistMode;
 };
 
 export type ResumeOptions = Omit<RunOptions, "artifactJson"> & {
@@ -56,7 +57,7 @@ function effectRunner(options: RunOptions): EffectRunner {
 
 export async function startExecution(options: RunOptions): Promise<RunResult> {
   await loadEngine(options.wasmPath);
-  const store = new Store(options.dbPath);
+  const store = new Store(options.dbPath, options.persist);
   try {
     const executionId = options.executionId ?? "first";
     const ownerToken = options.ownerToken ?? "owner-1";
@@ -78,7 +79,7 @@ export async function startExecution(options: RunOptions): Promise<RunResult> {
 
 export async function resumeExecution(options: ResumeOptions): Promise<RunResult> {
   await loadEngine(options.wasmPath);
-  const store = new Store(options.dbPath);
+  const store = new Store(options.dbPath, options.persist);
   try {
     const executionId = options.executionId ?? "first";
     const ownerToken = options.ownerToken ?? "owner-1";
@@ -285,7 +286,12 @@ function persistCheckpoint(
   };
   parsed.revision = revision;
   const json = JSON.stringify(parsed);
-  store.commitCheckpoint(options.executionId, revision, json, parsed.status, options.ownerToken);
+  const kind = request.kind === "delta" ? "delta" : "snapshot";
+  store.commitCheckpoint(options.executionId, revision, json, parsed.status, options.ownerToken, {
+    kind,
+    materialize: request.materialize === true || kind === "snapshot",
+    deltaJson: request.delta == null ? null : JSON.stringify(request.delta),
+  });
   maybeCrash("after_persist_checkpoint");
   if (parsed.status === "suspended") {
     maybeCrash("after_wait_checkpoint");

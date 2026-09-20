@@ -202,6 +202,8 @@ mod tests {
 
         let checkpoint = run(32);
         assert!(checkpoint.contains("\"type\":\"persist_checkpoint\""));
+        assert!(checkpoint.contains("\"kind\":\"snapshot\""));
+        assert!(checkpoint.contains("\"materialize\":true"));
         apply(r#"{"type":"persist_confirmed","revision":1}"#);
 
         let wait = run(32);
@@ -211,6 +213,8 @@ mod tests {
 
         let wait_checkpoint = run(32);
         assert!(wait_checkpoint.contains("\"type\":\"persist_checkpoint\""));
+        assert!(wait_checkpoint.contains("\"kind\":\"delta\""));
+        assert!(wait_checkpoint.contains("\"base_revision\":1"));
         apply(r#"{"type":"persist_confirmed","revision":2}"#);
 
         let suspended = run(32);

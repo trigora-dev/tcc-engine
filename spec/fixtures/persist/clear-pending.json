@@ -1,0 +1,54 @@
+{
+  "name": "clear-pending",
+  "base": {
+    "artifact_hash": "gold-hash",
+    "engine_format_version": 1,
+    "execution_id": "gold-exec",
+    "frames": [
+      {
+        "func_id": 0,
+        "locals": [{ "t": "number", "v": 42 }, { "t": "undefined" }],
+        "pc": 5
+      }
+    ],
+    "language_semantics_version": "ts.subset.v1",
+    "pending": {
+      "kind": {
+        "correlation_key": null,
+        "event_name": "approved",
+        "type": "event",
+        "wait_id": "gold-exec:approved::4"
+      },
+      "type": "wait"
+    },
+    "result": null,
+    "revision": 2,
+    "stack": [],
+    "status": "suspended",
+    "try_stack": []
+  },
+  "delta": {
+    "pending": null,
+    "stack": [{ "t": "string", "v": "ok" }],
+    "status": "runnable"
+  },
+  "expected": {
+    "artifact_hash": "gold-hash",
+    "engine_format_version": 1,
+    "execution_id": "gold-exec",
+    "frames": [
+      {
+        "func_id": 0,
+        "locals": [{ "t": "number", "v": 42 }, { "t": "undefined" }],
+        "pc": 5
+      }
+    ],
+    "language_semantics_version": "ts.subset.v1",
+    "pending": null,
+    "result": null,
+    "revision": 2,
+    "stack": [{ "t": "string", "v": "ok" }],
+    "status": "runnable",
+    "try_stack": []
+  }
+}

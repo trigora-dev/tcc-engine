@@ -1,5 +1,5 @@
 use tcc_state::json::Json;
-use tcc_state::{decode_value, encode_value, Value};
+use tcc_state::{continuation_delta_to_json, decode_value, encode_value, Value};
 
 use crate::engine::EngineOutcome;
 use crate::error::CoreError;
@@ -45,9 +45,26 @@ pub fn decode_response(text: &str) -> Result<HostResponse, CoreError> {
 fn request_to_json(request: &HostRequest) -> Result<Json, CoreError> {
     let mut map = std::collections::BTreeMap::new();
     match request {
-        HostRequest::PersistCheckpoint { revision } => {
+        HostRequest::PersistCheckpoint {
+            revision,
+            kind,
+            base_revision,
+            materialize,
+            delta,
+        } => {
             map.insert("type".into(), Json::String("persist_checkpoint".into()));
             map.insert("revision".into(), Json::Number(*revision as f64));
+            map.insert("kind".into(), Json::String(kind.as_str().into()));
+            map.insert("base_revision".into(), Json::Number(*base_revision as f64));
+            map.insert("materialize".into(), Json::Bool(*materialize));
+            match delta {
+                Some(delta) => {
+                    map.insert("delta".into(), continuation_delta_to_json(delta));
+                }
+                None => {
+                    map.insert("delta".into(), Json::Null);
+                }
+            }
         }
         HostRequest::RunEffect {
             key,

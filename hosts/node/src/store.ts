@@ -1,5 +1,30 @@
 import { DatabaseSync } from "node:sqlite";
 
+import {
+  applyDelta,
+  persistModeFromEnv,
+  reconstructContinuation,
+  MATERIALIZE_EVERY,
+  type ContinuationDelta,
+  type ContinuationJson,
+  type PersistKind,
+  type PersistMode,
+} from "./reconstruct.ts";
+
+export { applyDelta, MATERIALIZE_EVERY, persistModeFromEnv, reconstructContinuation };
+export type { ContinuationDelta, ContinuationJson, PersistKind, PersistMode };
+
+export type CheckpointCommit = {
+  executionId: string;
+  revision: number;
+  json: string;
+  status: string;
+  ownerToken: string;
+  kind?: PersistKind;
+  deltaJson?: string | null;
+  materialize?: boolean;
+};
+
 export type EffectRow = {
   execution_id: string;
   key: string;
@@ -26,8 +51,12 @@ export type WaitRow = {
 
 export class Store {
   readonly db: DatabaseSync;
+  readonly persist: PersistMode;
+  private groupHeld = 0;
+  private pending: CheckpointCommit[] = [];
 
-  constructor(path: string) {
+  constructor(path: string, persist: PersistMode = persistModeFromEnv()) {
+    this.persist = persist;
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
@@ -50,6 +79,22 @@ export class Store {
         execution_id TEXT PRIMARY KEY,
         revision INTEGER NOT NULL,
         json TEXT NOT NULL,
+        FOREIGN KEY (execution_id) REFERENCES executions(id)
+      );
+      CREATE TABLE IF NOT EXISTS persist_wal (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        execution_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        UNIQUE(execution_id, revision)
+      );
+      CREATE TABLE IF NOT EXISTS exec_head (
+        execution_id TEXT PRIMARY KEY,
+        revision INTEGER NOT NULL,
+        snapshot_revision INTEGER NOT NULL,
+        wal_seq INTEGER NOT NULL,
+        status TEXT NOT NULL,
         FOREIGN KEY (execution_id) REFERENCES executions(id)
       );
       CREATE TABLE IF NOT EXISTS effects (
@@ -130,9 +175,47 @@ export class Store {
   }
 
   getContinuation(executionId: string): { revision: number; json: string } | undefined {
+    if (this.persist === "optimized") {
+      const reconstructed = this.reconstruct(executionId);
+      if (reconstructed) {
+        return reconstructed;
+      }
+    }
     return this.db
       .prepare("SELECT revision, json FROM continuations WHERE execution_id = ?")
       .get(executionId) as { revision: number; json: string } | undefined;
+  }
+
+  beginGroup(): void {
+    this.groupHeld += 1;
+  }
+
+  endGroup(): void {
+    if (this.groupHeld === 0) {
+      return;
+    }
+    this.groupHeld -= 1;
+    if (this.groupHeld === 0) {
+      this.flushGroup();
+    }
+  }
+
+  flushGroup(): void {
+    if (this.pending.length === 0) {
+      return;
+    }
+    const batch = this.pending;
+    this.pending = [];
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const write of batch) {
+        this.applyCheckpoint(write);
+      }
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
   }
 
   commitCheckpoint(
@@ -141,49 +224,225 @@ export class Store {
     json: string,
     status: string,
     ownerToken: string,
+    extras: {
+      kind?: PersistKind;
+      deltaJson?: string | null;
+      materialize?: boolean;
+    } = {},
   ): void {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const current = this.getExecution(executionId);
-      if (!current) {
-        throw new Error(`unknown execution \`${executionId}\``);
-      }
-      if (current.owner_token !== ownerToken) {
-        throw new Error(`execution \`${executionId}\` is owned by another worker`);
-      }
-      if (current.revision !== revision - 1) {
-        throw new Error(
-          `revision conflict for \`${executionId}\`: expected ${revision - 1}, found ${current.revision}`,
-        );
-      }
-      const existing = this.getContinuation(executionId);
-      if (!existing) {
-        this.db
-          .prepare("INSERT INTO continuations(execution_id, revision, json) VALUES (?, ?, ?)")
-          .run(executionId, revision, json);
-      } else {
-        const updated = this.db
-          .prepare(
-            "UPDATE continuations SET revision = ?, json = ? WHERE execution_id = ? AND revision = ?",
-          )
-          .run(revision, json, executionId, current.revision);
-        if (updated.changes !== 1) {
-          throw new Error(`continuation cas failed for \`${executionId}\``);
-        }
-      }
-      const execUpdated = this.db
-        .prepare(
-          "UPDATE executions SET revision = ?, status = ? WHERE id = ? AND revision = ? AND owner_token = ?",
-        )
-        .run(revision, status, executionId, current.revision, ownerToken);
-      if (execUpdated.changes !== 1) {
-        throw new Error(`execution cas failed for \`${executionId}\``);
-      }
-      this.db.exec("COMMIT");
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
+    this.pending.push({
+      executionId,
+      revision,
+      json,
+      status,
+      ownerToken,
+      kind: extras.kind,
+      deltaJson: extras.deltaJson,
+      materialize: extras.materialize,
+    });
+    if (this.groupHeld === 0) {
+      this.flushGroup();
     }
+  }
+
+  execHead(executionId: string):
+    | {
+        execution_id: string;
+        revision: number;
+        snapshot_revision: number;
+        wal_seq: number;
+        status: string;
+      }
+    | undefined {
+    return this.db.prepare("SELECT * FROM exec_head WHERE execution_id = ?").get(executionId) as
+      | {
+          execution_id: string;
+          revision: number;
+          snapshot_revision: number;
+          wal_seq: number;
+          status: string;
+        }
+      | undefined;
+  }
+
+  walRecords(executionId: string): Array<{
+    seq: number;
+    revision: number;
+    kind: string;
+    payload: string;
+  }> {
+    return this.db
+      .prepare(
+        "SELECT seq, revision, kind, payload FROM persist_wal WHERE execution_id = ? ORDER BY revision",
+      )
+      .all(executionId) as Array<{
+      seq: number;
+      revision: number;
+      kind: string;
+      payload: string;
+    }>;
+  }
+
+  walRowCount(): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM persist_wal").get() as { n: number };
+    return Number(row.n);
+  }
+
+  recoverPlan(executionId: string): {
+    snapshotRevision: number;
+    suffixLength: number;
+    usedIndex: boolean;
+    detail: string;
+  } | undefined {
+    const head = this.execHead(executionId);
+    if (!head) {
+      return undefined;
+    }
+    const plan = this.db
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT payload FROM persist_wal
+         WHERE execution_id = ? AND revision > ? AND revision <= ?
+         ORDER BY revision`,
+      )
+      .all(executionId, head.snapshot_revision, head.revision) as Array<{ detail?: string }>;
+    const detail = plan.map((row) => String(row.detail ?? "")).join("\n");
+    return {
+      snapshotRevision: head.snapshot_revision,
+      suffixLength: head.revision - head.snapshot_revision,
+      usedIndex: /using (covering )?index/i.test(detail),
+      detail,
+    };
+  }
+
+  retainedWalBytes(executionId?: string): number {
+    const row = executionId
+      ? (this.db
+          .prepare("SELECT COALESCE(SUM(LENGTH(payload)), 0) AS n FROM persist_wal WHERE execution_id = ?")
+          .get(executionId) as { n: number })
+      : (this.db.prepare("SELECT COALESCE(SUM(LENGTH(payload)), 0) AS n FROM persist_wal").get() as {
+          n: number;
+        });
+    return Number(row.n);
+  }
+
+  private reconstruct(executionId: string): { revision: number; json: string } | undefined {
+    const head = this.execHead(executionId);
+    if (!head) {
+      return undefined;
+    }
+    const snapshot = this.db
+      .prepare(
+        "SELECT payload FROM persist_wal WHERE execution_id = ? AND revision = ? AND kind = 'snapshot'",
+      )
+      .get(executionId, head.snapshot_revision) as { payload: string } | undefined;
+    if (!snapshot) {
+      throw new Error(`missing snapshot revision ${head.snapshot_revision} for \`${executionId}\``);
+    }
+    const suffix = this.db
+      .prepare(
+        `SELECT payload FROM persist_wal
+         WHERE execution_id = ? AND revision > ? AND revision <= ?
+         ORDER BY revision`,
+      )
+      .all(executionId, head.snapshot_revision, head.revision) as Array<{ payload: string }>;
+    if (suffix.length > MATERIALIZE_EVERY) {
+      throw new Error(
+        `WAL suffix for \`${executionId}\` exceeds materialization bound ${MATERIALIZE_EVERY}`,
+      );
+    }
+    const reconstructed = reconstructContinuation(
+      JSON.parse(snapshot.payload) as ContinuationJson,
+      suffix.map((row) => JSON.parse(row.payload) as ContinuationDelta),
+      head.revision,
+    );
+    return { revision: head.revision, json: JSON.stringify(reconstructed) };
+  }
+
+  private applyCheckpoint(write: CheckpointCommit): void {
+    const current = this.getExecution(write.executionId);
+    if (!current) {
+      throw new Error(`unknown execution \`${write.executionId}\``);
+    }
+    if (current.owner_token !== write.ownerToken) {
+      throw new Error(`execution \`${write.executionId}\` is owned by another worker`);
+    }
+    if (current.revision !== write.revision - 1) {
+      throw new Error(
+        `revision conflict for \`${write.executionId}\`: expected ${write.revision - 1}, found ${current.revision}`,
+      );
+    }
+    if (this.persist === "naive") {
+      this.applyNaiveCheckpoint(write, current.revision);
+    } else {
+      this.applyOptimizedCheckpoint(write);
+    }
+    const execUpdated = this.db
+      .prepare(
+        "UPDATE executions SET revision = ?, status = ? WHERE id = ? AND revision = ? AND owner_token = ?",
+      )
+      .run(write.revision, write.status, write.executionId, current.revision, write.ownerToken);
+    if (execUpdated.changes !== 1) {
+      throw new Error(`execution cas failed for \`${write.executionId}\``);
+    }
+  }
+
+  private applyNaiveCheckpoint(write: CheckpointCommit, currentRevision: number): void {
+    const existing = this.db
+      .prepare("SELECT revision FROM continuations WHERE execution_id = ?")
+      .get(write.executionId) as { revision: number } | undefined;
+    if (!existing) {
+      this.db
+        .prepare("INSERT INTO continuations(execution_id, revision, json) VALUES (?, ?, ?)")
+        .run(write.executionId, write.revision, write.json);
+      return;
+    }
+    const updated = this.db
+      .prepare(
+        "UPDATE continuations SET revision = ?, json = ? WHERE execution_id = ? AND revision = ?",
+      )
+      .run(write.revision, write.json, write.executionId, currentRevision);
+    if (updated.changes !== 1) {
+      throw new Error(`continuation cas failed for \`${write.executionId}\``);
+    }
+  }
+
+  private applyOptimizedCheckpoint(write: CheckpointCommit): void {
+    const head = this.execHead(write.executionId);
+    const requestedKind: PersistKind = write.kind ?? "snapshot";
+    const forceSnapshot =
+      write.materialize === true ||
+      requestedKind === "snapshot" ||
+      (head !== undefined && write.revision - head.snapshot_revision > MATERIALIZE_EVERY);
+    const kind: PersistKind = forceSnapshot ? "snapshot" : "delta";
+    const payload =
+      kind === "snapshot" ? write.json : (write.deltaJson ?? write.json);
+    const inserted = this.db
+      .prepare(
+        "INSERT INTO persist_wal(execution_id, revision, kind, payload) VALUES (?, ?, ?, ?)",
+      )
+      .run(write.executionId, write.revision, kind, payload);
+    const snapshotRevision = kind === "snapshot" ? write.revision : head?.snapshot_revision;
+    if (snapshotRevision === undefined) {
+      throw new Error(`delta without snapshot for \`${write.executionId}\``);
+    }
+    this.db
+      .prepare(
+        `INSERT INTO exec_head(execution_id, revision, snapshot_revision, wal_seq, status)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(execution_id) DO UPDATE SET
+           revision = excluded.revision,
+           snapshot_revision = excluded.snapshot_revision,
+           wal_seq = excluded.wal_seq,
+           status = excluded.status`,
+      )
+      .run(
+        write.executionId,
+        write.revision,
+        snapshotRevision,
+        inserted.lastInsertRowid,
+        write.status,
+      );
   }
 
   getEffect(executionId: string, key: string): EffectRow | undefined {

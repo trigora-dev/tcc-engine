@@ -52,8 +52,9 @@ def start_execution(
     child_artifacts: dict[str, str] | None = None,
     cancel: bool = False,
     crash: CrashHook | None = None,
+    persist: str | None = None,
 ) -> dict[str, Any]:
-    store = Store(db_path)
+    store = Store(db_path, persist)
     try:
         import time
 
@@ -104,8 +105,9 @@ def resume_execution(
     child_artifacts: dict[str, str] | None = None,
     cancel: bool = False,
     crash: CrashHook | None = None,
+    persist: str | None = None,
 ) -> dict[str, Any]:
-    store = Store(db_path)
+    store = Store(db_path, persist)
     try:
         import time
 
@@ -288,7 +290,18 @@ def persist_checkpoint(
     parsed = json.loads(engine.continuation_json())
     parsed["revision"] = revision
     json_text = json.dumps(parsed, separators=(",", ":"))
-    store.commit_checkpoint(options["execution_id"], revision, json_text, parsed["status"], options["owner_token"])
+    kind = "delta" if request.get("kind") == "delta" else "snapshot"
+    delta = request.get("delta")
+    store.commit_checkpoint(
+        options["execution_id"],
+        revision,
+        json_text,
+        parsed["status"],
+        options["owner_token"],
+        kind=kind,
+        delta_json=None if delta is None else json.dumps(delta, separators=(",", ":")),
+        materialize=bool(request.get("materialize")) or kind == "snapshot",
+    )
     crash("after_persist_checkpoint", None)
     if parsed["status"] == "suspended":
         crash("after_wait_checkpoint", None)

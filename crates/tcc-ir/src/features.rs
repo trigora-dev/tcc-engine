@@ -46,6 +46,7 @@ impl EngineFeature {
 
 impl HostCapability {
     pub const PERSIST_CHECKPOINT: &'static str = "host.persist_checkpoint";
+    pub const PERSIST_CHECKPOINT_DELTA: &'static str = "host.persist_checkpoint_delta";
     pub const EFFECT: &'static str = "host.effect";
     pub const TIMER: &'static str = "host.timer";
     pub const EVENT: &'static str = "host.event";
@@ -55,6 +56,7 @@ impl HostCapability {
     pub fn known() -> &'static [&'static str] {
         &[
             Self::PERSIST_CHECKPOINT,
+            Self::PERSIST_CHECKPOINT_DELTA,
             Self::EFFECT,
             Self::TIMER,
             Self::EVENT,

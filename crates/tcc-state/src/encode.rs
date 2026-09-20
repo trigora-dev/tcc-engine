@@ -27,7 +27,7 @@ pub fn decode_continuation(bytes: &[u8]) -> Result<Continuation, StateError> {
     json_to_continuation(&Json::parse(text)?)
 }
 
-fn value_to_json(value: &Value) -> Json {
+pub(crate) fn value_to_json(value: &Value) -> Json {
     let mut map = BTreeMap::new();
     match value {
         Value::Undefined => {
@@ -67,7 +67,7 @@ fn value_to_json(value: &Value) -> Json {
     Json::Object(map)
 }
 
-fn json_to_value(json: &Json) -> Result<Value, StateError> {
+pub(crate) fn json_to_value(json: &Json) -> Result<Value, StateError> {
     let map = json.as_object()?;
     match Json::get(map, "t")?.as_str()? {
         "undefined" => Ok(Value::Undefined),
@@ -204,7 +204,7 @@ fn json_to_continuation(json: &Json) -> Result<Continuation, StateError> {
     })
 }
 
-fn try_handler_to_json(handler: &TryHandler) -> Json {
+pub(crate) fn try_handler_to_json(handler: &TryHandler) -> Json {
     let mut map = BTreeMap::new();
     map.insert("catch".to_string(), Json::Number(handler.catch as f64));
     map.insert(
@@ -221,7 +221,7 @@ fn try_handler_to_json(handler: &TryHandler) -> Json {
     Json::Object(map)
 }
 
-fn json_to_try_handler(json: &Json) -> Result<TryHandler, StateError> {
+pub(crate) fn json_to_try_handler(json: &Json) -> Result<TryHandler, StateError> {
     let map = json.as_object()?;
     Ok(TryHandler {
         catch: Json::get(map, "catch")?.as_u32()?,
@@ -257,7 +257,7 @@ fn json_to_frame(json: &Json) -> Result<Frame, StateError> {
     })
 }
 
-fn pending_to_json(pending: &PendingOp) -> Json {
+pub(crate) fn pending_to_json(pending: &PendingOp) -> Json {
     let mut map = BTreeMap::new();
     match pending {
         PendingOp::Effect {
@@ -279,7 +279,7 @@ fn pending_to_json(pending: &PendingOp) -> Json {
     Json::Object(map)
 }
 
-fn json_to_pending(json: &Json) -> Result<PendingOp, StateError> {
+pub(crate) fn json_to_pending(json: &Json) -> Result<PendingOp, StateError> {
     let map = json.as_object()?;
     match Json::get(map, "type")?.as_str()? {
         "effect" => Ok(PendingOp::Effect {
@@ -358,7 +358,7 @@ fn json_to_wait(json: &Json) -> Result<WaitKind, StateError> {
     }
 }
 
-fn status_name(status: ContinuationStatus) -> &'static str {
+pub(crate) fn status_name(status: ContinuationStatus) -> &'static str {
     match status {
         ContinuationStatus::Runnable => "runnable",
         ContinuationStatus::Running => "running",
@@ -369,7 +369,7 @@ fn status_name(status: ContinuationStatus) -> &'static str {
     }
 }
 
-fn parse_status(name: &str) -> Result<ContinuationStatus, StateError> {
+pub(crate) fn parse_status(name: &str) -> Result<ContinuationStatus, StateError> {
     match name {
         "runnable" => Ok(ContinuationStatus::Runnable),
         "running" => Ok(ContinuationStatus::Running),

@@ -4,6 +4,7 @@ use tcc_ir::{
     Instruction, LocalId, Program, ENGINE_FORMAT_VERSION, FRONTEND_TYPESCRIPT,
     LANGUAGE_SEMANTICS_TS,
 };
+use tcc_state::PersistKind;
 use tcc_state::{ContinuationStatus, PendingOp, Value, WaitKind};
 
 fn first_example() -> Artifact {
@@ -100,7 +101,12 @@ fn first_example_runs_effect_wait_and_completes() {
     let request = expect_host(engine.run_until_host(32));
     assert!(matches!(
         request,
-        HostRequest::PersistCheckpoint { revision: 1 }
+        HostRequest::PersistCheckpoint {
+            revision: 1,
+            kind: PersistKind::Snapshot,
+            materialize: true,
+            ..
+        }
     ));
     engine
         .apply_host_response(HostResponse::PersistConfirmed { revision: 1 })
@@ -137,7 +143,13 @@ fn first_example_runs_effect_wait_and_completes() {
     let request = expect_host(engine.run_until_host(32));
     assert!(matches!(
         request,
-        HostRequest::PersistCheckpoint { revision: 2 }
+        HostRequest::PersistCheckpoint {
+            revision: 2,
+            kind: PersistKind::Delta,
+            materialize: false,
+            base_revision: 1,
+            ..
+        }
     ));
     engine
         .apply_host_response(HostResponse::PersistConfirmed { revision: 2 })
@@ -160,7 +172,13 @@ fn first_example_runs_effect_wait_and_completes() {
     let request = expect_host(engine.run_until_host(32));
     assert!(matches!(
         request,
-        HostRequest::PersistCheckpoint { revision: 3 }
+        HostRequest::PersistCheckpoint {
+            revision: 3,
+            kind: PersistKind::Delta,
+            materialize: false,
+            base_revision: 2,
+            ..
+        }
     ));
     engine
         .apply_host_response(HostResponse::PersistConfirmed { revision: 3 })
@@ -171,7 +189,12 @@ fn first_example_runs_effect_wait_and_completes() {
     let request = expect_host(engine.run_until_host(32));
     assert!(matches!(
         request,
-        HostRequest::PersistCheckpoint { revision: 4 }
+        HostRequest::PersistCheckpoint {
+            revision: 4,
+            kind: PersistKind::Snapshot,
+            materialize: true,
+            ..
+        }
     ));
     engine
         .apply_host_response(HostResponse::PersistConfirmed { revision: 4 })

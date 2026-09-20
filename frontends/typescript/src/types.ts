@@ -10,6 +10,7 @@ export type EngineFeature =
 
 export type HostCapability =
   | "host.persist_checkpoint"
+  | "host.persist_checkpoint_delta"
   | "host.effect"
   | "host.timer"
   | "host.event"

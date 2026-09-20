@@ -1,0 +1,51 @@
+{
+  "name": "store-local",
+  "base": {
+    "artifact_hash": "gold-hash",
+    "engine_format_version": 1,
+    "execution_id": "gold-exec",
+    "frames": [
+      {
+        "func_id": 0,
+        "locals": [{ "t": "undefined" }, { "t": "undefined" }],
+        "pc": 0
+      }
+    ],
+    "language_semantics_version": "ts.subset.v1",
+    "pending": null,
+    "result": null,
+    "revision": 0,
+    "stack": [],
+    "status": "runnable",
+    "try_stack": []
+  },
+  "delta": {
+    "frames": [
+      {
+        "index": 0,
+        "locals": [{ "slot": 0, "value": { "t": "number", "v": 42 } }],
+        "pc": 3
+      }
+    ],
+    "stack": [{ "t": "string", "v": "ok" }]
+  },
+  "expected": {
+    "artifact_hash": "gold-hash",
+    "engine_format_version": 1,
+    "execution_id": "gold-exec",
+    "frames": [
+      {
+        "func_id": 0,
+        "locals": [{ "t": "number", "v": 42 }, { "t": "undefined" }],
+        "pc": 3
+      }
+    ],
+    "language_semantics_version": "ts.subset.v1",
+    "pending": null,
+    "result": null,
+    "revision": 0,
+    "stack": [{ "t": "string", "v": "ok" }],
+    "status": "runnable",
+    "try_stack": []
+  }
+}

@@ -23,7 +23,7 @@ fn drive(engine: &mut Engine, effects: &BTreeMap<&str, Value>, event: Option<Val
             EngineOutcome::Host(HostRequest::PersistEffect { .. }) => {
                 engine.apply_host_response(HostResponse::Ack).unwrap();
             }
-            EngineOutcome::Host(HostRequest::PersistCheckpoint { revision }) => {
+            EngineOutcome::Host(HostRequest::PersistCheckpoint { revision, .. }) => {
                 engine
                     .apply_host_response(HostResponse::PersistConfirmed { revision })
                     .unwrap();
@@ -146,7 +146,7 @@ fn if_else_skips_untaken_effect() {
             EngineOutcome::Host(HostRequest::PersistEffect { .. }) => {
                 engine.apply_host_response(HostResponse::Ack).unwrap();
             }
-            EngineOutcome::Host(HostRequest::PersistCheckpoint { revision }) => {
+            EngineOutcome::Host(HostRequest::PersistCheckpoint { revision, .. }) => {
                 engine
                     .apply_host_response(HostResponse::PersistConfirmed { revision })
                     .unwrap();
@@ -290,7 +290,7 @@ fn cancel_while_suspended() {
             EngineOutcome::Host(HostRequest::RegisterWait { .. }) => {
                 engine.apply_host_response(HostResponse::Ack).unwrap();
             }
-            EngineOutcome::Host(HostRequest::PersistCheckpoint { revision }) => {
+            EngineOutcome::Host(HostRequest::PersistCheckpoint { revision, .. }) => {
                 engine
                     .apply_host_response(HostResponse::PersistConfirmed { revision })
                     .unwrap();

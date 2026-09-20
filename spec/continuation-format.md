@@ -32,6 +32,8 @@ A continuation is committed when the host confirms `persist_checkpoint` (or an e
 
 If a host reconstructs continuation bytes from a log or deltas, the result must be a continuation in this format. That reconstruction is not execution of completed program instructions.
 
+The engine may emit semantic continuation deltas as persist intent on `persist_checkpoint`. Those deltas are not a continuation encoding and are not an `engine_format_version` change. Resume still consumes a full continuation in this format. Golden reconstruct vectors are in `spec/fixtures/persist/`.
+
 Recovery uses the latest committed continuation for the execution. Resume is `Engine::resume` with that continuation and the artifact whose hash matches `artifact.hash`.
 
 ## Encoding

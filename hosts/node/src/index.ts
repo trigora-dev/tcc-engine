@@ -10,4 +10,4 @@ export {
   type RunOptions,
   type RunResult,
 } from "./host.ts";
-export { Store } from "./store.ts";
+export { Store, applyDelta, MATERIALIZE_EVERY, persistModeFromEnv, reconstructContinuation } from "./store.ts";

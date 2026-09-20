@@ -6,6 +6,7 @@
 #![allow(clippy::derive_partial_eq_without_eq)]
 
 pub mod continuation;
+pub mod delta;
 pub mod encode;
 pub mod error;
 pub mod json;
@@ -13,6 +14,11 @@ pub mod value;
 
 pub use continuation::{
     ArtifactId, Continuation, ContinuationStatus, Frame, PendingOp, TryHandler, WaitKind,
+};
+pub use delta::{
+    apply_continuation_delta, continuation_delta_to_json, decode_continuation_delta,
+    diff_continuation, encode_continuation_delta, json_to_continuation_delta, persist_intent,
+    ContinuationDelta, FrameDelta, LocalPatch, PersistIntent, PersistKind, MATERIALIZE_EVERY,
 };
 pub use encode::{decode_continuation, decode_value, encode_continuation, encode_value};
 pub use error::StateError;

@@ -24,13 +24,32 @@ The engine does not depend on a particular database, operating system, or cloud 
 | `create_child` | Create the child execution. Wake the parent when the child is terminal |
 | `fetch_artifact` | Return the artifact for the given hash |
 
+`persist_checkpoint` carries persist intent. Naive hosts may ignore everything except `revision` and persist `continuationJson()` as a full snapshot. Optimized hosts (`host.persist_checkpoint_delta`) persist the payload below.
+
+```text
+persist_checkpoint
+  revision
+  kind: snapshot | delta
+  base_revision   # last persist_confirmed; 0 if none. Required for delta.
+  materialize     # engine intent: host must store a snapshot this commit
+  delta?          # semantic ops; null/omitted on snapshot
+```
+
+Delta ops name changed continuation fields (frame locals by slot, pc, stack, pending, status, result, try_stack). They are not a byte-diff of JSON. Reconstruction must yield a continuation in `spec/continuation-format.md`. Shared golden vectors live in `spec/fixtures/persist/`.
+
+The engine tracks dirtiness against the last **confirmed** revision. A crash before `persist_confirmed` does not advance that base. `engine_format_version` is unchanged; resume still consumes a full continuation.
+
+A host may coalesce several persist writes into one durable group commit (one fsync covering many executions). `persist_confirmed` is valid only after that revision is in a committed group. `ack` still does not commit.
+
+Artifacts that list `host.persist_checkpoint` remain valid on optimized hosts. `host.persist_checkpoint_delta` is an additional capability, not a replacement.
+
 Requests are coarse. A persist of wait registration and continuation suspend must be atomic, or must follow an order from which the host can recover (for example an idempotent upsert of `wait_id` so a crash between `register_wait` and `persist_checkpoint` can re-register). A committed wait must have a durable wakeup registration.
 
 ## Recovery
 
 The host owns durable state. The engine’s in-memory `outstanding` request is not recoverable.
 
-- Reply `persist_confirmed` only after the continuation (and any wait or effect rows in the same commit) is durable. `ack` on `persist_checkpoint` does not commit.
+- Reply `persist_confirmed` only after the continuation (and any wait or effect rows in the same commit) is durable. For optimized hosts that means the WAL record and per-execution head are in a committed group. `ack` on `persist_checkpoint` does not commit.
 - A crash during a persistence transaction must not leave an execution looking as if that revision committed.
 - Resume loads the latest committed continuation and the artifact named by `artifact.hash`. The host supplies that artifact blob; it must not substitute whatever source is currently compiled.
 - Exactly one worker may advance an execution. Enforce with a lease or owner token and a revision compare-and-swap on continuation writes.

@@ -1,4 +1,4 @@
-use tcc_state::Value;
+use tcc_state::{ContinuationDelta, PersistKind, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EffectStatus {
@@ -36,6 +36,10 @@ pub struct ChildSpec {
 pub enum HostRequest {
     PersistCheckpoint {
         revision: u64,
+        kind: PersistKind,
+        base_revision: u64,
+        materialize: bool,
+        delta: Option<ContinuationDelta>,
     },
     RunEffect {
         key: String,

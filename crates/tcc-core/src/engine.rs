@@ -1,7 +1,9 @@
 use tcc_ir::{
     validate, Artifact, ConstValue, EngineCaps, FuncId, Instruction, ENGINE_FORMAT_VERSION,
 };
-use tcc_state::{Continuation, ContinuationStatus, PendingOp, Value, WaitKind};
+use tcc_state::{
+    persist_intent, Continuation, ContinuationStatus, PendingOp, PersistKind, Value, WaitKind,
+};
 
 use crate::error::CoreError;
 use crate::protocol::{
@@ -23,6 +25,9 @@ pub struct Engine {
     artifact: Artifact,
     continuation: Continuation,
     outstanding: Option<HostRequest>,
+    /// Last continuation confirmed by `persist_confirmed`. Unacked persists do not update this.
+    confirmed: Option<Continuation>,
+    deltas_since_snapshot: u32,
 }
 
 impl Engine {
@@ -47,6 +52,8 @@ impl Engine {
             artifact,
             continuation,
             outstanding: None,
+            confirmed: None,
+            deltas_since_snapshot: 0,
         })
     }
 
@@ -78,6 +85,8 @@ impl Engine {
             artifact,
             continuation,
             outstanding: None,
+            confirmed: None,
+            deltas_since_snapshot: 0,
         })
     }
 
@@ -102,7 +111,7 @@ impl Engine {
             })?;
         match (request, response) {
             (
-                HostRequest::PersistCheckpoint { .. },
+                HostRequest::PersistCheckpoint { kind, .. },
                 HostResponse::PersistConfirmed { revision },
             ) => {
                 self.continuation.revision = revision;
@@ -119,6 +128,11 @@ impl Engine {
                     }
                     None => ContinuationStatus::Runnable,
                 };
+                self.confirmed = Some(self.continuation.clone());
+                match kind {
+                    PersistKind::Snapshot => self.deltas_since_snapshot = 0,
+                    PersistKind::Delta => self.deltas_since_snapshot += 1,
+                }
                 Ok(())
             }
             (HostRequest::PersistCheckpoint { .. }, HostResponse::Ack) => Ok(()),
@@ -168,9 +182,7 @@ impl Engine {
                     };
                     return self.throw_value(Value::String(message)).map(|_| ());
                 }
-                self.outstanding = Some(HostRequest::PersistCheckpoint {
-                    revision: self.continuation.revision + 1,
-                });
+                self.queue_persist();
                 Ok(())
             }
             (
@@ -180,9 +192,7 @@ impl Engine {
                 HostResponse::Ack,
             ) => {
                 self.continuation.status = ContinuationStatus::Suspended;
-                self.outstanding = Some(HostRequest::PersistCheckpoint {
-                    revision: self.continuation.revision + 1,
-                });
+                self.queue_persist();
                 Ok(())
             }
             (request, response) => {
@@ -241,9 +251,7 @@ impl Engine {
             (_, _, HostResponse::Cancel) => {
                 self.continuation.status = ContinuationStatus::Cancelled;
                 self.continuation.pending = None;
-                self.outstanding = Some(HostRequest::PersistCheckpoint {
-                    revision: self.continuation.revision + 1,
-                });
+                self.queue_persist();
                 Ok(())
             }
             (_, _, response) => Err(CoreError::UnexpectedHostResponse {
@@ -256,8 +264,21 @@ impl Engine {
     fn clear_wait_and_persist(&mut self) {
         self.continuation.pending = None;
         self.continuation.status = ContinuationStatus::Runnable;
+        self.queue_persist();
+    }
+
+    fn queue_persist(&mut self) {
+        let intent = persist_intent(
+            self.confirmed.as_ref(),
+            &self.continuation,
+            self.deltas_since_snapshot,
+        );
         self.outstanding = Some(HostRequest::PersistCheckpoint {
             revision: self.continuation.revision + 1,
+            kind: intent.kind,
+            base_revision: self.confirmed.as_ref().map(|c| c.revision).unwrap_or(0),
+            materialize: intent.materialize,
+            delta: intent.delta,
         });
     }
 
@@ -436,9 +457,7 @@ impl Engine {
                 if self.continuation.frames.is_empty() {
                     self.continuation.status = ContinuationStatus::Completed;
                     self.continuation.result = Some(result);
-                    self.outstanding = Some(HostRequest::PersistCheckpoint {
-                        revision: self.continuation.revision + 1,
-                    });
+                    self.queue_persist();
                     Ok(Some(EngineOutcome::Host(
                         self.outstanding.clone().expect("just queued"),
                     )))
@@ -567,9 +586,7 @@ impl Engine {
         }
         self.continuation.status = ContinuationStatus::Failed;
         self.continuation.result = Some(value);
-        self.outstanding = Some(HostRequest::PersistCheckpoint {
-            revision: self.continuation.revision + 1,
-        });
+        self.queue_persist();
         Ok(Some(EngineOutcome::Host(
             self.outstanding.clone().expect("just queued"),
         )))
