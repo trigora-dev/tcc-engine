@@ -485,3 +485,87 @@ start_execution(
     log = Path(log_path).read_text().strip().splitlines()
     assert log == ["generate"]
 
+
+def test_host_on_event_reports_persist_restore_journal_and_child_without_blocking():
+    events = []
+    store = Store(_db(), "optimized", events.append)
+    parent = artifact_json(compile(INVOKE, filename="invoke.py"))
+    child = artifact_json(compile(CHILD, filename="child.py"))
+    forbidden = {"json", "continuationJson", "artifactJson", "payload", "resultJson", "result_json"}
+
+    def assert_clean(rows):
+        for event in rows:
+            assert forbidden.isdisjoint(event.keys()), event
+            assert isinstance(event.get("engineVersion"), str) and event["engineVersion"]
+
+    try:
+        result = run_on_store(
+            store,
+            artifact_json=parent,
+            execution_id="obs-parent",
+            child_artifacts={"child": child},
+            effects={"child_work": 7},
+        )
+        assert result["status"] == "completed"
+        types = [event["type"] for event in events]
+        assert "checkpoint.persisted" in types
+        assert "checkpoint.materialized" in types
+        assert "batch.committed" in types
+        assert "child.created" in types
+        assert "child.completed" in types
+        store.get_continuation("obs-parent", observe_restore=True)
+        assert any(event["type"] == "continuation.restored" for event in events)
+        assert_clean(events)
+    finally:
+        store.close()
+
+    journal_events = []
+    journal_store = Store(_db(), "optimized", journal_events.append)
+    first = _artifact()
+    hash_ = json.loads(first)["envelope"]["artifact_hash"]
+    try:
+        journal_store.put_artifact(hash_, first)
+        journal_store.create_execution("obs-journal", hash_, "owner-1", 1_000_000)
+        journal_store.complete_effect("obs-journal", "generate", "k", json.dumps({"t": "number", "v": 42}))
+        journaled = run_on_store(
+            journal_store,
+            artifact_json=first,
+            execution_id="obs-journal",
+            effects={"generate": 42},
+        )
+        assert journaled["status"] == "completed"
+        assert any(event["type"] == "effect.journal_hit" for event in journal_events)
+        assert_clean(journal_events)
+    finally:
+        journal_store.close()
+
+    def boom(_event):
+        raise RuntimeError("observer boom")
+
+    throwing = Store(_db(), "optimized", boom)
+    try:
+        survived = run_on_store(
+            throwing,
+            artifact_json=_artifact(),
+            execution_id="obs-throw",
+            effects={"generate": 42},
+        )
+        assert survived["status"] == "completed"
+    finally:
+        throwing.close()
+
+    errors = []
+    fail_store = Store(_db(), "optimized", errors.append)
+    try:
+        fail_store.put_artifact("h", "{}")
+        fail_store.create_execution("obs-fail", "h", "owner-1", 1_000_000)
+        try:
+            fail_store.commit_checkpoint("obs-fail", 2, _dummy("obs-fail", 2), "runnable", "owner-1")
+            raise AssertionError("expected revision conflict")
+        except RuntimeError as err:
+            assert "revision conflict" in str(err)
+        assert any(event["type"] == "runtime.error" for event in errors)
+        assert_clean(errors)
+    finally:
+        fail_store.close()
+

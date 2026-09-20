@@ -15,6 +15,7 @@ import {
   reconstructContinuation,
   Store,
   type ContinuationJson,
+  type HostEvent,
 } from "./store.ts";
 
 const wasmPath = path.resolve(
@@ -527,5 +528,105 @@ await startExecution({
   assert.equal(resumed.status, "completed");
   const log = readFileSync(logPath, "utf8").trim().split("\n").filter(Boolean);
   assert.deepEqual(log, ["generate"]);
+});
+
+const FORBIDDEN_EVENT_KEYS = ["json", "continuationJson", "artifactJson", "payload", "resultJson", "result_json"];
+
+function assertHostEventsClean(events: HostEvent[]): void {
+  for (const event of events) {
+    for (const key of FORBIDDEN_EVENT_KEYS) {
+      assert.equal((event as Record<string, unknown>)[key], undefined, `${event.type} leaked ${key}`);
+    }
+    assert.equal(typeof event.engineVersion, "string");
+    assert.ok(event.engineVersion.length > 0);
+  }
+}
+
+test("host onEvent reports persist restore journal and child without blocking", async () => {
+  await ensureEngineLoaded(wasmPath);
+  const events: HostEvent[] = [];
+  const store = new Store(dbFile(), "optimized", (event) => {
+    events.push(event);
+  });
+  const parent = canonicalStringify(compile(INVOKE, { filename: "invoke.ts" }));
+  const child = canonicalStringify(compile(CHILD, { filename: "child.ts" }));
+  try {
+    const result = runOnStore(store, {
+      dbPath: "unused",
+      artifactJson: parent,
+      executionId: "obs-parent",
+      childArtifacts: { child },
+      effects: { child_work: 7 },
+    });
+    assert.equal(result.status, "completed");
+    const types = events.map((event) => event.type);
+    assert.ok(types.includes("checkpoint.persisted"));
+    assert.ok(types.includes("checkpoint.materialized"));
+    assert.ok(types.includes("batch.committed"));
+    assert.ok(types.includes("child.created"));
+    assert.ok(types.includes("child.completed"));
+    store.getContinuation("obs-parent", { observeRestore: true });
+    assert.ok(events.some((event) => event.type === "continuation.restored"));
+    assertHostEventsClean(events);
+  } finally {
+    store.close();
+  }
+
+  const journalEvents: HostEvent[] = [];
+  const journalStore = new Store(dbFile(), "optimized", (event) => {
+    journalEvents.push(event);
+  });
+  const first = artifactJson();
+  const hash = (JSON.parse(first) as { envelope: { artifact_hash: string } }).envelope.artifact_hash;
+  try {
+    journalStore.putArtifact(hash, first);
+    journalStore.createExecution("obs-journal", hash, "owner-1", Date.now() + 60_000);
+    journalStore.completeEffect("obs-journal", "generate", "k", JSON.stringify({ t: "number", v: 42 }));
+    const journaled = runOnStore(journalStore, {
+      dbPath: "unused",
+      artifactJson: first,
+      executionId: "obs-journal",
+      effects: { generate: 42 },
+    });
+    assert.equal(journaled.status, "completed");
+    assert.ok(journalEvents.some((event) => event.type === "effect.journal_hit"));
+    assertHostEventsClean(journalEvents);
+  } finally {
+    journalStore.close();
+  }
+
+  const throwing = new Store(dbFile(), "optimized", () => {
+    throw new Error("observer boom");
+  });
+  try {
+    const survived = runOnStore(throwing, {
+      dbPath: "unused",
+      artifactJson: artifactJson(),
+      executionId: "obs-throw",
+      effects: { generate: 42 },
+    });
+    assert.equal(survived.status, "completed");
+  } finally {
+    throwing.close();
+  }
+
+  const errors: HostEvent[] = [];
+  const failStore = new Store(dbFile(), "optimized", (event) => {
+    errors.push(event);
+  });
+  try {
+    failStore.putArtifact("h", "{}");
+    failStore.createExecution("obs-fail", "h", "owner-1", Date.now() + 60_000);
+    assert.throws(() => {
+      failStore.commitCheckpoint("obs-fail", 2, dummyContinuation("obs-fail", 2), "runnable", "owner-1", {
+        kind: "snapshot",
+        materialize: true,
+      });
+    }, /revision conflict/);
+    assert.ok(errors.some((event) => event.type === "runtime.error"));
+    assertHostEventsClean(errors);
+  } finally {
+    failStore.close();
+  }
 });
 

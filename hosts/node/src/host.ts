@@ -3,6 +3,7 @@ import { appendFileSync } from "node:fs";
 import { EngineBinding, loadEngine, type Outcome } from "@tcc-engine/bindings-javascript";
 import { maybeCrash } from "./crash.ts";
 import { Store, type PersistMode } from "./store.ts";
+import type { HostObserver } from "./observe.ts";
 
 export type FakeEffects = Record<string, unknown>;
 export type EffectRunner = (key: string) => unknown;
@@ -30,6 +31,8 @@ export type RunOptions = {
   childArtifacts?: Record<string, string>;
   cancel?: boolean;
   persist?: PersistMode;
+  /** Optional host-agnostic observability sink. Must not throw into persist. */
+  onEvent?: HostObserver;
   /** Give this execution its own WASM instance when several engines are in flight. */
   isolatedEngine?: boolean;
   profile?: PersistProfile;
@@ -73,7 +76,7 @@ function effectRunner(options: RunOptions): EffectRunner {
 
 export async function startExecution(options: RunOptions): Promise<RunResult> {
   await loadEngine(options.wasmPath);
-  const store = new Store(options.dbPath, options.persist);
+  const store = new Store(options.dbPath, options.persist, options.onEvent);
   try {
     return runOnStore(store, options);
   } finally {
@@ -174,7 +177,7 @@ export function runBatchOnStore(
 
 export async function resumeExecution(options: ResumeOptions): Promise<RunResult> {
   await loadEngine(options.wasmPath);
-  const store = new Store(options.dbPath, options.persist);
+  const store = new Store(options.dbPath, options.persist, options.onEvent);
   try {
     const executionId = options.executionId ?? "first";
     const ownerToken = options.ownerToken ?? "owner-1";
@@ -183,7 +186,7 @@ export async function resumeExecution(options: ResumeOptions): Promise<RunResult
     if (!execution) {
       throw new Error(`unknown execution \`${executionId}\``);
     }
-    const saved = store.getContinuation(executionId);
+    const saved = store.getContinuation(executionId, { observeRestore: true });
     const artifactJson = options.artifactJson ?? store.getArtifact(execution.artifact_hash);
     if (!artifactJson) {
       throw new Error(`missing artifact \`${execution.artifact_hash}\``);
@@ -299,10 +302,12 @@ function handleOutcome(
         case "create_child":
           return enqueueChild(store, state.engine, request, options);
         default:
+          store.observe({ type: "runtime.error", message: `unsupported host request \`${String(request.type)}\`` });
           throw new Error(`unsupported host request \`${String(request.type)}\``);
       }
     }
     default:
+      store.observe({ type: "runtime.error", message: "unknown engine outcome" });
       throw new Error("unknown engine outcome");
   }
 }
@@ -316,6 +321,7 @@ function enqueueChild(
   const programName = String(request.program_name);
   const artifactJson = options.childArtifacts?.[programName];
   if (!artifactJson) {
+    store.observe({ type: "runtime.error", executionId: options.executionId, message: `no child artifact for \`${programName}\`` });
     throw new Error(`no child artifact for \`${programName}\``);
   }
   const artifactHash = String(JSON.parse(artifactJson).envelope.artifact_hash);
@@ -347,6 +353,7 @@ function executeEffect(
   maybeCrash("before_effect_provider");
   const existing = store.getEffect(options.executionId, key);
   if (existing?.status === "completed" && existing.result_json) {
+    store.observe({ type: "effect.journal_hit", executionId: options.executionId });
     engine.applyHostResponse({
       type: "effect_result",
       value: JSON.parse(existing.result_json),

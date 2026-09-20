@@ -16,6 +16,8 @@ Default persistence is **optimized**: a shared WAL of snapshot and semantic-delt
 
 Naive overwrite of a full continuation row remains available behind the internal `TCC_PERSIST=naive` flag for A/B benches only. It is not a product API.
 
+Reference Node and Python hosts accept an optional `onEvent` callback (`checkpoint.persisted`, `checkpoint.materialized`, `continuation.restored`, `effect.journal_hit`, `batch.committed`, `child.created`, `child.completed`, `runtime.error`). Fields are host-agnostic (`executionId`, `revision`, `durationMs`, `bytes`, `kind`, `batchSize`, `engineVersion`). The sink must not throw into persist/confirm; program contents are omitted. This is not an OTEL/Datadog exporter and does not include Cloud tenant or worker dimensions.
+
 **Public benchmarks** (Node canonical): see [`bench/README.md`](../bench/README.md) — `pnpm bench`, `pnpm bench:persistence`, `pnpm bench:recovery`. Python mirror: `python bench/python/run.py`.
 
 **Internal engineering harnesses** (not publishable claims): `pnpm --filter @tcc-engine/host-node bench:persist:internal` and `python hosts/python/bench_persist.py`.

@@ -53,8 +53,9 @@ def start_execution(
     cancel: bool = False,
     crash: CrashHook | None = None,
     persist: str | None = None,
+    on_event: Any | None = None,
 ) -> dict[str, Any]:
-    store = Store(db_path, persist)
+    store = Store(db_path, persist, on_event)
     try:
         return run_on_store(
             store,
@@ -215,8 +216,9 @@ def resume_execution(
     cancel: bool = False,
     crash: CrashHook | None = None,
     persist: str | None = None,
+    on_event: Any | None = None,
 ) -> dict[str, Any]:
-    store = Store(db_path, persist)
+    store = Store(db_path, persist, on_event)
     try:
         import time
 
@@ -225,7 +227,7 @@ def resume_execution(
         execution = store.get_execution(execution_id)
         if execution is None:
             raise RuntimeError(f"unknown execution `{execution_id}`")
-        saved = store.get_continuation(execution_id)
+        saved = store.get_continuation(execution_id, observe_restore=True)
         artifact_json = artifact_json or store.get_artifact(execution["artifact_hash"])
         if not artifact_json:
             raise RuntimeError(f"missing artifact `{execution['artifact_hash']}`")
@@ -322,7 +324,9 @@ def handle_outcome(
             return "continue"
         if rtype == "create_child":
             return enqueue_child(store, state["engine"], request, options, crash)
+        store.observe({"type": "runtime.error", "message": f"unsupported host request `{rtype}`"})
         raise RuntimeError(f"unsupported host request `{rtype}`")
+    store.observe({"type": "runtime.error", "message": "unknown engine outcome"})
     raise RuntimeError("unknown engine outcome")
 
 
@@ -336,6 +340,13 @@ def enqueue_child(
     program_name = str(request["program_name"])
     artifact_json = (options.get("child_artifacts") or {}).get(program_name)
     if not artifact_json:
+        store.observe(
+            {
+                "type": "runtime.error",
+                "executionId": options["execution_id"],
+                "message": f"no child artifact for `{program_name}`",
+            }
+        )
         raise RuntimeError(f"no child artifact for `{program_name}`")
     artifact_hash = json.loads(artifact_json)["envelope"]["artifact_hash"]
     store.put_artifact(artifact_hash, artifact_json)
@@ -371,6 +382,7 @@ def execute_effect(
     crash("before_effect_provider", None)
     existing = store.get_effect(options["execution_id"], key)
     if existing is not None and existing["status"] == "completed" and existing["result_json"]:
+        store.observe({"type": "effect.journal_hit", "executionId": options["execution_id"]})
         engine.apply_response(json.dumps({"type": "effect_result", "value": json.loads(existing["result_json"])}))
         return "continue"
     store.mark_effect_started(options["execution_id"], key, idempotency_key)

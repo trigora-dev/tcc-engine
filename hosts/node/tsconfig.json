@@ -9,5 +9,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src/index.ts", "src/host.ts", "src/store.ts", "src/crash.ts"]
+  "include": ["src/index.ts", "src/host.ts", "src/store.ts", "src/crash.ts", "src/observe.ts"]
 }

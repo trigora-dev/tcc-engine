@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
+import { emitHostEvent, type HostEventInput, type HostObserver } from "./observe.ts";
 import {
   applyDelta,
   persistModeFromEnv,
@@ -13,6 +14,7 @@ import {
 
 export { applyDelta, MATERIALIZE_EVERY, persistModeFromEnv, reconstructContinuation };
 export type { ContinuationDelta, ContinuationJson, PersistKind, PersistMode };
+export type { HostEvent, HostEventType, HostObserver } from "./observe.ts";
 
 export type CheckpointCommit = {
   executionId: string;
@@ -93,9 +95,11 @@ export type StoreProfile = { sqlApplyMs: number; commitMs: number };
 export class Store {
   readonly db: DatabaseSync;
   readonly persist: PersistMode;
+  private readonly observer: HostObserver | undefined;
   private groupHeld = 0;
   private pending: DurabilityOp[] = [];
   private createdChildren: CreateChildOp[] = [];
+  private queuedEvents: HostEventInput[] = [];
   private metricBytesWritten = 0;
   private metricSnapshotCount = 0;
   private metricDeltaCount = 0;
@@ -122,8 +126,9 @@ export class Store {
     return this.profile ? { ...this.profile } : undefined;
   }
 
-  constructor(path: string, persist: PersistMode = persistModeFromEnv()) {
+  constructor(path: string, persist: PersistMode = persistModeFromEnv(), observer?: HostObserver) {
     this.persist = persist;
+    this.observer = observer;
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
@@ -205,6 +210,10 @@ export class Store {
     this.db.close();
   }
 
+  observe(event: HostEventInput): void {
+    emitHostEvent(this.observer, event);
+  }
+
   resetMetrics(): void {
     this.metricBytesWritten = 0;
     this.metricSnapshotCount = 0;
@@ -261,19 +270,32 @@ export class Store {
     }
   }
 
-  getContinuation(executionId: string): { revision: number; json: string } | undefined {
+  getContinuation(
+    executionId: string,
+    options: { observeRestore?: boolean } = {},
+  ): { revision: number; json: string } | undefined {
     if (this.persist === "replay") {
       return undefined;
     }
     if (this.persist === "optimized") {
-      const reconstructed = this.reconstruct(executionId);
+      const reconstructed = this.reconstruct(executionId, options.observeRestore === true);
       if (reconstructed) {
         return reconstructed;
       }
     }
-    return this.db
+    const started = options.observeRestore ? performance.now() : 0;
+    const saved = this.db
       .prepare("SELECT revision, json FROM continuations WHERE execution_id = ?")
       .get(executionId) as { revision: number; json: string } | undefined;
+    if (saved && options.observeRestore) {
+      this.observe({
+        type: "continuation.restored",
+        executionId,
+        revision: saved.revision,
+        durationMs: Number((performance.now() - started).toFixed(4)),
+      });
+    }
+    return saved;
   }
 
   beginGroup(): void {
@@ -312,7 +334,9 @@ export class Store {
     }
     const batch = this.pending;
     this.pending = [];
+    this.queuedEvents = [];
     const before = [this.metricBytesWritten, this.metricSnapshotCount, this.metricDeltaCount, this.metricDeltaBytesWritten];
+    const started = performance.now();
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const applyStart = this.profile ? performance.now() : 0;
@@ -334,9 +358,24 @@ export class Store {
       this.metricCommitCount += 1;
       this.metricBatchOccupancySamples.push(batch.filter((op) => op.type === "checkpoint").length);
       this.createdChildren.push(...created);
+      const queued = this.queuedEvents;
+      this.queuedEvents = [];
+      for (const event of queued) {
+        this.observe(event);
+      }
+      this.observe({
+        type: "batch.committed",
+        batchSize: batch.length,
+        durationMs: Number((performance.now() - started).toFixed(4)),
+      });
     } catch (err) {
       this.db.exec("ROLLBACK");
+      this.queuedEvents = [];
       [this.metricBytesWritten, this.metricSnapshotCount, this.metricDeltaCount, this.metricDeltaBytesWritten] = before;
+      this.observe({
+        type: "runtime.error",
+        message: err instanceof Error ? err.message : String(err),
+      });
       throw err;
     }
   }
@@ -477,11 +516,15 @@ export class Store {
     return Number(row.n);
   }
 
-  private reconstruct(executionId: string): { revision: number; json: string } | undefined {
+  private reconstruct(
+    executionId: string,
+    observeRestore = false,
+  ): { revision: number; json: string } | undefined {
     const head = this.execHead(executionId);
     if (!head) {
       return undefined;
     }
+    const started = observeRestore ? performance.now() : 0;
     const snapshot = this.db
       .prepare(
         "SELECT payload FROM persist_wal WHERE execution_id = ? AND revision = ? AND kind = 'snapshot'",
@@ -507,6 +550,15 @@ export class Store {
       suffix.map((row) => JSON.parse(row.payload) as ContinuationDelta),
       head.revision,
     );
+    if (observeRestore) {
+      this.observe({
+        type: "continuation.restored",
+        executionId,
+        revision: head.revision,
+        durationMs: Number((performance.now() - started).toFixed(4)),
+        suffixLength: suffix.length,
+      });
+    }
     return { revision: head.revision, json: JSON.stringify(reconstructed) };
   }
 
@@ -544,8 +596,25 @@ export class Store {
   }
 
   private applyNaiveCheckpoint(write: CheckpointCommit, currentRevision: number): void {
-    this.metricBytesWritten += Buffer.byteLength(write.json);
+    const bytes = Buffer.byteLength(write.json);
+    this.metricBytesWritten += bytes;
     this.metricSnapshotCount += 1;
+    this.queuedEvents.push(
+      {
+        type: "checkpoint.persisted",
+        executionId: write.executionId,
+        revision: write.revision,
+        kind: "snapshot",
+        bytes,
+      },
+      {
+        type: "checkpoint.materialized",
+        executionId: write.executionId,
+        revision: write.revision,
+        kind: "snapshot",
+        bytes,
+      },
+    );
     const existing = this
       .statement("SELECT revision FROM continuations WHERE execution_id = ?")
       .get(write.executionId) as { revision: number } | undefined;
@@ -567,7 +636,14 @@ export class Store {
 
   private applyReplayCheckpoint(write: CheckpointCommit): void {
     const payload = JSON.stringify({ revision: write.revision, status: write.status });
-    this.metricBytesWritten += Buffer.byteLength(payload);
+    const bytes = Buffer.byteLength(payload);
+    this.metricBytesWritten += bytes;
+    this.queuedEvents.push({
+      type: "checkpoint.persisted",
+      executionId: write.executionId,
+      revision: write.revision,
+      bytes,
+    });
     this.statement(
       "INSERT INTO persist_wal(execution_id, revision, kind, payload) VALUES (?, ?, 'history', ?)",
     ).run(write.executionId, write.revision, payload);
@@ -583,12 +659,29 @@ export class Store {
     const kind: PersistKind = forceSnapshot ? "snapshot" : "delta";
     const payload =
       kind === "snapshot" ? write.json : (write.deltaJson ?? write.json);
-    this.metricBytesWritten += Buffer.byteLength(payload);
+    const bytes = Buffer.byteLength(payload);
+    this.metricBytesWritten += bytes;
     if (kind === "snapshot") {
       this.metricSnapshotCount += 1;
     } else {
       this.metricDeltaCount += 1;
-      this.metricDeltaBytesWritten += Buffer.byteLength(payload);
+      this.metricDeltaBytesWritten += bytes;
+    }
+    this.queuedEvents.push({
+      type: "checkpoint.persisted",
+      executionId: write.executionId,
+      revision: write.revision,
+      kind,
+      bytes,
+    });
+    if (kind === "snapshot") {
+      this.queuedEvents.push({
+        type: "checkpoint.materialized",
+        executionId: write.executionId,
+        revision: write.revision,
+        kind: "snapshot",
+        bytes,
+      });
     }
     const inserted = this
       .statement(
@@ -736,12 +829,21 @@ export class Store {
       `INSERT OR IGNORE INTO executions(id, artifact_hash, revision, status, owner_token, lease_until)
        VALUES (?, ?, 0, 'runnable', ?, ?)`,
     ).run(op.childExecutionId, op.artifactHash, op.ownerToken, op.leaseUntil);
+    this.queuedEvents.push({
+      type: "child.created",
+      executionId: op.childExecutionId,
+    });
   }
 
   private applyCompleteChild(op: CompleteChildOp): void {
+    const child = this.getChild(op.invokeId);
     this.statement(
       "UPDATE children SET status = 'completed', result_json = ? WHERE invoke_id = ?",
     ).run(op.resultJson, op.invokeId);
+    this.queuedEvents.push({
+      type: "child.completed",
+      executionId: child?.child_execution_id,
+    });
   }
 
   upsertChild(

@@ -8,6 +8,6 @@
     "rootDir": "src",
     "rewriteRelativeImportExtensions": true
   },
-  "include": ["src/index.ts", "src/host.ts", "src/store.ts", "src/crash.ts"],
+  "include": ["src/index.ts", "src/host.ts", "src/store.ts", "src/crash.ts", "src/observe.ts"],
   "exclude": ["src/**/*.test.ts", "src/crash.ts", "src/worker.ts", "src/conformance.ts"]
 }

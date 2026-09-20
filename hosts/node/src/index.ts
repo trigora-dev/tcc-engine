@@ -15,4 +15,13 @@ export {
   type RunResult,
 } from "./host.ts";
 export { Store, applyDelta, MATERIALIZE_EVERY, persistModeFromEnv, reconstructContinuation } from "./store.ts";
-export type { StoreMetrics, ContinuationDelta, ContinuationJson, PersistKind, PersistMode } from "./store.ts";
+export type {
+  StoreMetrics,
+  ContinuationDelta,
+  ContinuationJson,
+  PersistKind,
+  PersistMode,
+  HostEvent,
+  HostEventType,
+  HostObserver,
+} from "./store.ts";

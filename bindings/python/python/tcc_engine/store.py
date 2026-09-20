@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
+from time import perf_counter
 from typing import Any
 
 from tcc_engine.persist import (
@@ -12,10 +14,31 @@ from tcc_engine.persist import (
     reconstruct_continuation,
 )
 
+HostObserver = Callable[[dict[str, Any]], None]
+
+
+def _engine_version() -> str:
+    try:
+        from tcc_engine.compile import PACKAGE_VERSION
+
+        return PACKAGE_VERSION
+    except Exception:
+        return "0.1.0-rc.1"
+
+
+def emit_host_event(observer: HostObserver | None, event: dict[str, Any]) -> None:
+    if observer is None:
+        return
+    try:
+        observer({**event, "engineVersion": _engine_version()})
+    except Exception:
+        return
+
 
 class Store:
-    def __init__(self, path: str, persist: str | None = None) -> None:
+    def __init__(self, path: str, persist: str | None = None, on_event: HostObserver | None = None) -> None:
         self.persist = persist or persist_mode_from_env()
+        self._observer = on_event
         self.db = sqlite3.connect(path)
         self.db.isolation_level = None
         self.db.row_factory = sqlite3.Row
@@ -31,6 +54,7 @@ class Store:
         self._metric_commit_count = 0
         self._metric_delta_bytes_written = 0
         self._metric_batch_occupancy_samples: list[int] = []
+        self._queued_events: list[dict[str, Any]] = []
         self.db.executescript(
             """
             CREATE TABLE IF NOT EXISTS artifacts (
@@ -108,6 +132,9 @@ class Store:
     def close(self) -> None:
         self.db.close()
 
+    def observe(self, event: dict[str, Any]) -> None:
+        emit_host_event(self._observer, event)
+
     def reset_metrics(self) -> None:
         self._metric_bytes_written = 0
         self._metric_snapshot_count = 0
@@ -155,16 +182,29 @@ class Store:
         if cur.rowcount != 1:
             raise RuntimeError(f"execution `{id_}` is owned by another worker")
 
-    def get_continuation(self, execution_id: str) -> sqlite3.Row | dict[str, Any] | None:
+    def get_continuation(
+        self, execution_id: str, observe_restore: bool = False
+    ) -> sqlite3.Row | dict[str, Any] | None:
         if self.persist == "replay":
             return None
         if self.persist == "optimized":
-            reconstructed = self._reconstruct(execution_id)
+            reconstructed = self._reconstruct(execution_id, observe_restore)
             if reconstructed is not None:
                 return reconstructed
-        return self.db.execute(
+        started = perf_counter() if observe_restore else 0.0
+        saved = self.db.execute(
             "SELECT revision, json FROM continuations WHERE execution_id = ?", (execution_id,)
         ).fetchone()
+        if saved is not None and observe_restore:
+            self.observe(
+                {
+                    "type": "continuation.restored",
+                    "executionId": execution_id,
+                    "revision": saved["revision"],
+                    "durationMs": round((perf_counter() - started) * 1000, 4),
+                }
+            )
+        return saved
 
     def begin_group(self) -> None:
         self._group_held += 1
@@ -194,7 +234,9 @@ class Store:
             return
         batch = self._pending
         self._pending = []
+        self._queued_events = []
         before = (self._metric_bytes_written, self._metric_snapshot_count, self._metric_delta_count, self._metric_delta_bytes_written)
+        started = perf_counter()
         self.db.execute("BEGIN IMMEDIATE")
         try:
             created: list[dict[str, Any]] = []
@@ -211,9 +253,22 @@ class Store:
             self._metric_commit_count += 1
             self._metric_batch_occupancy_samples.append(sum(1 for op in batch if (op.get("type") or "checkpoint") == "checkpoint"))
             self._created_children.extend(created)
-        except Exception:
+            queued = self._queued_events
+            self._queued_events = []
+            for event in queued:
+                self.observe(event)
+            self.observe(
+                {
+                    "type": "batch.committed",
+                    "batchSize": len(batch),
+                    "durationMs": round((perf_counter() - started) * 1000, 4),
+                }
+            )
+        except Exception as err:
             self.db.execute("ROLLBACK")
+            self._queued_events = []
             (self._metric_bytes_written, self._metric_snapshot_count, self._metric_delta_count, self._metric_delta_bytes_written) = before
+            self.observe({"type": "runtime.error", "message": str(err)})
             raise
 
     def enqueue_checkpoint(
@@ -318,10 +373,11 @@ class Store:
             ).fetchone()
         return int(row["n"])
 
-    def _reconstruct(self, execution_id: str) -> dict[str, Any] | None:
+    def _reconstruct(self, execution_id: str, observe_restore: bool = False) -> dict[str, Any] | None:
         head = self.exec_head(execution_id)
         if head is None:
             return None
+        started = perf_counter() if observe_restore else 0.0
         snapshot = self.db.execute(
             "SELECT payload FROM persist_wal WHERE execution_id = ? AND revision = ? AND kind = 'snapshot'",
             (execution_id, head["snapshot_revision"]),
@@ -345,6 +401,16 @@ class Store:
             [json.loads(row["payload"]) for row in suffix],
             head["revision"],
         )
+        if observe_restore:
+            self.observe(
+                {
+                    "type": "continuation.restored",
+                    "executionId": execution_id,
+                    "revision": head["revision"],
+                    "durationMs": round((perf_counter() - started) * 1000, 4),
+                    "suffixLength": len(suffix),
+                }
+            )
         return {"revision": head["revision"], "json": json.dumps(reconstructed, separators=(",", ":"))}
 
     def _apply_checkpoint(self, write: dict[str, Any]) -> None:
@@ -379,8 +445,27 @@ class Store:
             raise RuntimeError(f"execution cas failed for `{write['execution_id']}`")
 
     def _apply_naive_checkpoint(self, write: dict[str, Any], current_revision: int) -> None:
-        self._metric_bytes_written += len(write["json"].encode("utf-8"))
+        bytes_ = len(write["json"].encode("utf-8"))
+        self._metric_bytes_written += bytes_
         self._metric_snapshot_count += 1
+        self._queued_events.extend(
+            [
+                {
+                    "type": "checkpoint.persisted",
+                    "executionId": write["execution_id"],
+                    "revision": write["revision"],
+                    "kind": "snapshot",
+                    "bytes": bytes_,
+                },
+                {
+                    "type": "checkpoint.materialized",
+                    "executionId": write["execution_id"],
+                    "revision": write["revision"],
+                    "kind": "snapshot",
+                    "bytes": bytes_,
+                },
+            ]
+        )
         existing = self.db.execute(
             "SELECT revision FROM continuations WHERE execution_id = ?", (write["execution_id"],)
         ).fetchone()
@@ -399,7 +484,16 @@ class Store:
 
     def _apply_replay_checkpoint(self, write: dict[str, Any]) -> None:
         payload = json.dumps({"revision": write["revision"], "status": write["status"]}, separators=(",", ":"))
-        self._metric_bytes_written += len(payload.encode("utf-8"))
+        bytes_ = len(payload.encode("utf-8"))
+        self._metric_bytes_written += bytes_
+        self._queued_events.append(
+            {
+                "type": "checkpoint.persisted",
+                "executionId": write["execution_id"],
+                "revision": write["revision"],
+                "bytes": bytes_,
+            }
+        )
         self.db.execute(
             "INSERT INTO persist_wal(execution_id, revision, kind, payload) VALUES (?, ?, 'history', ?)",
             (write["execution_id"], write["revision"], payload),
@@ -418,12 +512,32 @@ class Store:
         )
         kind = "snapshot" if force_snapshot else "delta"
         payload = write["json"] if kind == "snapshot" else (write.get("delta_json") or write["json"])
-        self._metric_bytes_written += len(payload.encode("utf-8"))
+        bytes_ = len(payload.encode("utf-8"))
+        self._metric_bytes_written += bytes_
         if kind == "snapshot":
             self._metric_snapshot_count += 1
         else:
             self._metric_delta_count += 1
-            self._metric_delta_bytes_written += len(payload.encode("utf-8"))
+            self._metric_delta_bytes_written += bytes_
+        self._queued_events.append(
+            {
+                "type": "checkpoint.persisted",
+                "executionId": write["execution_id"],
+                "revision": write["revision"],
+                "kind": kind,
+                "bytes": bytes_,
+            }
+        )
+        if kind == "snapshot":
+            self._queued_events.append(
+                {
+                    "type": "checkpoint.materialized",
+                    "executionId": write["execution_id"],
+                    "revision": write["revision"],
+                    "kind": "snapshot",
+                    "bytes": bytes_,
+                }
+            )
         cur = self.db.execute(
             "INSERT INTO persist_wal(execution_id, revision, kind, payload) VALUES (?, ?, ?, ?)",
             (write["execution_id"], write["revision"], kind, payload),
@@ -556,11 +670,19 @@ class Store:
                VALUES (?, ?, 0, 'runnable', ?, ?)""",
             (op["child_execution_id"], op["artifact_hash"], op["owner_token"], op["lease_until"]),
         )
+        self._queued_events.append({"type": "child.created", "executionId": op["child_execution_id"]})
 
     def _apply_complete_child(self, op: dict[str, Any]) -> None:
+        child = self.get_child(op["invoke_id"])
         self.db.execute(
             "UPDATE children SET status = 'completed', result_json = ? WHERE invoke_id = ?",
             (op["result_json"], op["invoke_id"]),
+        )
+        self._queued_events.append(
+            {
+                "type": "child.completed",
+                "executionId": None if child is None else child["child_execution_id"],
+            }
         )
 
     def upsert_child(
