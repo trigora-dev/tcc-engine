@@ -33,6 +33,8 @@ MIGRATION.md
 # Node / frontend
 node_modules/
 dist/
+dist-packages/
+*.tgz
 frontends/**/dist/
 bindings/javascript/pkg/
 .pnpm-store/
@@ -43,6 +45,7 @@ __pycache__/
 *.so
 .pytest_cache/
 .venv/
+wheelhouse/
 
 # misc
 .DS_Store

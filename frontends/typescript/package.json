@@ -1,21 +1,29 @@
 {
   "name": "@tcc-engine/frontend-typescript",
-  "version": "0.0.0",
+  "version": "0.1.0-rc.1",
   "private": true,
   "type": "module",
   "description": "TypeScript frontend: compile supported programs into TCC artifacts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
   "files": [
-    "src"
+    "dist"
   ],
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm build",
     "test": "tsc --noEmit && node --experimental-strip-types --test src/compile.test.ts",
     "typecheck": "tsc --noEmit"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
-    "typescript": "^5.6.0"
+    "typescript": "^5.9.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0"

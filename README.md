@@ -86,8 +86,37 @@ The repository is under development. Present:
 - WASM C ABI, JavaScript binding, and an in-memory Node host
 - Native PyO3 binding and a SQLite Python host
 - SQLite Node host with process-restart recovery and a conformance helper
+- Local `0.1.0-rc.1` npm packs and a Python wheel (not published to a registry)
 
-Not present: a published SDK.
+Not present: a published SDK, a public engine registry release, or a LICENSE file.
+
+## Local packages (no Rust on the consumer)
+
+Packaged compilers, the JS engine binding (with bundled WASM), the Node host, and the Python wheel so another repo can pin **local tarballs/wheels**. Application authors should use [Trigora](https://github.com/trigora-dev/trigora), not these packages directly.
+
+```text
+compiler  @tcc-engine/frontend-typescript  /  tcc_engine.compile
+binding   @tcc-engine/bindings-javascript   /  tcc_engine.EngineBinding
+host      @tcc-engine/host-node             /  tcc_engine.host
+```
+
+Build packs and a wheel from this checkout:
+
+```sh
+pnpm install
+pnpm pack:js
+python -m venv .venv
+.venv/bin/pip install maturin
+( cd bindings/python && ../../.venv/bin/maturin build --release --out ../../dist-packages )
+```
+
+Tarballs and wheels land in `dist-packages/`. Install them elsewhere with `npm install ./tcc-engine-….tgz` and `pip install ./tcc_engine-….whl`. The JS binding’s `loadEngine()` uses the WASM file inside that package; do not pass a `target/…/tcc_wasm.wasm` path. The Node host needs Node 22 and `--experimental-sqlite`.
+
+Portable manylinux/macOS wheels use cibuildwheel against `bindings/python/pyproject.toml`. Do not `npm publish` or upload to PyPI until the public `v0.1.0` cut.
+
+## Embedding vs Trigora
+
+These libraries compile source to a TCC artifact, run the engine, and persist via an injected effect callback (`runEffect` / `run_effect`). They are not an application SDK. Trigora owns CLI, user-facing SDK, and examples. App code should not import `@tcc-engine/*`.
 
 ## Development
 
@@ -99,17 +128,17 @@ cargo clippy --workspace --all-targets
 ```
 
 ```sh
-pnpm --dir frontends/typescript install
-pnpm --dir frontends/typescript test
+pnpm install
+pnpm --filter @tcc-engine/frontend-typescript test
 cargo build -p tcc-wasm --target wasm32-unknown-unknown --release
 node --experimental-strip-types --test hosts/node-memory/src/host.test.ts
-node --experimental-sqlite --experimental-strip-types --test hosts/node/src/host.test.ts hosts/node/src/restart.test.ts hosts/node/src/conformance.test.ts
+pnpm --filter @tcc-engine/host-node test
 ```
 
 ```sh
 python -m venv .venv
 .venv/bin/pip install maturin pytest
-.venv/bin/maturin develop --manifest-path crates/tcc-python/Cargo.toml
+( cd bindings/python && ../../.venv/bin/maturin develop )
 .venv/bin/pytest frontends/python hosts/python
 ```
 

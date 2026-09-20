@@ -1,11 +1,12 @@
-import sys
-from pathlib import Path
-
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from compile import CompileError, compile
+from tcc_engine.compile import (
+    FRONTEND_IDENTITY,
+    LANGUAGE_SEMANTICS_VERSION,
+    PACKAGE_VERSION,
+    CompileError,
+    compile,
+)
 
 FIRST = """
 from trigora import effect, wait_for_event
@@ -37,8 +38,10 @@ def test_compiles_the_first_example():
     ]
     assert len(artifact["envelope"]["artifact_hash"]) == 64
     assert "durable.effect" in artifact["envelope"]["required_engine_features"]
-    assert artifact["envelope"]["frontend_id"] == "python"
-    assert artifact["envelope"]["language_semantics_version"] == "py.subset.v1"
+    assert artifact["envelope"]["frontend_id"] == FRONTEND_IDENTITY
+    assert artifact["envelope"]["language_semantics_version"] == LANGUAGE_SEMANTICS_VERSION
+    assert artifact["envelope"]["frontend_version"] == PACKAGE_VERSION
+    assert PACKAGE_VERSION != LANGUAGE_SEMANTICS_VERSION
 
 
 def test_accepts_aliased_imports():
@@ -64,6 +67,15 @@ async def run():
 """
     with pytest.raises(CompileError):
         compile(source)
+
+
+def test_compile_errors_include_filename_and_span():
+    with pytest.raises(CompileError) as err:
+        compile("x = (", filename="bad.py")
+    assert err.value.filename == "bad.py"
+    assert err.value.span is not None
+    assert err.value.span["file"] == "bad.py"
+    assert err.value.span["start_line"] >= 1
 
 
 def test_rejects_ctx_style_entry():

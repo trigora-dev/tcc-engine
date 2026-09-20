@@ -1,16 +1,20 @@
 import { appendFileSync } from "node:fs";
 
-import { EngineBinding, loadEngine, type Outcome } from "../../../bindings/javascript/src/index.ts";
+import { EngineBinding, loadEngine, type Outcome } from "@tcc-engine/bindings-javascript";
 import { maybeCrash } from "./crash.ts";
 import { Store } from "./store.ts";
 
 export type FakeEffects = Record<string, unknown>;
+export type EffectRunner = (key: string) => unknown;
 
 export type RunOptions = {
   dbPath: string;
-  wasmPath: string;
+  wasmPath?: string;
   artifactJson: string;
   executionId?: string;
+  /** Product callback. The CLI/SDK supplies effect results by key. */
+  runEffect?: EffectRunner;
+  /** Test convenience map. Ignored when `runEffect` is set. */
   effects?: FakeEffects;
   eventPayload?: unknown;
   ownerToken?: string;
@@ -33,6 +37,22 @@ export type RunResult = {
   continuationJson: string | null;
   revision: number;
 };
+
+export function mapEffects(effects: FakeEffects): EffectRunner {
+  return (key) => {
+    if (!(key in effects)) {
+      throw new Error(`no effect for \`${key}\``);
+    }
+    return effects[key];
+  };
+}
+
+function effectRunner(options: RunOptions): EffectRunner {
+  if (options.runEffect) {
+    return options.runEffect;
+  }
+  return mapEffects(options.effects ?? { generate: 42 });
+}
 
 export async function startExecution(options: RunOptions): Promise<RunResult> {
   await loadEngine(options.wasmPath);
@@ -110,14 +130,14 @@ function drive(
   engine: EngineBinding,
   options: RunOptions & { ownerToken: string; executionId: string },
 ): RunResult {
-  const effects = options.effects ?? { generate: 42 };
+  const runEffect = effectRunner(options);
   const budget = options.budget ?? 256;
   const state = { engine };
   const failCounts = { ...(options.failCounts ?? {}) };
 
   for (;;) {
     const outcome = state.engine.runUntilHost(budget);
-    const next = handleOutcome(store, state, outcome, effects, failCounts, options);
+    const next = handleOutcome(store, state, outcome, runEffect, failCounts, options);
     if (next === "continue") {
       continue;
     }
@@ -131,7 +151,7 @@ function handleOutcome(
   store: Store,
   state: EngineState,
   outcome: Outcome,
-  effects: FakeEffects,
+  runEffect: EffectRunner,
   failCounts: Record<string, number>,
   options: RunOptions & { ownerToken: string; executionId: string },
 ): "continue" | RunResult {
@@ -150,7 +170,7 @@ function handleOutcome(
       const request = outcome.request;
       switch (request.type) {
         case "run_effect":
-          return runEffect(store, state.engine, request, effects, failCounts, options);
+          return executeEffect(store, state.engine, request, runEffect, failCounts, options);
         case "persist_effect":
           return persistEffect(store, state.engine, request, options.executionId);
         case "register_wait":
@@ -181,11 +201,11 @@ function handleOutcome(
   }
 }
 
-function runEffect(
+function executeEffect(
   store: Store,
   engine: EngineBinding,
   request: Record<string, unknown>,
-  effects: FakeEffects,
+  runEffect: EffectRunner,
   failCounts: Record<string, number>,
   options: RunOptions & { executionId: string },
 ): "continue" {
@@ -208,15 +228,12 @@ function runEffect(
     }
     store.failEffect(options.executionId, key, idempotencyKey, JSON.stringify({ t: "string", v: "failed" }));
     maybeCrash("after_persist_effect", key);
-    return runEffect(store, engine, request, effects, failCounts, options);
-  }
-  if (!(key in effects)) {
-    throw new Error(`no fake effect for \`${key}\``);
+    return executeEffect(store, engine, request, runEffect, failCounts, options);
   }
   if (options.effectLogPath) {
     appendFileSync(options.effectLogPath, `${key}\n`);
   }
-  const value = encodeValue(effects[key]);
+  const value = encodeValue(runEffect(key));
   maybeCrash("after_effect_provider");
   engine.applyHostResponse({ type: "effect_result", value });
   return "continue";

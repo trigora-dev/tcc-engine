@@ -11,6 +11,8 @@
 
 The engine rejects an artifact whose `engine_format_version` it does not implement. It rejects required engine features and host capabilities it does not implement. It does not define behavior for unknown instructions or value tags.
 
+Package versions on npm/PyPI (`0.1.0-rc.1`, later `0.1.0`, …) are **not** these identifiers. A later package release may still emit `engine_format_version` 1 and `ts.subset.v1` / `py.subset.v1` when the change is packaging, diagnostics, or a bug fix. Frontends export `PACKAGE_VERSION`, `FRONTEND_IDENTITY`, `LANGUAGE_SEMANTICS_VERSION`, and `ENGINE_FORMAT_VERSION` as distinct constants. Envelope `frontend_version` names the frontend build; it is not the language-semantics version.
+
 ## Artifact identity
 
 A continuation resumes only against the artifact named by `artifact.hash`. A mismatch is `ArtifactMismatch`.

@@ -1,0 +1,4 @@
+packages:
+  - frontends/typescript
+  - bindings/javascript
+  - hosts/node

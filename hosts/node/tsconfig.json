@@ -7,8 +7,7 @@
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "skipLibCheck": true,
-    "types": ["node"],
-    "typeRoots": ["../../frontends/typescript/node_modules/@types"]
+    "types": ["node"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/index.ts", "src/host.ts", "src/store.ts", "src/crash.ts"]
 }

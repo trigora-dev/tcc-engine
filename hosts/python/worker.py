@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "frontends" / "python"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from host import resume_execution, start_execution

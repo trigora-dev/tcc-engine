@@ -1,9 +1,11 @@
-export { compile, CompileError } from "./compile.ts";
+export { compile, CompileError, type DiagnosticSpan } from "./compile.ts";
 export {
   ENGINE_FORMAT_VERSION,
   FRONTEND_ID,
+  FRONTEND_IDENTITY,
   FRONTEND_VERSION,
   LANGUAGE_SEMANTICS_VERSION,
+  PACKAGE_VERSION,
   type Artifact,
   type CompileOptions,
   type ConstValue,

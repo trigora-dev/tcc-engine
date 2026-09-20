@@ -37,10 +37,23 @@ type Loop = {
   continueTarget?: number;
 };
 
+export type DiagnosticSpan = {
+  file: string;
+  start_line: number;
+  start_column: number;
+  end_line?: number;
+  end_column?: number;
+};
+
 export class CompileError extends Error {
-  constructor(message: string) {
+  readonly file: string;
+  readonly span: DiagnosticSpan | null;
+
+  constructor(message: string, file = "input.ts", span: DiagnosticSpan | null = null) {
     super(message);
     this.name = "CompileError";
+    this.file = file;
+    this.span = span;
   }
 }
 
@@ -50,7 +63,8 @@ export function compile(source: string, options: CompileOptions = {}): Artifact 
   const { program, sourceFile, checker } = createProgram(source);
   const diagnostics = program.getSyntacticDiagnostics(sourceFile);
   if (diagnostics.length > 0) {
-    throw new CompileError(formatDiagnostic(diagnostics[0]!, filename));
+    const info = diagnosticInfo(diagnostics[0]!, filename);
+    throw new CompileError(info.message, filename, info.span);
   }
 
   const entry = findDefaultExport(sourceFile);
@@ -805,7 +819,25 @@ function spanOf(
   };
 }
 
-function formatDiagnostic(diagnostic: ts.Diagnostic, filename: string): string {
-  const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n");
-  return `${filename}: ${message}`;
+function diagnosticInfo(
+  diagnostic: ts.Diagnostic,
+  filename: string,
+): { message: string; span: DiagnosticSpan | null } {
+  const message = `${filename}: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")}`;
+  const source = diagnostic.file;
+  if (!source || diagnostic.start === undefined) {
+    return { message, span: { file: filename, start_line: 1, start_column: 1 } };
+  }
+  const start = source.getLineAndCharacterOfPosition(diagnostic.start);
+  const end = source.getLineAndCharacterOfPosition(diagnostic.start + (diagnostic.length ?? 0));
+  return {
+    message,
+    span: {
+      file: filename,
+      start_line: start.line + 1,
+      start_column: start.character + 1,
+      end_line: end.line + 1,
+      end_column: end.character + 1,
+    },
+  };
 }

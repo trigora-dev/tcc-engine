@@ -2,6 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { compile, CompileError } from "./compile.ts";
+import {
+  ENGINE_FORMAT_VERSION,
+  FRONTEND_IDENTITY,
+  LANGUAGE_SEMANTICS_VERSION,
+  PACKAGE_VERSION,
+} from "./types.ts";
 
 const FIRST = `
 import { effect, waitForEvent } from "@trigora/sdk";
@@ -37,6 +43,24 @@ test("compiles the first example", () => {
   );
   assert.equal(artifact.envelope.artifact_hash.length, 64);
   assert.ok(artifact.envelope.required_engine_features.includes("durable.effect"));
+  assert.equal(artifact.envelope.frontend_id, FRONTEND_IDENTITY);
+  assert.equal(artifact.envelope.language_semantics_version, LANGUAGE_SEMANTICS_VERSION);
+  assert.equal(artifact.envelope.engine_format_version, ENGINE_FORMAT_VERSION);
+  assert.equal(artifact.envelope.frontend_version, PACKAGE_VERSION);
+  assert.notEqual(PACKAGE_VERSION, LANGUAGE_SEMANTICS_VERSION);
+});
+
+test("compile errors include file and span", () => {
+  try {
+    compile("const x = (", { filename: "bad.ts" });
+    assert.fail("expected CompileError");
+  } catch (error) {
+    assert.ok(error instanceof CompileError);
+    assert.equal(error.file, "bad.ts");
+    assert.equal(error.span?.file, "bad.ts");
+    assert.equal(error.span?.start_line, 1);
+    assert.match(error.message, /bad\.ts:/);
+  }
 });
 
 test("accepts aliased SDK imports", () => {

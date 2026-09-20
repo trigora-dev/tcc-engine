@@ -2,9 +2,8 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "frontends" / "python"))
 
-from compile import artifact_json, compile
+from tcc_engine.compile import artifact_json, compile
 from conformance import assert_conformance, run_uninterrupted, kill_and_resume
 
 FIRST = """

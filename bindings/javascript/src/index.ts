@@ -25,8 +25,11 @@ export type Outcome =
 
 let wasm: WasmExports | undefined;
 
-export async function loadEngine(wasmPath: string): Promise<void> {
-  const bytes = await (await import("node:fs/promises")).readFile(wasmPath);
+export async function loadEngine(wasmPath?: string): Promise<void> {
+  const { readFile } = await import("node:fs/promises");
+  const { fileURLToPath } = await import("node:url");
+  const resolved = wasmPath ?? fileURLToPath(new URL("./tcc_wasm.wasm", import.meta.url));
+  const bytes = await readFile(resolved);
   const result = await WebAssembly.instantiate(bytes, {});
   wasm = result.instance.exports as unknown as WasmExports;
 }

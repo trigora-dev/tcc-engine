@@ -1,15 +1,32 @@
 {
   "name": "@tcc-engine/bindings-javascript",
-  "version": "0.0.0",
+  "version": "0.1.0-rc.1",
   "private": true,
   "type": "module",
   "description": "JavaScript binding for the TCC WASM engine",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build:wasm": "cargo build -p tcc-wasm --target wasm32-unknown-unknown --release",
-    "typecheck": "node ../../frontends/typescript/node_modules/typescript/bin/tsc --noEmit",
-    "test": "node ../../frontends/typescript/node_modules/typescript/bin/tsc --noEmit && node --experimental-strip-types --test src/index.test.ts"
+    "build:js": "tsc -p tsconfig.build.json",
+    "copy:wasm": "node -e \"require('node:fs').copyFileSync('../../target/wasm32-unknown-unknown/release/tcc_wasm.wasm', 'dist/tcc_wasm.wasm')\"",
+    "build": "pnpm build:js && pnpm copy:wasm",
+    "prepack": "pnpm build:wasm && pnpm build",
+    "typecheck": "tsc --noEmit",
+    "test": "tsc --noEmit && node --experimental-strip-types --test src/index.test.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.0"
   }
 }

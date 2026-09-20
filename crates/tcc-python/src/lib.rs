@@ -53,7 +53,7 @@ fn py_err<E: std::fmt::Display>(err: E) -> PyErr {
 }
 
 #[pymodule]
-fn tcc_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<EngineBinding>()?;
     Ok(())
 }

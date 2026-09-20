@@ -1,10 +1,33 @@
 {
   "name": "@tcc-engine/host-node",
-  "version": "0.0.0",
+  "version": "0.1.0-rc.1",
   "private": true,
   "type": "module",
   "description": "Node host with SQLite persistence",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm build",
+    "typecheck": "tsc --noEmit",
     "test": "node --experimental-sqlite --experimental-strip-types --test src/host.test.ts src/restart.test.ts src/conformance.test.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@tcc-engine/bindings-javascript": "workspace:*"
+  },
+  "devDependencies": {
+    "@tcc-engine/frontend-typescript": "workspace:*",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.0"
   }
 }

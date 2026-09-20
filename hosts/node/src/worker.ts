@@ -4,7 +4,7 @@ import { resumeExecution, startExecution, type FakeEffects } from "./host.ts";
 
 const mode = process.env.TCC_MODE ?? "start";
 const dbPath = required("TCC_DB_PATH");
-const wasmPath = required("TCC_WASM_PATH");
+const wasmPath = process.env.TCC_WASM_PATH;
 const executionId = process.env.TCC_EXECUTION_ID ?? "first";
 const ownerToken = process.env.TCC_OWNER_TOKEN ?? "owner-1";
 const resultPath = process.env.TCC_RESULT_PATH;

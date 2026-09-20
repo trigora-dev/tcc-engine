@@ -8,7 +8,7 @@ A frontend compiles a source language into a TCC program artifact. It is not a b
 | Binding | Embed and control the engine from a host language |
 | Host | Persistence, effects, events, scheduling |
 
-A Python frontend and a Python binding are different components. This tree has TypeScript at `frontends/typescript` (`ts.subset.v1`) and Python at `frontends/python` (`py.subset.v1`). Further languages belong in `frontends/<language>/`.
+A Python frontend and a Python binding are different components. This tree has TypeScript at `frontends/typescript` (`ts.subset.v1`) and Python at `frontends/python` (`py.subset.v1`). The installable Python frontend ships inside the `tcc-engine` wheel as `tcc_engine.compile`. Further languages belong in `frontends/<language>/`.
 
 ## Artifact
 

@@ -23,9 +23,6 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontends/typescript
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -35,9 +32,9 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: frontends/typescript/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
+      - run: pnpm --filter @tcc-engine/frontend-typescript test
 
   wasm-host:
     runs-on: ubuntu-latest
@@ -53,12 +50,14 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: frontends/typescript/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
       - run: cargo build -p tcc-wasm --target wasm32-unknown-unknown --release
-      - run: pnpm --dir frontends/typescript install --frozen-lockfile
-      - run: node frontends/typescript/node_modules/typescript/bin/tsc --noEmit -p bindings/javascript/tsconfig.json
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @tcc-engine/bindings-javascript build
+      - run: pnpm --filter @tcc-engine/bindings-javascript typecheck
+      - run: pnpm --filter @tcc-engine/host-node typecheck
       - run: node --experimental-strip-types --test bindings/javascript/src/index.test.ts hosts/node-memory/src/host.test.ts
-      - run: node --experimental-sqlite --experimental-strip-types --test hosts/node/src/host.test.ts hosts/node/src/restart.test.ts hosts/node/src/conformance.test.ts
+      - run: pnpm --filter @tcc-engine/host-node test
 
   python:
     runs-on: ubuntu-latest
@@ -76,5 +75,37 @@ jobs:
       - run: cargo build -p tcc-wasm --target wasm32-unknown-unknown --release
       - run: python -m venv .venv
       - run: .venv/bin/pip install maturin pytest
-      - run: .venv/bin/maturin develop --manifest-path crates/tcc-python/Cargo.toml
+      - run: .venv/bin/maturin develop
+        working-directory: bindings/python
       - run: .venv/bin/pytest frontends/python hosts/python
+
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm pack:js
+      - run: python -m venv .venv
+      - run: .venv/bin/pip install maturin
+      - run: .venv/bin/maturin build --release --out ../../dist-packages
+        working-directory: bindings/python
+      - run: node --experimental-sqlite scripts/verify-local-packages.mjs
+      - run: .venv/bin/python scripts/verify-local-wheel.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine-packages-0.1.0-rc.1
+          path: dist-packages/*

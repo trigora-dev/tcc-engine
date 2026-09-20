@@ -98,10 +98,13 @@ export type Artifact = {
   program: Program;
 };
 
+export const PACKAGE_VERSION = "0.1.0-rc.1";
 export const ENGINE_FORMAT_VERSION = 1;
-export const FRONTEND_ID = "typescript";
+export const FRONTEND_IDENTITY = "typescript";
+export const FRONTEND_ID = FRONTEND_IDENTITY;
 export const LANGUAGE_SEMANTICS_VERSION = "ts.subset.v1";
-export const FRONTEND_VERSION = "0.0.0";
+/** Frontend build that produced the artifact. Not the language-semantics version. */
+export const FRONTEND_VERSION = PACKAGE_VERSION;
 
 export type CompileOptions = {
   filename?: string;
