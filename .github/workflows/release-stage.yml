@@ -1,0 +1,71 @@
+name: release-stage
+
+on:
+  workflow_dispatch:
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: wasm32-unknown-unknown
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo build -p tcc-wasm --target wasm32-unknown-unknown --release
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm pack:js
+      - run: python -m venv .venv
+      - run: .venv/bin/pip install maturin pytest
+      - run: ${{ github.workspace }}/.venv/bin/maturin build --release --out ${{ github.workspace }}/dist-packages
+        working-directory: bindings/python
+      - run: node --experimental-sqlite scripts/verify-local-packages.mjs
+      - run: .venv/bin/python scripts/verify-local-wheel.py
+      - run: ${{ github.workspace }}/.venv/bin/maturin develop
+        working-directory: bindings/python
+      - run: pnpm --filter @tcc-engine/bindings-javascript build
+      - run: node --experimental-sqlite --experimental-strip-types conformance/run-node.ts
+      - run: .venv/bin/python conformance/run_python.py
+      - run: TCC_BENCH_SCALE=quick pnpm bench
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine-packages-0.1.0-rc.1
+          path: dist-packages/*
+
+  arm:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: cargo test --workspace
+      - run: cargo build -p tcc-wasm --target wasm32-unknown-unknown --release
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm pack:js
+      - run: python -m venv .venv
+      - run: .venv/bin/pip install maturin
+      - run: ${{ github.workspace }}/.venv/bin/maturin build --release --out ${{ github.workspace }}/dist-packages
+        working-directory: bindings/python
+      - run: node --experimental-sqlite scripts/verify-local-packages.mjs
+      - run: .venv/bin/python scripts/verify-local-wheel.py
