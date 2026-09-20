@@ -65,10 +65,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
       - run: cargo build -p tcc-wasm --target wasm32-unknown-unknown --release
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @tcc-engine/bindings-javascript build
       - run: python -m venv .venv
       - run: .venv/bin/pip install maturin pytest
       - run: ${{ github.workspace }}/.venv/bin/maturin develop
