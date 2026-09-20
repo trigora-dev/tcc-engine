@@ -44,6 +44,12 @@ def test_compiles_the_first_example():
     assert PACKAGE_VERSION != LANGUAGE_SEMANTICS_VERSION
 
 
+def test_repeat_compile_same_hash():
+    first = compile(FIRST, filename="first.py")
+    second = compile(FIRST, filename="first.py")
+    assert first["envelope"]["artifact_hash"] == second["envelope"]["artifact_hash"]
+
+
 def test_accepts_aliased_imports():
     source = """
 from trigora import effect as durable_effect, wait_for_event as wait
@@ -129,5 +135,13 @@ async def run():
         return x
     return 0
 """
-    with pytest.raises(CompileError):
+    with pytest.raises(CompileError) as err:
         compile(source)
+    assert "for" in str(err.value)
+    assert err.value.span is not None
+    assert err.value.span["start_line"] >= 1
+    assert err.value.why == "it cannot cross a durable checkpoint in the current Python subset"
+    assert err.value.alternative == "use `while`"
+    assert err.value.frontend_id == FRONTEND_IDENTITY
+    assert err.value.frontend_version == PACKAGE_VERSION
+    assert err.value.language_semantics_version == LANGUAGE_SEMANTICS_VERSION

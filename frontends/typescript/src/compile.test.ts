@@ -50,6 +50,39 @@ test("compiles the first example", () => {
   assert.notEqual(PACKAGE_VERSION, LANGUAGE_SEMANTICS_VERSION);
 });
 
+test("repeat compile yields the same artifact hash", () => {
+  const first = compile(FIRST, { filename: "first.ts" });
+  const second = compile(FIRST, { filename: "first.ts" });
+  assert.equal(first.envelope.artifact_hash, second.envelope.artifact_hash);
+});
+
+test("unsupported for-of includes span, why, alternative, and version fields", () => {
+  const source = `
+import { effect } from "@trigora/sdk";
+export default async function run() {
+  const xs = await effect("xs", async () => 1);
+  for (const x of xs) {
+    return x;
+  }
+  return 0;
+}
+`;
+  try {
+    compile(source, { filename: "loop.ts" });
+    assert.fail("expected CompileError");
+  } catch (error) {
+    assert.ok(error instanceof CompileError);
+    assert.equal(error.file, "loop.ts");
+    assert.equal(error.span?.file, "loop.ts");
+    assert.ok((error.span?.start_line ?? 0) >= 1);
+    assert.equal(error.why, "it cannot cross a durable checkpoint in the current TypeScript subset");
+    assert.equal(error.alternative, "use `while`");
+    assert.equal(error.frontendId, FRONTEND_IDENTITY);
+    assert.equal(error.frontendVersion, PACKAGE_VERSION);
+    assert.equal(error.languageSemanticsVersion, LANGUAGE_SEMANTICS_VERSION);
+  }
+});
+
 test("compile errors include file and span", () => {
   try {
     compile("const x = (", { filename: "bad.ts" });

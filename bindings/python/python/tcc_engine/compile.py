@@ -11,6 +11,7 @@ from .canonical import canonical_stringify
 
 PACKAGE_VERSION = "0.1.0-rc.1"
 ENGINE_FORMAT_VERSION = 1
+HOST_PROTOCOL_VERSION = 1
 FRONTEND_IDENTITY = "python"
 FRONTEND_ID = FRONTEND_IDENTITY
 FRONTEND_VERSION = PACKAGE_VERSION
@@ -26,10 +27,21 @@ class CompileError(Exception):
         *,
         filename: str = "input.py",
         span: dict[str, Any] | None = None,
+        why: str | None = None,
+        alternative: str | None = None,
+        node: ast.AST | None = None,
     ) -> None:
         super().__init__(message)
         self.filename = filename
-        self.span = span
+        self.span = span if span is not None else (span_of(filename, node) if node is not None else None)
+        self.why = why
+        self.alternative = alternative
+        self.frontend_id = FRONTEND_ID
+        self.frontend_version = FRONTEND_VERSION
+        self.language_semantics_version = LANGUAGE_SEMANTICS_VERSION
+
+
+WHY_SUBSET = "it cannot cross a durable checkpoint in the current Python subset"
 
 
 def compile(source: str, filename: str = "input.py") -> dict[str, Any]:
@@ -38,7 +50,7 @@ def compile(source: str, filename: str = "input.py") -> dict[str, Any]:
     except SyntaxError as err:
         raise CompileError(f"{filename}: {err.msg}", filename=filename, span=_syntax_span(filename, err)) from err
     aliases = collect_imports(tree, filename)
-    entry = find_entry(tree)
+    entry = find_entry(tree, filename)
     function = lower_function(entry, aliases, filename)
     engine, host = required_from(function["instructions"])
     artifact = {
@@ -87,34 +99,64 @@ def collect_imports(tree: ast.Module, filename: str) -> dict[str, str]:
     for statement in tree.body:
         if isinstance(statement, ast.ImportFrom):
             if statement.module != SDK_MODULE or statement.level:
-                raise CompileError(f"unsupported import from `{statement.module or '?'}`")
+                raise CompileError(
+                    f"unsupported import from `{statement.module or '?'}`",
+                    filename=filename,
+                    why=WHY_SUBSET,
+                    node=statement,
+                )
             for alias in statement.names:
                 if alias.name not in DURABLE:
-                    raise CompileError(f"unknown durable import `{alias.name}`")
+                    raise CompileError(
+                        f"unknown durable import `{alias.name}`",
+                        filename=filename,
+                        why=WHY_SUBSET,
+                        node=statement,
+                    )
                 aliases[alias.asname or alias.name] = alias.name
             continue
         if isinstance(statement, ast.Import):
-            raise CompileError("unsupported import")
+            raise CompileError("unsupported import", filename=filename, why=WHY_SUBSET, node=statement)
     return aliases
 
 
-def find_entry(tree: ast.Module) -> ast.AsyncFunctionDef:
+def find_entry(tree: ast.Module, filename: str) -> ast.AsyncFunctionDef:
     entry: ast.AsyncFunctionDef | None = None
     for statement in tree.body:
         if isinstance(statement, ast.ImportFrom):
             continue
         if isinstance(statement, ast.AsyncFunctionDef) and statement.name == "run":
             if entry is not None:
-                raise CompileError("multiple `async def run` entry points")
+                raise CompileError(
+                    "multiple `async def run` entry points",
+                    filename=filename,
+                    why=WHY_SUBSET,
+                    node=statement,
+                )
             if statement.args.args or statement.args.posonlyargs or statement.args.kwonlyargs:
-                raise CompileError("entry function must not take parameters")
+                raise CompileError(
+                    "entry function must not take parameters",
+                    filename=filename,
+                    why=WHY_SUBSET,
+                    node=statement,
+                )
             if statement.args.vararg or statement.args.kwarg:
-                raise CompileError("entry function must not take parameters")
+                raise CompileError(
+                    "entry function must not take parameters",
+                    filename=filename,
+                    why=WHY_SUBSET,
+                    node=statement,
+                )
             entry = statement
             continue
-        raise CompileError(f"unsupported top-level statement: {type(statement).__name__}")
+        raise CompileError(
+            f"unsupported top-level statement: {type(statement).__name__}",
+            filename=filename,
+            why=WHY_SUBSET,
+            node=statement,
+        )
     if entry is None:
-        raise CompileError("missing `async def run` entry point")
+        raise CompileError("missing `async def run` entry point", filename=filename, why=WHY_SUBSET)
     return entry
 
 
@@ -154,6 +196,21 @@ class Lowerer:
         self.slots: dict[str, int] = {}
         self.loops: list[Loop] = []
         self.max_slots = 0
+
+    def fail(
+        self,
+        node: ast.AST,
+        message: str,
+        why: str | None = None,
+        alternative: str | None = None,
+    ) -> None:
+        raise CompileError(
+            message,
+            filename=self.filename,
+            why=why,
+            alternative=alternative,
+            node=node,
+        )
 
     def pc(self) -> int:
         return len(self.instructions)
@@ -253,12 +310,12 @@ class Lowerer:
             self.try_statement(statement)
             return
         if isinstance(statement, ast.For):
-            raise CompileError("`for` is not supported; use `while`")
+            self.fail(statement, "`for` is not supported; use `while`", WHY_SUBSET, "use `while`")
         if isinstance(statement, ast.FunctionDef) or isinstance(statement, ast.AsyncFunctionDef):
-            raise CompileError("nested functions are not supported")
+            self.fail(statement, "nested functions are not supported", WHY_SUBSET)
         if isinstance(statement, ast.ClassDef):
-            raise CompileError("classes are not supported")
-        raise CompileError(f"unsupported statement: {type(statement).__name__}")
+            self.fail(statement, "classes are not supported", WHY_SUBSET)
+        self.fail(statement, f"unsupported statement: {type(statement).__name__}", WHY_SUBSET)
 
     def assign(self, statement: ast.Assign) -> None:
         if len(statement.targets) != 1 or not isinstance(statement.targets[0], ast.Name):
@@ -362,7 +419,7 @@ class Lowerer:
         self.pop_scope()
 
     def condition(self, node: ast.expr) -> None:
-        refuse_collection_truthiness(node)
+        refuse_collection_truthiness(node, self.filename)
         self.expression(node)
 
     def expression(self, node: ast.expr) -> None:
@@ -421,14 +478,19 @@ class Lowerer:
             self.emit({"op": "GetProp", "key": key}, node)
             return
         if isinstance(node, ast.BoolOp):
-            raise CompileError("logical `and`/`or` are not supported; use nested `if`")
+            self.fail(
+                node,
+                "logical `and`/`or` are not supported; use nested `if`",
+                WHY_SUBSET,
+                "use nested `if`",
+            )
         if isinstance(node, ast.BinOp):
-            raise CompileError("arithmetic is not supported")
+            self.fail(node, "arithmetic is not supported", WHY_SUBSET)
         if isinstance(node, ast.Lambda):
-            raise CompileError("lambdas are not compiled; pass them only as effect callbacks")
+            self.fail(node, "lambdas are not compiled; pass them only as effect callbacks", WHY_SUBSET)
         if isinstance(node, ast.Call):
-            raise CompileError("call is not a resolved `trigora` durable operation")
-        raise CompileError(f"unsupported expression: {type(node).__name__}")
+            self.fail(node, "call is not a resolved `trigora` durable operation", WHY_SUBSET)
+        self.fail(node, f"unsupported expression: {type(node).__name__}", WHY_SUBSET)
 
     def compare(self, node: ast.Compare) -> None:
         if len(node.ops) != 1 or len(node.comparators) != 1:
@@ -565,10 +627,16 @@ def is_exception_type(node: ast.expr) -> bool:
     return isinstance(node, ast.Name) and node.id == "Exception"
 
 
-def refuse_collection_truthiness(node: ast.expr) -> None:
+def refuse_collection_truthiness(node: ast.expr, filename: str) -> None:
     node = unwrap(node)
     if isinstance(node, (ast.List, ast.Dict, ast.Tuple, ast.Set)):
-        raise CompileError("collection truthiness is not supported; compare explicitly")
+        raise CompileError(
+            "collection truthiness is not supported; compare explicitly",
+            filename=filename,
+            why=WHY_SUBSET,
+            alternative="compare explicitly",
+            node=node,
+        )
 
 
 def required_from(instructions: list[dict[str, Any]]) -> tuple[list[str], list[str]]:

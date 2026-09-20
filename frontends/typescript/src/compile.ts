@@ -48,14 +48,28 @@ export type DiagnosticSpan = {
 export class CompileError extends Error {
   readonly file: string;
   readonly span: DiagnosticSpan | null;
+  readonly why: string | null;
+  readonly alternative: string | null;
+  readonly frontendId = FRONTEND_ID;
+  readonly frontendVersion = FRONTEND_VERSION;
+  readonly languageSemanticsVersion = LANGUAGE_SEMANTICS_VERSION;
 
-  constructor(message: string, file = "input.ts", span: DiagnosticSpan | null = null) {
+  constructor(
+    message: string,
+    file = "input.ts",
+    span: DiagnosticSpan | null = null,
+    options: { why?: string; alternative?: string } = {},
+  ) {
     super(message);
     this.name = "CompileError";
     this.file = file;
     this.span = span;
+    this.why = options.why ?? null;
+    this.alternative = options.alternative ?? null;
   }
 }
+
+const WHY_SUBSET = "it cannot cross a durable checkpoint in the current TypeScript subset";
 
 /** Compile supported TypeScript into a TCC artifact. */
 export function compile(source: string, options: CompileOptions = {}): Artifact {
@@ -67,7 +81,7 @@ export function compile(source: string, options: CompileOptions = {}): Artifact 
     throw new CompileError(info.message, filename, info.span);
   }
 
-  const entry = findDefaultExport(sourceFile);
+  const entry = findDefaultExport(sourceFile, filename);
   const functionDecl = lowerFunction(entry, sourceFile, checker, filename);
   const { engine, host } = requiredFrom(functionDecl.instructions);
   const artifact: Artifact = {
@@ -149,13 +163,13 @@ function normalize(path: string): string {
   return path.replace(/\\/g, "/");
 }
 
-function findDefaultExport(sourceFile: ts.SourceFile): ts.FunctionDeclaration {
+function findDefaultExport(sourceFile: ts.SourceFile, filename: string): ts.FunctionDeclaration {
   let entry: ts.FunctionDeclaration | undefined;
   for (const statement of sourceFile.statements) {
     if (ts.isImportDeclaration(statement)) {
       const spec = importSpecifier(statement);
       if (spec !== SDK_SPECIFIER) {
-        throw new CompileError(`unsupported import from \`${spec ?? "?"}\``);
+        fail(filename, sourceFile, statement, `unsupported import from \`${spec ?? "?"}\``, WHY_SUBSET);
       }
       continue;
     }
@@ -165,24 +179,34 @@ function findDefaultExport(sourceFile: ts.SourceFile): ts.FunctionDeclaration {
       hasModifier(statement, ts.SyntaxKind.DefaultKeyword)
     ) {
       if (entry) {
-        throw new CompileError("multiple default exports");
+        fail(filename, sourceFile, statement, "multiple default exports", WHY_SUBSET);
       }
       entry = statement;
       continue;
     }
-    throw new CompileError(`unsupported top-level statement: ${kindName(statement)}`);
+    fail(
+      filename,
+      sourceFile,
+      statement,
+      `unsupported top-level statement: ${kindName(statement)}`,
+      WHY_SUBSET,
+    );
   }
   if (!entry) {
-    throw new CompileError("missing default export async function");
+    throw new CompileError("missing default export async function", filename, {
+      file: filename,
+      start_line: 1,
+      start_column: 1,
+    }, { why: WHY_SUBSET });
   }
   if (!hasModifier(entry, ts.SyntaxKind.AsyncKeyword)) {
-    throw new CompileError("default export must be an async function");
+    fail(filename, sourceFile, entry, "default export must be an async function", WHY_SUBSET);
   }
   if (entry.parameters.length > 0) {
-    throw new CompileError("entry function must not take parameters");
+    fail(filename, sourceFile, entry, "entry function must not take parameters", WHY_SUBSET);
   }
   if (!entry.body) {
-    throw new CompileError("entry function is missing a body");
+    fail(filename, sourceFile, entry, "entry function is missing a body", WHY_SUBSET);
   }
   return entry;
 }
@@ -225,6 +249,10 @@ class Lowerer {
     this.sourceFile = sourceFile;
     this.checker = checker;
     this.filename = filename;
+  }
+
+  fail(node: ts.Node, message: string, why?: string, alternative?: string): never {
+    fail(this.filename, this.sourceFile, node, message, why, alternative);
   }
 
   pc(): number {
@@ -329,7 +357,7 @@ class Lowerer {
     }
     if (ts.isBreakStatement(statement)) {
       if (statement.label) {
-        throw new CompileError("labeled break is not supported");
+        this.fail(statement, "labeled break is not supported", WHY_SUBSET, "use an unlabeled `break`");
       }
       const loop = this.loops[this.loops.length - 1];
       if (!loop) {
@@ -340,7 +368,7 @@ class Lowerer {
     }
     if (ts.isContinueStatement(statement)) {
       if (statement.label) {
-        throw new CompileError("labeled continue is not supported");
+        this.fail(statement, "labeled continue is not supported", WHY_SUBSET, "use an unlabeled `continue`");
       }
       const loop = this.loops[this.loops.length - 1];
       if (!loop) {
@@ -363,12 +391,12 @@ class Lowerer {
       return;
     }
     if (ts.isForInStatement(statement) || ts.isForOfStatement(statement)) {
-      throw new CompileError("for-in and for-of are not supported");
+      this.fail(statement, "for-in and for-of are not supported", WHY_SUBSET, "use `while`");
     }
     if (ts.isLabeledStatement(statement)) {
-      throw new CompileError("labeled statements are not supported");
+      this.fail(statement, "labeled statements are not supported", WHY_SUBSET);
     }
-    throw new CompileError(`unsupported statement: ${kindName(statement)}`);
+    this.fail(statement, `unsupported statement: ${kindName(statement)}`, WHY_SUBSET);
   }
 
   variableStatement(statement: ts.VariableStatement): void {
@@ -578,7 +606,7 @@ class Lowerer {
       this.emit({ op: "GetProp", key: expression.name.text }, expression);
       return;
     }
-    throw new CompileError(`unsupported expression: ${kindName(expression)}`);
+    this.fail(expression, `unsupported expression: ${kindName(expression)}`, WHY_SUBSET);
   }
 
   binary(expression: ts.BinaryExpression): void {
@@ -801,6 +829,20 @@ function hasModifier(node: ts.HasModifiers, kind: ts.SyntaxKind): boolean {
 
 function kindName(node: ts.Node): string {
   return ts.SyntaxKind[node.kind] ?? "unknown";
+}
+
+function fail(
+  filename: string,
+  sourceFile: ts.SourceFile,
+  node: ts.Node,
+  message: string,
+  why?: string,
+  alternative?: string,
+): never {
+  throw new CompileError(message, filename, spanOf(sourceFile, filename, node), {
+    ...(why === undefined ? {} : { why }),
+    ...(alternative === undefined ? {} : { alternative }),
+  });
 }
 
 function spanOf(
