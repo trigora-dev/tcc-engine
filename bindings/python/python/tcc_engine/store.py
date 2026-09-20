@@ -10,6 +10,11 @@ from typing import Any
 
 from tcc_engine.persist import (
     MATERIALIZE_EVERY,
+    PYTHON_ADAPTIVE_THRESHOLDS,
+    PYTHON_PACKING_DEFAULT,
+    choose_packed_kind,
+    packing_from_env,
+    packing_thresholds_from_env,
     persist_mode_from_env,
     reconstruct_continuation,
 )
@@ -36,9 +41,21 @@ def emit_host_event(observer: HostObserver | None, event: dict[str, Any]) -> Non
 
 
 class Store:
-    def __init__(self, path: str, persist: str | None = None, on_event: HostObserver | None = None) -> None:
+    def __init__(
+        self,
+        path: str,
+        persist: str | None = None,
+        on_event: HostObserver | None = None,
+        packing: str | None = None,
+        min_full_bytes: float | None = None,
+        max_delta_ratio: float | None = None,
+    ) -> None:
         self.persist = persist or persist_mode_from_env()
         self._observer = on_event
+        self.packing = packing or packing_from_env(PYTHON_PACKING_DEFAULT)
+        env_thresholds = packing_thresholds_from_env(PYTHON_ADAPTIVE_THRESHOLDS)
+        self.min_full_bytes = float(env_thresholds["min_full_bytes"] if min_full_bytes is None else min_full_bytes)
+        self.max_delta_ratio = float(env_thresholds["max_delta_ratio"] if max_delta_ratio is None else max_delta_ratio)
         self.db = sqlite3.connect(path)
         self.db.isolation_level = None
         self.db.row_factory = sqlite3.Row
@@ -510,7 +527,17 @@ class Store:
                 and write["revision"] - head["snapshot_revision"] > MATERIALIZE_EVERY
             )
         )
-        kind = "snapshot" if force_snapshot else "delta"
+        full_bytes = len(write["json"].encode("utf-8"))
+        delta_json = write.get("delta_json")
+        delta_bytes = None if delta_json is None else len(delta_json.encode("utf-8"))
+        kind = choose_packed_kind(
+            must_materialize=force_snapshot,
+            packing=self.packing,
+            full_bytes=full_bytes,
+            delta_bytes=delta_bytes,
+            min_full_bytes=self.min_full_bytes,
+            max_delta_ratio=self.max_delta_ratio,
+        )
         payload = write["json"] if kind == "snapshot" else (write.get("delta_json") or write["json"])
         bytes_ = len(payload.encode("utf-8"))
         self._metric_bytes_written += bytes_

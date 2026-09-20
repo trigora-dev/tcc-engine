@@ -4,6 +4,68 @@ export const MATERIALIZE_EVERY = 32;
 
 export type PersistKind = "snapshot" | "delta";
 export type PersistMode = "naive" | "optimized" | "replay";
+export type PersistPacking = "follow" | "adaptive";
+
+export type PackingThresholds = {
+  minFullBytes: number;
+  maxDeltaRatio: number;
+};
+
+/** Node optimized default. Full A–D/wave confirm did not beat follow; keep follow. */
+export const NODE_PACKING_DEFAULT: PersistPacking = "follow";
+
+export const NODE_ADAPTIVE_THRESHOLDS: PackingThresholds = {
+  minFullBytes: 1024,
+  maxDeltaRatio: 0.5,
+};
+
+export function packingFromEnv(fallback: PersistPacking = NODE_PACKING_DEFAULT): PersistPacking {
+  const value = process.env.TCC_PERSIST_PACKING;
+  if (value === "follow" || value === "adaptive") {
+    return value;
+  }
+  return fallback;
+}
+
+export function packingThresholdsFromEnv(fallback: PackingThresholds = NODE_ADAPTIVE_THRESHOLDS): PackingThresholds {
+  const minRaw = process.env.TCC_PERSIST_MIN_FULL_BYTES;
+  const ratioRaw = process.env.TCC_PERSIST_MAX_DELTA_RATIO;
+  const minFullBytes = minRaw !== undefined && minRaw !== "" ? Number(minRaw) : fallback.minFullBytes;
+  const maxDeltaRatio = ratioRaw !== undefined && ratioRaw !== "" ? Number(ratioRaw) : fallback.maxDeltaRatio;
+  return {
+    minFullBytes: Number.isFinite(minFullBytes) ? minFullBytes : fallback.minFullBytes,
+    maxDeltaRatio: Number.isFinite(maxDeltaRatio) ? maxDeltaRatio : fallback.maxDeltaRatio,
+  };
+}
+
+/**
+ * Host packing only. Snapshot and delta of the same revision are equivalent
+ * durable representations. Never invents a delta.
+ */
+export function choosePackedKind(input: {
+  mustMaterialize: boolean;
+  packing: PersistPacking;
+  fullBytes: number;
+  deltaBytes: number | null;
+  thresholds: PackingThresholds;
+}): PersistKind {
+  if (input.mustMaterialize) {
+    return "snapshot";
+  }
+  if (input.packing === "follow") {
+    return "delta";
+  }
+  if (input.deltaBytes === null) {
+    return "snapshot";
+  }
+  if (input.fullBytes < input.thresholds.minFullBytes) {
+    return "snapshot";
+  }
+  if (input.fullBytes === 0 || input.deltaBytes / input.fullBytes > input.thresholds.maxDeltaRatio) {
+    return "snapshot";
+  }
+  return "delta";
+}
 
 export type TaggedValue = { t: string; v?: unknown };
 

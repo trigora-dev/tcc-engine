@@ -2,7 +2,7 @@ import { appendFileSync } from "node:fs";
 
 import { EngineBinding, loadEngine, type Outcome } from "@tcc-engine/bindings-javascript";
 import { maybeCrash } from "./crash.ts";
-import { Store, type PersistMode } from "./store.ts";
+import { Store, type PackingThresholds, type PersistMode, type PersistPacking } from "./store.ts";
 import type { HostObserver } from "./observe.ts";
 
 export type FakeEffects = Record<string, unknown>;
@@ -31,6 +31,8 @@ export type RunOptions = {
   childArtifacts?: Record<string, string>;
   cancel?: boolean;
   persist?: PersistMode;
+  packing?: PersistPacking;
+  packingThresholds?: PackingThresholds;
   /** Optional host-agnostic observability sink. Must not throw into persist. */
   onEvent?: HostObserver;
   /** Give this execution its own WASM instance when several engines are in flight. */
@@ -74,9 +76,16 @@ function effectRunner(options: RunOptions): EffectRunner {
   return mapEffects(options.effects ?? { generate: 42 });
 }
 
+function storeFromOptions(path: string, options: RunOptions | ResumeOptions): Store {
+  return new Store(path, options.persist, options.onEvent, {
+    packing: options.packing,
+    packingThresholds: options.packingThresholds,
+  });
+}
+
 export async function startExecution(options: RunOptions): Promise<RunResult> {
   await loadEngine(options.wasmPath);
-  const store = new Store(options.dbPath, options.persist, options.onEvent);
+  const store = storeFromOptions(options.dbPath, options);
   try {
     return runOnStore(store, options);
   } finally {
@@ -177,7 +186,7 @@ export function runBatchOnStore(
 
 export async function resumeExecution(options: ResumeOptions): Promise<RunResult> {
   await loadEngine(options.wasmPath);
-  const store = new Store(options.dbPath, options.persist, options.onEvent);
+  const store = storeFromOptions(options.dbPath, options);
   try {
     const executionId = options.executionId ?? "first";
     const ownerToken = options.ownerToken ?? "owner-1";

@@ -54,8 +54,18 @@ def start_execution(
     crash: CrashHook | None = None,
     persist: str | None = None,
     on_event: Any | None = None,
+    packing: str | None = None,
+    min_full_bytes: float | None = None,
+    max_delta_ratio: float | None = None,
 ) -> dict[str, Any]:
-    store = Store(db_path, persist, on_event)
+    store = Store(
+        db_path,
+        persist,
+        on_event,
+        packing=packing,
+        min_full_bytes=min_full_bytes,
+        max_delta_ratio=max_delta_ratio,
+    )
     try:
         return run_on_store(
             store,
@@ -217,8 +227,18 @@ def resume_execution(
     crash: CrashHook | None = None,
     persist: str | None = None,
     on_event: Any | None = None,
+    packing: str | None = None,
+    min_full_bytes: float | None = None,
+    max_delta_ratio: float | None = None,
 ) -> dict[str, Any]:
-    store = Store(db_path, persist, on_event)
+    store = Store(
+        db_path,
+        persist,
+        on_event,
+        packing=packing,
+        min_full_bytes=min_full_bytes,
+        max_delta_ratio=max_delta_ratio,
+    )
     try:
         import time
 

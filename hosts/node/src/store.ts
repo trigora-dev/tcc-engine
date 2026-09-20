@@ -5,15 +5,39 @@ import {
   applyDelta,
   persistModeFromEnv,
   reconstructContinuation,
+  choosePackedKind,
+  packingFromEnv,
+  packingThresholdsFromEnv,
   MATERIALIZE_EVERY,
+  NODE_ADAPTIVE_THRESHOLDS,
+  NODE_PACKING_DEFAULT,
   type ContinuationDelta,
   type ContinuationJson,
+  type PackingThresholds,
   type PersistKind,
   type PersistMode,
+  type PersistPacking,
 } from "./reconstruct.ts";
 
-export { applyDelta, MATERIALIZE_EVERY, persistModeFromEnv, reconstructContinuation };
-export type { ContinuationDelta, ContinuationJson, PersistKind, PersistMode };
+export {
+  applyDelta,
+  MATERIALIZE_EVERY,
+  persistModeFromEnv,
+  reconstructContinuation,
+  choosePackedKind,
+  packingFromEnv,
+  packingThresholdsFromEnv,
+  NODE_ADAPTIVE_THRESHOLDS,
+  NODE_PACKING_DEFAULT,
+};
+export type {
+  ContinuationDelta,
+  ContinuationJson,
+  PackingThresholds,
+  PersistKind,
+  PersistMode,
+  PersistPacking,
+};
 export type { HostEvent, HostEventType, HostObserver } from "./observe.ts";
 
 export type CheckpointCommit = {
@@ -92,9 +116,16 @@ export type StoreMetrics = {
 
 export type StoreProfile = { sqlApplyMs: number; commitMs: number };
 
+export type StoreOptions = {
+  packing?: PersistPacking;
+  packingThresholds?: PackingThresholds;
+};
+
 export class Store {
   readonly db: DatabaseSync;
   readonly persist: PersistMode;
+  readonly packing: PersistPacking;
+  readonly packingThresholds: PackingThresholds;
   private readonly observer: HostObserver | undefined;
   private groupHeld = 0;
   private pending: DurabilityOp[] = [];
@@ -126,9 +157,16 @@ export class Store {
     return this.profile ? { ...this.profile } : undefined;
   }
 
-  constructor(path: string, persist: PersistMode = persistModeFromEnv(), observer?: HostObserver) {
+  constructor(
+    path: string,
+    persist: PersistMode = persistModeFromEnv(),
+    observer?: HostObserver,
+    options?: StoreOptions,
+  ) {
     this.persist = persist;
     this.observer = observer;
+    this.packing = options?.packing ?? packingFromEnv(NODE_PACKING_DEFAULT);
+    this.packingThresholds = options?.packingThresholds ?? packingThresholdsFromEnv(NODE_ADAPTIVE_THRESHOLDS);
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
@@ -652,13 +690,20 @@ export class Store {
   private applyOptimizedCheckpoint(write: CheckpointCommit): void {
     const head = this.execHead(write.executionId);
     const requestedKind: PersistKind = write.kind ?? "snapshot";
-    const forceSnapshot =
+    const mustMaterialize =
       write.materialize === true ||
       requestedKind === "snapshot" ||
       (head !== undefined && write.revision - head.snapshot_revision > MATERIALIZE_EVERY);
-    const kind: PersistKind = forceSnapshot ? "snapshot" : "delta";
-    const payload =
-      kind === "snapshot" ? write.json : (write.deltaJson ?? write.json);
+    const fullBytes = Buffer.byteLength(write.json);
+    const deltaBytes = write.deltaJson == null ? null : Buffer.byteLength(write.deltaJson);
+    const kind: PersistKind = choosePackedKind({
+      mustMaterialize,
+      packing: this.packing,
+      fullBytes,
+      deltaBytes,
+      thresholds: this.packingThresholds,
+    });
+    const payload = kind === "snapshot" ? write.json : (write.deltaJson ?? write.json);
     const bytes = Buffer.byteLength(payload);
     this.metricBytesWritten += bytes;
     if (kind === "snapshot") {

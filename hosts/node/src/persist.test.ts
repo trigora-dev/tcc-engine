@@ -12,6 +12,7 @@ import { killAndResume } from "./conformance.ts";
 import { ensureEngineLoaded, resumeExecution, runBatchOnStore, runOnStore, startExecution } from "./host.ts";
 import {
   applyDelta,
+  choosePackedKind,
   MATERIALIZE_EVERY,
   reconstructContinuation,
   Store,
@@ -268,9 +269,10 @@ test("optimized recover uses last snapshot plus a bounded suffix", async () => {
     artifactJson: artifact,
     autoDeliverEvent: false,
     persist: "optimized",
+    packing: "follow",
   });
   assert.equal(first.status, "suspended");
-  const store = new Store(dbPath, "optimized");
+  const store = new Store(dbPath, "optimized", undefined, { packing: "follow" });
   const plan = store.recoverPlan("first");
   const records = store.walRecords("first");
   store.close();
@@ -282,7 +284,7 @@ test("optimized recover uses last snapshot plus a bounded suffix", async () => {
 
 test("materialization bound keeps WAL suffix at most N", () => {
   const dbPath = dbFile();
-  const store = new Store(dbPath, "optimized");
+  const store = new Store(dbPath, "optimized", undefined, { packing: "follow" });
   store.putArtifact("hash", "{}");
   store.createExecution("bound", "hash", "owner-1", Date.now() + 60_000);
   for (let revision = 1; revision <= MATERIALIZE_EVERY + 2; revision++) {
@@ -903,5 +905,134 @@ export default async function run() {
   });
   assert.equal(recovered.resumed.status, "completed");
   assert.deepEqual(recovered.resumed.result, { t: "string", v: "live-scalar" });
+});
+
+test("choosePackedKind snapshots small continuations and fat deltas", () => {
+  const thresholds = { minFullBytes: 1024, maxDeltaRatio: 0.5 };
+  assert.equal(
+    choosePackedKind({
+      mustMaterialize: true,
+      packing: "adaptive",
+      fullBytes: 10_000,
+      deltaBytes: 10,
+      thresholds,
+    }),
+    "snapshot",
+  );
+  assert.equal(
+    choosePackedKind({
+      mustMaterialize: false,
+      packing: "follow",
+      fullBytes: 100,
+      deltaBytes: 90,
+      thresholds,
+    }),
+    "delta",
+  );
+  assert.equal(
+    choosePackedKind({
+      mustMaterialize: false,
+      packing: "adaptive",
+      fullBytes: 500,
+      deltaBytes: 10,
+      thresholds,
+    }),
+    "snapshot",
+  );
+  assert.equal(
+    choosePackedKind({
+      mustMaterialize: false,
+      packing: "adaptive",
+      fullBytes: 4000,
+      deltaBytes: 3000,
+      thresholds,
+    }),
+    "snapshot",
+  );
+  assert.equal(
+    choosePackedKind({
+      mustMaterialize: false,
+      packing: "adaptive",
+      fullBytes: 4000,
+      deltaBytes: 200,
+      thresholds,
+    }),
+    "delta",
+  );
+});
+
+test("follow packing writes a delta when the core asked for one", () => {
+  const store = new Store(dbFile(), "optimized", undefined, { packing: "follow" });
+  store.putArtifact("hash", "{}");
+  store.createExecution("pack", "hash", "owner-1", Date.now() + 60_000);
+  const snapshot = dummyContinuation("pack", 1, { frames: [{ func_id: 0, locals: [{ t: "string", v: "keep" }], pc: 1 }] });
+  store.commitCheckpoint("pack", 1, snapshot, "runnable", "owner-1", {
+    kind: "snapshot",
+    materialize: true,
+  });
+  const next = dummyContinuation("pack", 2, { frames: [{ func_id: 0, locals: [{ t: "string", v: "keep" }], pc: 2 }] });
+  store.commitCheckpoint("pack", 2, next, "runnable", "owner-1", {
+    kind: "delta",
+    materialize: false,
+    deltaJson: JSON.stringify({ frames: [{ index: 0, pc: 2 }] }),
+  });
+  const records = store.walRecords("pack");
+  const reconstructed = reconstructContinuation(
+    JSON.parse(snapshot) as ContinuationJson,
+    records.filter((row) => row.kind === "delta").map((row) => JSON.parse(row.payload)),
+    2,
+  );
+  store.close();
+  assert.equal(records[1]?.kind, "delta");
+  assert.equal(reconstructed.revision, 2);
+  assert.equal(reconstructed.frames[0]?.pc, 2);
+});
+
+test("adaptive packing may snapshot a delta intent and still reconstruct", () => {
+  const store = new Store(dbFile(), "optimized", undefined, {
+    packing: "adaptive",
+    packingThresholds: { minFullBytes: 10_000, maxDeltaRatio: 0.01 },
+  });
+  store.putArtifact("hash", "{}");
+  store.createExecution("pack", "hash", "owner-1", Date.now() + 60_000);
+  const snapshot = dummyContinuation("pack", 1);
+  store.commitCheckpoint("pack", 1, snapshot, "runnable", "owner-1", {
+    kind: "snapshot",
+    materialize: true,
+  });
+  const next = dummyContinuation("pack", 2);
+  store.commitCheckpoint("pack", 2, next, "runnable", "owner-1", {
+    kind: "delta",
+    materialize: false,
+    deltaJson: JSON.stringify({ frames: [{ index: 0, pc: 2 }] }),
+  });
+  const records = store.walRecords("pack");
+  const saved = store.getContinuation("pack");
+  store.close();
+  assert.equal(records[1]?.kind, "snapshot");
+  assert.equal(records[1]?.payload, next);
+  assert.ok(saved);
+  assert.equal(JSON.parse(saved.json).revision, 2);
+});
+
+test("adaptive extra snapshots still keep the suffix bound", () => {
+  const store = new Store(dbFile(), "optimized", undefined, {
+    packing: "adaptive",
+    packingThresholds: { minFullBytes: 10_000, maxDeltaRatio: 0.01 },
+  });
+  store.putArtifact("hash", "{}");
+  store.createExecution("bound", "hash", "owner-1", Date.now() + 60_000);
+  for (let revision = 1; revision <= MATERIALIZE_EVERY + 2; revision++) {
+    const json = dummyContinuation("bound", revision);
+    store.commitCheckpoint("bound", revision, json, "runnable", "owner-1", {
+      kind: revision === 1 ? "snapshot" : "delta",
+      materialize: revision === 1,
+      deltaJson: JSON.stringify({ frames: [{ index: 0, pc: revision }] }),
+    });
+  }
+  const plan = store.recoverPlan("bound");
+  store.close();
+  assert.ok(plan);
+  assert.ok(plan.suffixLength <= MATERIALIZE_EVERY);
 });
 

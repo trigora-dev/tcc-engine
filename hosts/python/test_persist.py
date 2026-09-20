@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from tcc_engine.compile import artifact_json, compile
 from tcc_engine.host import resume_execution, run_batch_on_store, run_on_store, start_execution
-from tcc_engine.persist import MATERIALIZE_EVERY, apply_delta, reconstruct_continuation
+from tcc_engine.persist import MATERIALIZE_EVERY, apply_delta, choose_packed_kind, reconstruct_continuation
 from tcc_engine.store import Store
 from conformance import kill_and_resume, run_wasm_uninterrupted
 
@@ -220,10 +220,10 @@ async def run():
 def test_optimized_wait_has_snapshot_and_delta():
     db_path = _db()
     first = start_execution(
-        db_path=db_path, artifact_json=_artifact(), auto_deliver_event=False, persist="optimized"
+        db_path=db_path, artifact_json=_artifact(), auto_deliver_event=False, persist="optimized", packing="follow"
     )
     assert first["status"] == "suspended"
-    store = Store(db_path, "optimized")
+    store = Store(db_path, "optimized", packing="follow")
     plan = store.recover_plan("first")
     records = store.wal_records("first")
     store.close()
@@ -235,7 +235,7 @@ def test_optimized_wait_has_snapshot_and_delta():
 
 def test_materialization_bound():
     db_path = _db()
-    store = Store(db_path, "optimized")
+    store = Store(db_path, "optimized", packing="follow")
     store.put_artifact("hash", "{}")
     store.create_execution("bound", "hash", "owner-1", 1_000_000)
     for revision in range(1, MATERIALIZE_EVERY + 3):
@@ -840,4 +840,118 @@ async def run():
     assert "live-scalar" in native_json
     assert "dead-scalar" not in wasm_json
     assert "live-scalar" in wasm_json
+
+
+def test_choose_packed_kind_policy():
+    assert (
+        choose_packed_kind(
+            must_materialize=True,
+            packing="adaptive",
+            full_bytes=10_000,
+            delta_bytes=10,
+            min_full_bytes=1024,
+            max_delta_ratio=0.5,
+        )
+        == "snapshot"
+    )
+    assert (
+        choose_packed_kind(
+            must_materialize=False,
+            packing="follow",
+            full_bytes=100,
+            delta_bytes=90,
+            min_full_bytes=1024,
+            max_delta_ratio=0.5,
+        )
+        == "delta"
+    )
+    assert (
+        choose_packed_kind(
+            must_materialize=False,
+            packing="adaptive",
+            full_bytes=500,
+            delta_bytes=10,
+            min_full_bytes=1024,
+            max_delta_ratio=0.5,
+        )
+        == "snapshot"
+    )
+    assert (
+        choose_packed_kind(
+            must_materialize=False,
+            packing="adaptive",
+            full_bytes=4000,
+            delta_bytes=200,
+            min_full_bytes=1024,
+            max_delta_ratio=0.5,
+        )
+        == "delta"
+    )
+
+
+def test_follow_packing_writes_delta():
+    store = Store(_db(), "optimized", packing="follow")
+    store.put_artifact("hash", "{}")
+    store.create_execution("pack", "hash", "owner-1", 1_000_000)
+    snapshot = _dummy("pack", 1)
+    store.commit_checkpoint("pack", 1, snapshot, "runnable", "owner-1", kind="snapshot", materialize=True)
+    nxt = _dummy("pack", 2)
+    store.commit_checkpoint(
+        "pack",
+        2,
+        nxt,
+        "runnable",
+        "owner-1",
+        kind="delta",
+        materialize=False,
+        delta_json=json.dumps({"frames": [{"index": 0, "pc": 2}]}, separators=(",", ":")),
+    )
+    records = store.wal_records("pack")
+    store.close()
+    assert records[1]["kind"] == "delta"
+
+
+def test_adaptive_packing_may_snapshot_delta_intent():
+    store = Store(_db(), "optimized", packing="adaptive", min_full_bytes=10_000, max_delta_ratio=0.01)
+    store.put_artifact("hash", "{}")
+    store.create_execution("pack", "hash", "owner-1", 1_000_000)
+    store.commit_checkpoint("pack", 1, _dummy("pack", 1), "runnable", "owner-1", kind="snapshot", materialize=True)
+    nxt = _dummy("pack", 2)
+    store.commit_checkpoint(
+        "pack",
+        2,
+        nxt,
+        "runnable",
+        "owner-1",
+        kind="delta",
+        materialize=False,
+        delta_json=json.dumps({"frames": [{"index": 0, "pc": 2}]}, separators=(",", ":")),
+    )
+    records = store.wal_records("pack")
+    saved = store.get_continuation("pack")
+    store.close()
+    assert records[1]["kind"] == "snapshot"
+    assert records[1]["payload"] == nxt
+    assert json.loads(saved["json"])["revision"] == 2
+
+
+def test_adaptive_extra_snapshots_keep_suffix_bound():
+    store = Store(_db(), "optimized", packing="adaptive", min_full_bytes=10_000, max_delta_ratio=0.01)
+    store.put_artifact("hash", "{}")
+    store.create_execution("bound", "hash", "owner-1", 1_000_000)
+    for revision in range(1, MATERIALIZE_EVERY + 3):
+        store.commit_checkpoint(
+            "bound",
+            revision,
+            _dummy("bound", revision),
+            "runnable",
+            "owner-1",
+            kind="snapshot" if revision == 1 else "delta",
+            materialize=revision == 1,
+            delta_json=json.dumps({"frames": [{"index": 0, "pc": revision}]}, separators=(",", ":")),
+        )
+    plan = store.recover_plan("bound")
+    store.close()
+    assert plan is not None
+    assert plan["suffix_length"] <= MATERIALIZE_EVERY
 

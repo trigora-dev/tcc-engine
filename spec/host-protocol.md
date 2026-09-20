@@ -41,7 +41,7 @@ persist_checkpoint
 
 Delta ops name changed continuation fields (frame locals by slot, pc, stack, pending, status, result, try_stack). They are not a byte-diff of JSON. Reconstruction must yield a continuation in `spec/continuation-format.md`. Shared golden vectors live in `spec/fixtures/persist/`.
 
-Hosts persist the snapshot or delta the core emits. They do not drop locals, invent delete ops, or guess liveness. Dead slots are already `undefined` in that payload.
+Hosts persist a durable representation of the confirmed revision. Optimized hosts **must** store a snapshot when `materialize` is true, when intent `kind` is `snapshot`, or when another snapshot is required to keep the WAL suffix bounded. They **may** store a full snapshot of the same revision when the core emitted a delta, if host packing decides the delta would not pay. They **must not** invent deltas, drop locals, or guess liveness. Dead slots are already `undefined` in that payload. Snapshot and delta of revision N are equivalent; `persist_confirmed` does not name the packing.
 
 The engine tracks dirtiness against the last **confirmed** revision. A crash before `persist_confirmed` does not advance that base. `engine_format_version` is unchanged; resume still consumes a full continuation.
 

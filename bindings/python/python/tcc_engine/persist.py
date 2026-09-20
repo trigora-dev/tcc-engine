@@ -11,9 +11,52 @@ MATERIALIZE_EVERY = 32
 Continuation = dict[str, Any]
 ContinuationDelta = dict[str, Any]
 
+PYTHON_PACKING_DEFAULT = "follow"  # Full A-only/wave confirm did not beat follow.
+PYTHON_ADAPTIVE_THRESHOLDS = {"min_full_bytes": 1024, "max_delta_ratio": 0.5}
+
 
 def persist_mode_from_env() -> str:
     return "naive" if os.environ.get("TCC_PERSIST") == "naive" else "optimized"
+
+
+def packing_from_env(fallback: str = PYTHON_PACKING_DEFAULT) -> str:
+    value = os.environ.get("TCC_PERSIST_PACKING")
+    if value in ("follow", "adaptive"):
+        return value
+    return fallback
+
+
+def packing_thresholds_from_env(
+    fallback: dict[str, float] | None = None,
+) -> dict[str, float]:
+    base = fallback or PYTHON_ADAPTIVE_THRESHOLDS
+    min_raw = os.environ.get("TCC_PERSIST_MIN_FULL_BYTES")
+    ratio_raw = os.environ.get("TCC_PERSIST_MAX_DELTA_RATIO")
+    min_full_bytes = float(min_raw) if min_raw else float(base["min_full_bytes"])
+    max_delta_ratio = float(ratio_raw) if ratio_raw else float(base["max_delta_ratio"])
+    return {"min_full_bytes": min_full_bytes, "max_delta_ratio": max_delta_ratio}
+
+
+def choose_packed_kind(
+    *,
+    must_materialize: bool,
+    packing: str,
+    full_bytes: int,
+    delta_bytes: int | None,
+    min_full_bytes: float,
+    max_delta_ratio: float,
+) -> str:
+    if must_materialize:
+        return "snapshot"
+    if packing == "follow":
+        return "delta"
+    if delta_bytes is None:
+        return "snapshot"
+    if full_bytes < min_full_bytes:
+        return "snapshot"
+    if full_bytes == 0 or delta_bytes / full_bytes > max_delta_ratio:
+        return "snapshot"
+    return "delta"
 
 
 def apply_delta(base: Continuation, delta: ContinuationDelta) -> Continuation:
