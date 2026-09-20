@@ -1,7 +1,15 @@
 use crate::artifact::{Artifact, FuncId, Pc};
 use crate::error::IrError;
-use crate::features::{EngineFeature, FeatureSet, HostCapability, ENGINE_FORMAT_VERSION};
+use crate::features::{
+    is_known_language_semantics, EngineFeature, FeatureSet, HostCapability, ENGINE_FORMAT_VERSION,
+};
 use crate::instruction::Instruction;
+
+/// Conservative limits for untrusted artifacts. Documented in spec/program-format.md.
+pub const MAX_FUNCTIONS: usize = 1_024;
+pub const MAX_INSTRUCTIONS_PER_FUNCTION: usize = 100_000;
+pub const MAX_LOCALS: u32 = 4_096;
+pub const MAX_STRING_BYTES: usize = 1_048_576;
 
 /// What this engine build can execute and what a host is willing to provide.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +57,16 @@ pub fn validate(artifact: &Artifact, caps: &EngineCaps) -> Result<(), IrError> {
         return Err(IrError::EmptyArtifactHash);
     }
 
+    if artifact.envelope.frontend_id.is_empty() {
+        return Err(IrError::EmptyFrontendId);
+    }
+
+    if !is_known_language_semantics(&artifact.envelope.language_semantics_version) {
+        return Err(IrError::UnsupportedLanguageSemantics(
+            artifact.envelope.language_semantics_version.clone(),
+        ));
+    }
+
     for feature in &artifact.envelope.required_engine_features {
         if !feature.is_known() || !caps.supports_engine(feature) {
             return Err(IrError::UnsupportedEngineFeature(feature.0.clone()));
@@ -65,12 +83,36 @@ pub fn validate(artifact: &Artifact, caps: &EngineCaps) -> Result<(), IrError> {
         return Err(IrError::EmptyProgram);
     }
 
+    if artifact.program.functions.len() > MAX_FUNCTIONS {
+        return Err(IrError::LimitsExceeded {
+            what: "function count",
+            got: artifact.program.functions.len(),
+            max: MAX_FUNCTIONS,
+        });
+    }
+
     let mut seen = Vec::new();
     for function in &artifact.program.functions {
         if seen.contains(&function.id.0) {
             return Err(IrError::DuplicateFunction(function.id.0));
         }
         seen.push(function.id.0);
+
+        if function.local_count > MAX_LOCALS {
+            return Err(IrError::LimitsExceeded {
+                what: "local_count",
+                got: function.local_count as usize,
+                max: MAX_LOCALS as usize,
+            });
+        }
+
+        if function.instructions.len() > MAX_INSTRUCTIONS_PER_FUNCTION {
+            return Err(IrError::LimitsExceeded {
+                what: "instruction count",
+                got: function.instructions.len(),
+                max: MAX_INSTRUCTIONS_PER_FUNCTION,
+            });
+        }
 
         if function.spans.len() != function.instructions.len() {
             return Err(IrError::SpanLengthMismatch {
@@ -94,6 +136,36 @@ pub fn validate(artifact: &Artifact, caps: &EngineCaps) -> Result<(), IrError> {
                 if artifact.function(*func).is_none() {
                     return Err(IrError::MissingEntry(func.0));
                 }
+            }
+            if let Some(local) = instruction.uses_local().or(instruction.defs_local()) {
+                if local.0 >= function.local_count {
+                    return Err(IrError::LocalOutOfRange {
+                        func: function.id.0,
+                        local: local.0,
+                        count: function.local_count,
+                    });
+                }
+            }
+            match instruction {
+                Instruction::LoadConst {
+                    value: crate::instruction::ConstValue::String(text),
+                } if text.len() > MAX_STRING_BYTES => {
+                    return Err(IrError::LimitsExceeded {
+                        what: "string length",
+                        got: text.len(),
+                        max: MAX_STRING_BYTES,
+                    });
+                }
+                Instruction::SetProp { key } | Instruction::GetProp { key }
+                    if key.len() > MAX_STRING_BYTES =>
+                {
+                    return Err(IrError::LimitsExceeded {
+                        what: "key length",
+                        got: key.len(),
+                        max: MAX_STRING_BYTES,
+                    });
+                }
+                _ => {}
             }
         }
     }
@@ -327,6 +399,79 @@ mod tests {
         assert!(matches!(
             validate(&artifact, &EngineCaps::current()),
             Err(IrError::UnsupportedHostCapability(id)) if id == "host.made_up"
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_frontend_id() {
+        let mut artifact = Artifact::minimal_return("abc");
+        artifact.envelope.frontend_id.clear();
+        assert!(matches!(
+            validate(&artifact, &EngineCaps::current()),
+            Err(IrError::EmptyFrontendId)
+        ));
+    }
+
+    #[test]
+    fn rejects_unknown_language_semantics() {
+        let mut artifact = Artifact::minimal_return("abc");
+        artifact.envelope.language_semantics_version = "js.full.v1".into();
+        assert!(matches!(
+            validate(&artifact, &EngineCaps::current()),
+            Err(IrError::UnsupportedLanguageSemantics(id)) if id == "js.full.v1"
+        ));
+    }
+
+    #[test]
+    fn rejects_local_out_of_range() {
+        let mut artifact = Artifact::minimal_return("abc");
+        artifact.program.functions[0].instructions = vec![
+            Instruction::LoadLocal {
+                local: crate::artifact::LocalId(0),
+            },
+            Instruction::Return,
+        ];
+        artifact.program.functions[0].spans = vec![None, None];
+        artifact.program.functions[0].local_count = 0;
+        assert!(matches!(
+            validate(&artifact, &EngineCaps::current()),
+            Err(IrError::LocalOutOfRange {
+                func: 0,
+                local: 0,
+                count: 0
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_too_many_locals() {
+        let mut artifact = Artifact::minimal_return("abc");
+        artifact.program.functions[0].local_count = MAX_LOCALS + 1;
+        assert!(matches!(
+            validate(&artifact, &EngineCaps::current()),
+            Err(IrError::LimitsExceeded {
+                what: "local_count",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_oversized_const_string() {
+        let mut artifact = Artifact::minimal_return("abc");
+        artifact.program.functions[0].instructions = vec![
+            Instruction::LoadConst {
+                value: crate::instruction::ConstValue::String("x".repeat(MAX_STRING_BYTES + 1)),
+            },
+            Instruction::Return,
+        ];
+        artifact.program.functions[0].spans = vec![None, None];
+        assert!(matches!(
+            validate(&artifact, &EngineCaps::current()),
+            Err(IrError::LimitsExceeded {
+                what: "string length",
+                ..
+            })
         ));
     }
 }

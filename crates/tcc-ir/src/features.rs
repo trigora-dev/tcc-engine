@@ -14,6 +14,14 @@ pub const LANGUAGE_SEMANTICS_TS: &str = "ts.subset.v1";
 /// Language-semantics version for the implemented Python subset.
 pub const LANGUAGE_SEMANTICS_PY: &str = "py.subset.v1";
 
+pub fn known_language_semantics() -> &'static [&'static str] {
+    &[LANGUAGE_SEMANTICS_TS, LANGUAGE_SEMANTICS_PY]
+}
+
+pub fn is_known_language_semantics(id: &str) -> bool {
+    known_language_semantics().contains(&id)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EngineFeature(pub String);
 

@@ -81,6 +81,13 @@ impl Engine {
                 supported: ENGINE_FORMAT_VERSION,
             });
         }
+        if continuation.language_semantics_version != artifact.envelope.language_semantics_version {
+            return Err(CoreError::LanguageSemanticsMismatch {
+                expected: artifact.envelope.language_semantics_version.clone(),
+                found: continuation.language_semantics_version.clone(),
+            });
+        }
+        validate_resume_frames(&artifact, &continuation)?;
         match continuation.status {
             ContinuationStatus::Completed => return Err(CoreError::Terminal("completed")),
             ContinuationStatus::Failed => return Err(CoreError::Terminal("failed")),
@@ -730,6 +737,33 @@ fn event_wait_id(
     )
 }
 
+fn validate_resume_frames(
+    artifact: &Artifact,
+    continuation: &Continuation,
+) -> Result<(), CoreError> {
+    for frame in &continuation.frames {
+        let function = artifact.function(FuncId(frame.func_id)).ok_or_else(|| {
+            CoreError::InvalidContinuation(format!("frame function {} is missing", frame.func_id))
+        })?;
+        if frame.locals.len() != function.local_count as usize {
+            return Err(CoreError::InvalidContinuation(format!(
+                "frame locals {} does not match local_count {}",
+                frame.locals.len(),
+                function.local_count
+            )));
+        }
+        if (frame.pc as usize) >= function.instructions.len() {
+            return Err(CoreError::InvalidContinuation(format!(
+                "pc {} is out of range in function {} ({} instructions)",
+                frame.pc,
+                frame.func_id,
+                function.instructions.len()
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -810,5 +844,53 @@ mod tests {
             .unwrap();
         assert_eq!(engine.continuation().revision, 7);
         assert_eq!(engine.continuation().status, ContinuationStatus::Completed);
+    }
+
+    #[test]
+    fn resume_rejects_pc_out_of_range() {
+        let artifact = Artifact::minimal_return("hash-pc");
+        let mut continuation = tcc_state::Continuation::start(
+            "exec-pc",
+            artifact.envelope.artifact_hash.clone(),
+            ENGINE_FORMAT_VERSION,
+            artifact.envelope.language_semantics_version.clone(),
+            0,
+            0,
+        );
+        continuation.frames[0].pc = 99;
+        let err = Engine::resume(artifact, continuation, &caps()).unwrap_err();
+        assert!(matches!(err, CoreError::InvalidContinuation(message) if message.contains("pc")));
+    }
+
+    #[test]
+    fn resume_rejects_language_semantics_mismatch() {
+        let artifact = Artifact::minimal_return("hash-sem");
+        let continuation = tcc_state::Continuation::start(
+            "exec-sem",
+            artifact.envelope.artifact_hash.clone(),
+            ENGINE_FORMAT_VERSION,
+            "py.subset.v1",
+            0,
+            0,
+        );
+        let err = Engine::resume(artifact, continuation, &caps()).unwrap_err();
+        assert!(matches!(err, CoreError::LanguageSemanticsMismatch { .. }));
+    }
+
+    #[test]
+    fn start_rejects_oob_local_without_unknown_instruction() {
+        let mut artifact = Artifact::minimal_return("hash-oob");
+        artifact.program.functions[0].instructions = vec![
+            Instruction::LoadLocal {
+                local: tcc_ir::LocalId(0),
+            },
+            Instruction::Return,
+        ];
+        artifact.program.functions[0].spans = vec![None, None];
+        let err = Engine::start(artifact, "exec-oob", &caps()).unwrap_err();
+        assert!(matches!(
+            err,
+            CoreError::Ir(tcc_ir::IrError::LocalOutOfRange { .. })
+        ));
     }
 }

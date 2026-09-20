@@ -478,4 +478,27 @@ mod tests {
         let text = encode_artifact(&artifact).unwrap();
         assert_eq!(decode_artifact(&text).unwrap(), artifact);
     }
+
+    #[test]
+    fn unknown_opcode_is_invalid_encoding_not_panic() {
+        let mut artifact = Artifact::minimal_return("hash-json");
+        artifact.program.functions[0].instructions = vec![Instruction::Nop];
+        artifact.program.functions[0].spans = vec![None];
+        let text = encode_artifact(&artifact)
+            .unwrap()
+            .replace("\"op\":\"Nop\"", "\"op\":\"Nope\"");
+        let result = std::panic::catch_unwind(|| decode_artifact(&text));
+        assert!(result.is_ok(), "decode panicked");
+        assert!(matches!(
+            result.unwrap(),
+            Err(IrError::InvalidEncoding(message)) if message.contains("Nope")
+        ));
+    }
+
+    #[test]
+    fn malformed_json_is_invalid_encoding_not_panic() {
+        let result = std::panic::catch_unwind(|| decode_artifact("{not json"));
+        assert!(result.is_ok(), "decode panicked");
+        assert!(result.unwrap().is_err());
+    }
 }

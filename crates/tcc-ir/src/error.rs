@@ -2,15 +2,37 @@ use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IrError {
-    UnsupportedFormat { found: u32, supported: u32 },
+    UnsupportedFormat {
+        found: u32,
+        supported: u32,
+    },
     UnsupportedEngineFeature(String),
     UnsupportedHostCapability(String),
     EmptyProgram,
     MissingEntry(u32),
     DuplicateFunction(u32),
-    JumpOutOfRange { func: u32, target: u32, len: usize },
-    SpanLengthMismatch { func: u32, index: usize },
+    JumpOutOfRange {
+        func: u32,
+        target: u32,
+        len: usize,
+    },
+    SpanLengthMismatch {
+        func: u32,
+        index: usize,
+    },
     EmptyArtifactHash,
+    EmptyFrontendId,
+    UnsupportedLanguageSemantics(String),
+    LocalOutOfRange {
+        func: u32,
+        local: u32,
+        count: u32,
+    },
+    LimitsExceeded {
+        what: &'static str,
+        got: usize,
+        max: usize,
+    },
     InvalidEncoding(String),
 }
 
@@ -39,6 +61,17 @@ impl fmt::Display for IrError {
                 "instruction {index} in function {func} has no matching source span"
             ),
             IrError::EmptyArtifactHash => write!(f, "artifact hash must not be empty"),
+            IrError::EmptyFrontendId => write!(f, "frontend_id must not be empty"),
+            IrError::UnsupportedLanguageSemantics(id) => {
+                write!(f, "language_semantics_version `{id}` is not supported")
+            }
+            IrError::LocalOutOfRange { func, local, count } => write!(
+                f,
+                "local {local} is out of range in function {func} ({count} locals)"
+            ),
+            IrError::LimitsExceeded { what, got, max } => {
+                write!(f, "{what} {got} exceeds limit {max}")
+            }
             IrError::InvalidEncoding(message) => write!(f, "{message}"),
         }
     }

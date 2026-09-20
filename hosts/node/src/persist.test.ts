@@ -193,6 +193,72 @@ test("naive and optimized hosts complete the first example with the same result"
   assert.equal(optimized.revision, naive.revision);
 });
 
+test("naive and optimized hosts agree on generated programs", async () => {
+  const programs = [
+    {
+      source: `
+import { effect } from "@trigora/sdk";
+export default async function run() {
+  const flag = await effect("generate", async () => 1);
+  if (flag) {
+    const taken = await effect("taken", async () => 42);
+    return taken;
+  }
+  const skipped = await effect("skipped", async () => 99);
+  return skipped;
+}
+`,
+      effects: { generate: 1, taken: 42, skipped: 99 },
+    },
+    {
+      source: `
+import { effect, waitForEvent } from "@trigora/sdk";
+export default async function run() {
+  const dead = await effect("generate", async () => "drop-me");
+  const live = dead;
+  const approval = await waitForEvent("approved");
+  return { live, approval };
+}
+`,
+      effects: { generate: "drop-me" },
+    },
+    {
+      source: `
+import { effect } from "@trigora/sdk";
+export default async function run() {
+  try {
+    throw "boom";
+  } catch (e) {
+    const ok = await effect("generate", async () => 1);
+    return ok;
+  }
+}
+`,
+      effects: { generate: 1 },
+    },
+  ];
+  for (const [index, program] of programs.entries()) {
+    const artifact = compileSource(program.source, `gen-${index}.ts`);
+    const naive = await startExecution({
+      dbPath: dbFile(),
+      wasmPath,
+      artifactJson: artifact,
+      effects: program.effects,
+      persist: "naive",
+    });
+    const optimized = await startExecution({
+      dbPath: dbFile(),
+      wasmPath,
+      artifactJson: artifact,
+      effects: program.effects,
+      persist: "optimized",
+    });
+    assert.equal(naive.status, "completed", index);
+    assert.equal(optimized.status, "completed", index);
+    assert.deepEqual(optimized.result, naive.result, index);
+  }
+});
+
 test("optimized recover uses last snapshot plus a bounded suffix", async () => {
   const dbPath = dbFile();
   const artifact = artifactJson();

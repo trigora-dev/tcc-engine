@@ -2,7 +2,11 @@
 
 The engine emits host requests and applies host responses. Bindings present this protocol to a language. Hosts implement it.
 
+Every encoded host request, outcome, and response JSON object must include `host_protocol_version`. The current version is `1`. Absence is a malformed message (`MissingHostProtocolVersion`), not an implicit v1. A present value other than `1` is `UnsupportedHostProtocol`. Bindings stamp `1` when wrapping host objects that omit it; the WASM C ABI and `decode_response` do not.
+
 The engine does not depend on a particular database, operating system, or cloud provider.
+
+Host conformance for this protocol is the named kit in [host-conformance-v1.md](host-conformance-v1.md).
 
 ## Roles
 

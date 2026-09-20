@@ -178,7 +178,10 @@ fn set_error(message: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tcc_core::{Engine as NativeEngine, EngineOutcome, HostRequest, HostResponse};
     use tcc_ir::encode_artifact;
+    use tcc_ir::gen::{generate, seed_count};
+    use tcc_state::Value;
 
     #[test]
     fn exports_current_format_version() {
@@ -296,7 +299,8 @@ mod tests {
     }
 
     fn apply(json: &str) {
-        let buf = write_str(json);
+        let stamped = tcc_core::stamp_host_protocol_version(json).unwrap();
+        let buf = write_str(&stamped);
         let code = tcc_apply_response(buf.0, buf.1);
         tcc_free(buf.0, buf.1);
         assert_eq!(code, 0, "{}", last_json());
@@ -314,5 +318,136 @@ mod tests {
         let len = tcc_json_len() as usize;
         let ptr = tcc_json_ptr();
         unsafe { String::from_utf8_lossy(slice::from_raw_parts(ptr, len)).into_owned() }
+    }
+
+    #[test]
+    fn c_abi_rejects_missing_host_protocol_version() {
+        let artifact = encode_artifact(&Artifact::sdk_first_example("sdk-first")).unwrap();
+        start(&artifact, "first");
+        let first = run(32);
+        assert!(first.contains("\"type\":\"run_effect\""));
+        let buf = write_str(r#"{"type":"effect_result","value":{"t":"number","v":42}}"#);
+        let code = tcc_apply_response(buf.0, buf.1);
+        tcc_free(buf.0, buf.1);
+        assert_ne!(code, 0);
+        assert!(last_json().contains("host_protocol_version"));
+    }
+
+    #[test]
+    fn generated_native_matches_c_abi() {
+        for seed in 0..seed_count().min(16) {
+            let artifact = generate(seed);
+            let json = encode_artifact(&artifact).unwrap();
+            let native_result = drive_native(artifact, &format!("gen-{seed}"));
+            start(&json, &format!("gen-{seed}"));
+            let cabi_result = drive_cabi();
+            assert_eq!(native_result, cabi_result, "seed {seed}");
+        }
+    }
+
+    fn drive_native(artifact: Artifact, execution_id: &str) -> String {
+        let mut engine =
+            NativeEngine::start(artifact, execution_id, &EngineCaps::current()).unwrap();
+        loop {
+            match engine.run_until_host(256) {
+                EngineOutcome::Host(HostRequest::RunEffect { key, .. }) => {
+                    let value = if key == "skipped" {
+                        Value::Number(99.0)
+                    } else {
+                        Value::Number(42.0)
+                    };
+                    engine
+                        .apply_host_response(HostResponse::EffectResult { value })
+                        .unwrap();
+                }
+                EngineOutcome::Host(HostRequest::PersistEffect { .. })
+                | EngineOutcome::Host(HostRequest::RegisterWait { .. })
+                | EngineOutcome::Host(HostRequest::RegisterTimer { .. })
+                | EngineOutcome::Host(HostRequest::CreateChild { .. }) => {
+                    engine.apply_host_response(HostResponse::Ack).unwrap();
+                }
+                EngineOutcome::Host(HostRequest::PersistCheckpoint { revision, .. }) => {
+                    engine
+                        .apply_host_response(HostResponse::PersistConfirmed { revision })
+                        .unwrap();
+                }
+                EngineOutcome::Suspended => match &engine.continuation().pending {
+                    Some(tcc_state::PendingOp::Wait {
+                        kind: tcc_state::WaitKind::Timer { .. },
+                    }) => engine
+                        .apply_host_response(HostResponse::TimerFired)
+                        .unwrap(),
+                    Some(tcc_state::PendingOp::Wait {
+                        kind: tcc_state::WaitKind::Child { .. },
+                    }) => engine
+                        .apply_host_response(HostResponse::ChildResult {
+                            value: Value::Number(7.0),
+                        })
+                        .unwrap(),
+                    _ => engine
+                        .apply_host_response(HostResponse::EventPayload {
+                            value: Value::String("ok".into()),
+                        })
+                        .unwrap(),
+                },
+                EngineOutcome::Completed { .. } => {
+                    return String::from_utf8(
+                        tcc_state::encode_continuation(engine.continuation()).unwrap(),
+                    )
+                    .unwrap();
+                }
+                other => panic!("native {other:?}"),
+            }
+        }
+    }
+
+    fn drive_cabi() -> String {
+        loop {
+            let outcome = run(256);
+            if outcome.contains("\"type\":\"completed\"") {
+                return continuation_json();
+            }
+            if outcome.contains("\"type\":\"run_effect\"") {
+                if outcome.contains("\"key\":\"skipped\"") {
+                    apply(r#"{"type":"effect_result","value":{"t":"number","v":99}}"#);
+                } else {
+                    apply(r#"{"type":"effect_result","value":{"t":"number","v":42}}"#);
+                }
+            } else if outcome.contains("\"type\":\"persist_checkpoint\"") {
+                let revision = persist_revision(&outcome);
+                apply(&format!(
+                    r#"{{"type":"persist_confirmed","revision":{revision}}}"#
+                ));
+            } else if outcome.contains("\"type\":\"suspended\"") {
+                let continuation = continuation_json();
+                if continuation.contains("\"timer\"") {
+                    apply(r#"{"type":"timer_fired"}"#);
+                } else if continuation.contains("\"child\"") {
+                    apply(r#"{"type":"child_result","value":{"t":"number","v":7}}"#);
+                } else {
+                    apply(r#"{"type":"event_payload","value":{"t":"string","v":"ok"}}"#);
+                }
+            } else {
+                apply(r#"{"type":"ack"}"#);
+            }
+        }
+    }
+
+    fn persist_revision(outcome: &str) -> u64 {
+        let key = "\"revision\":";
+        let start = outcome.find(key).expect("revision") + key.len();
+        outcome[start..]
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .unwrap()
+    }
+
+    fn continuation_json() -> String {
+        let code = tcc_continuation();
+        let json = last_json();
+        assert_eq!(code, 0, "{json}");
+        json
     }
 }

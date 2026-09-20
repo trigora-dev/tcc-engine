@@ -92,13 +92,19 @@ Validation must run before execution. It checks:
 
 - `engine_format_version`
 - non-empty `artifact_hash`
+- non-empty `frontend_id` (ids are not allowlisted)
+- `language_semantics_version` in `{ ts.subset.v1, py.subset.v1 }`
 - required engine features and host capabilities against the implementing engine and host
 - non-empty program
 - unique function ids
 - entry function present
 - jump targets in range
+- `LoadLocal` / `StoreLocal` indices `< local_count`
 - span array length equal to instruction count
 - call targets present
+- size caps: at most 1024 functions, 100000 instructions per function, 4096 locals, and 1048576 bytes per const string or property key
+
+Resume also checks that the continuation `engine_format_version` and `language_semantics_version` match the artifact, each frame’s `locals.len()` equals that function’s `local_count`, and `pc` is in range. Unknown opcodes fail at decode (`IrError::InvalidEncoding`), not as a panic. OOB locals fail validate; they are not `UnknownInstruction` at runtime.
 
 In this repository, validation is `tcc_ir::validate`. `tcc_ir::encode_artifact` / `decode_artifact` serialize the envelope as JSON. `artifact_hash` is SHA-256 of the canonical JSON of the artifact with an empty `artifact_hash` field, hex-encoded. The frontend computes the hash; the engine validates the envelope and does not re-hash.
 

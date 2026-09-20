@@ -3,10 +3,14 @@ use tcc_state::{continuation_delta_to_json, decode_value, encode_value, Value};
 
 use crate::engine::EngineOutcome;
 use crate::error::CoreError;
-use crate::protocol::{EffectStatus, HostRequest, HostResponse};
+use crate::protocol::{EffectStatus, HostRequest, HostResponse, HOST_PROTOCOL_VERSION};
 
 pub fn encode_outcome(outcome: &EngineOutcome) -> Result<String, CoreError> {
     let mut map = std::collections::BTreeMap::new();
+    map.insert(
+        "host_protocol_version".into(),
+        Json::Number(HOST_PROTOCOL_VERSION as f64),
+    );
     match outcome {
         EngineOutcome::Host(request) => {
             map.insert("type".into(), Json::String("host".into()));
@@ -42,8 +46,26 @@ pub fn decode_response(text: &str) -> Result<HostResponse, CoreError> {
     json_to_response(&json)
 }
 
+/// Insert `host_protocol_version: 1` when the field is absent. Does not rewrite a present value.
+pub fn stamp_host_protocol_version(text: &str) -> Result<String, CoreError> {
+    let json = Json::parse(text).map_err(core_state)?;
+    let mut map = json.as_object().map_err(core_state)?.clone();
+    if !map.contains_key("host_protocol_version") {
+        map.insert(
+            "host_protocol_version".into(),
+            Json::Number(HOST_PROTOCOL_VERSION as f64),
+        );
+        return Ok(Json::Object(map).stringify());
+    }
+    Ok(text.to_string())
+}
+
 fn request_to_json(request: &HostRequest) -> Result<Json, CoreError> {
     let mut map = std::collections::BTreeMap::new();
+    map.insert(
+        "host_protocol_version".into(),
+        Json::Number(HOST_PROTOCOL_VERSION as f64),
+    );
     match request {
         HostRequest::PersistCheckpoint {
             revision,
@@ -153,8 +175,28 @@ fn request_to_json(request: &HostRequest) -> Result<Json, CoreError> {
     Ok(Json::Object(map))
 }
 
+fn require_host_protocol_version(
+    map: &std::collections::BTreeMap<String, Json>,
+) -> Result<(), CoreError> {
+    match map.get("host_protocol_version") {
+        None => Err(CoreError::MissingHostProtocolVersion),
+        Some(value) => {
+            let got = value.as_u32().map_err(core_state)?;
+            if got != HOST_PROTOCOL_VERSION {
+                Err(CoreError::UnsupportedHostProtocol {
+                    got,
+                    supported: HOST_PROTOCOL_VERSION,
+                })
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
 fn json_to_response(json: &Json) -> Result<HostResponse, CoreError> {
     let map = json.as_object().map_err(core_state)?;
+    require_host_protocol_version(map)?;
     match Json::get(map, "type")
         .map_err(core_state)?
         .as_str()
@@ -211,4 +253,58 @@ fn json_value(json: &Json) -> Result<Value, CoreError> {
 
 fn core_state(err: tcc_state::StateError) -> CoreError {
     CoreError::TypeError(err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decode_rejects_missing_host_protocol_version() {
+        let err = decode_response(r#"{"type":"ack"}"#).unwrap_err();
+        assert!(matches!(err, CoreError::MissingHostProtocolVersion));
+    }
+
+    #[test]
+    fn decode_rejects_unsupported_host_protocol_version() {
+        let err = decode_response(r#"{"host_protocol_version":2,"type":"ack"}"#).unwrap_err();
+        assert!(matches!(
+            err,
+            CoreError::UnsupportedHostProtocol {
+                got: 2,
+                supported: 1
+            }
+        ));
+    }
+
+    #[test]
+    fn decode_accepts_version_one() {
+        assert_eq!(
+            decode_response(r#"{"host_protocol_version":1,"type":"ack"}"#).unwrap(),
+            HostResponse::Ack
+        );
+    }
+
+    #[test]
+    fn stamp_inserts_missing_version() {
+        let stamped = stamp_host_protocol_version(r#"{"type":"ack"}"#).unwrap();
+        assert_eq!(decode_response(&stamped).unwrap(), HostResponse::Ack);
+    }
+
+    #[test]
+    fn stamp_does_not_rewrite_present_version() {
+        let stamped =
+            stamp_host_protocol_version(r#"{"host_protocol_version":2,"type":"ack"}"#).unwrap();
+        assert!(matches!(
+            decode_response(&stamped).unwrap_err(),
+            CoreError::UnsupportedHostProtocol { got: 2, .. }
+        ));
+    }
+
+    #[test]
+    fn encode_outcome_declares_protocol_version() {
+        let json = encode_outcome(&EngineOutcome::Cancelled).unwrap();
+        assert!(json.contains("\"host_protocol_version\":1"));
+        assert!(json.contains("\"type\":\"cancelled\""));
+    }
 }

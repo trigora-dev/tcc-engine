@@ -15,6 +15,17 @@ type WasmExports = {
   tcc_continuation: () => number;
 };
 
+export const HOST_PROTOCOL_VERSION = 1;
+
+export function stampHostProtocolVersion(
+  message: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!Object.prototype.hasOwnProperty.call(message, "host_protocol_version")) {
+    return { host_protocol_version: HOST_PROTOCOL_VERSION, ...message };
+  }
+  return message;
+}
+
 export type Outcome =
   | { type: "host"; request: Record<string, unknown> }
   | { type: "completed"; result: unknown }
@@ -110,7 +121,7 @@ export class EngineBinding {
   }
 
   applyHostResponse(response: Record<string, unknown>): void {
-    const payload = writeString(this.exports, JSON.stringify(response));
+    const payload = writeString(this.exports, JSON.stringify(stampHostProtocolVersion(response)));
     const code = this.exports.tcc_apply_response(payload.ptr, payload.len);
     this.exports.tcc_free(payload.ptr, payload.len);
     if (code !== 0) {

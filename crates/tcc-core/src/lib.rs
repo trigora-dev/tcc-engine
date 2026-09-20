@@ -11,5 +11,6 @@ pub use engine::{Engine, EngineOutcome};
 pub use error::CoreError;
 pub use protocol::{
     ChildSpec, EffectRecord, EffectStatus, HostRequest, HostResponse, WaitRegistration,
+    HOST_PROTOCOL_VERSION,
 };
-pub use wire::{decode_response, encode_outcome, encode_request};
+pub use wire::{decode_response, encode_outcome, encode_request, stamp_host_protocol_version};

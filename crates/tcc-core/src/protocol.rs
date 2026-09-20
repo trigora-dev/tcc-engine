@@ -1,5 +1,8 @@
 use tcc_state::{ContinuationDelta, PersistKind, Value};
 
+/// Host request/response JSON version. Required on every encoded message.
+pub const HOST_PROTOCOL_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EffectStatus {
     Started,

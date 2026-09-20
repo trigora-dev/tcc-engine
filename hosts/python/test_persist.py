@@ -164,6 +164,59 @@ def test_naive_and_optimized_same_result():
     assert optimized["revision"] == naive["revision"]
 
 
+def test_naive_and_optimized_generated_programs():
+    programs = [
+        (
+            """
+from trigora import effect
+
+async def run():
+    flag = await effect("generate", lambda: 1)
+    if flag:
+        taken = await effect("taken", lambda: 42)
+        return taken
+    skipped = await effect("skipped", lambda: 99)
+    return skipped
+""",
+            {"generate": 1, "taken": 42, "skipped": 99},
+        ),
+        (
+            """
+from trigora import effect, wait_for_event
+
+async def run():
+    dead = await effect("generate", lambda: "drop-me")
+    live = dead
+    approval = await wait_for_event("approved")
+    return {"live": live, "approval": approval}
+""",
+            {"generate": "drop-me"},
+        ),
+        (
+            """
+from trigora import effect
+
+async def run():
+    try:
+        raise Exception("boom")
+    except Exception:
+        ok = await effect("generate", lambda: 1)
+        return ok
+""",
+            {"generate": 1},
+        ),
+    ]
+    for source, effects in programs:
+        artifact = artifact_json(compile(source))
+        naive = start_execution(db_path=_db(), artifact_json=artifact, effects=effects, persist="naive")
+        optimized = start_execution(
+            db_path=_db(), artifact_json=artifact, effects=effects, persist="optimized"
+        )
+        assert naive["status"] == "completed", naive
+        assert optimized["status"] == "completed", optimized
+        assert optimized["result"] == naive["result"]
+
+
 def test_optimized_wait_has_snapshot_and_delta():
     db_path = _db()
     first = start_execution(

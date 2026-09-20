@@ -38,7 +38,8 @@ impl EngineBinding {
     }
 
     fn apply_response(&mut self, json: &str) -> PyResult<()> {
-        let response = decode_response(json).map_err(py_err)?;
+        let json = tcc_core::stamp_host_protocol_version(json).map_err(py_err)?;
+        let response = decode_response(&json).map_err(py_err)?;
         self.inner.apply_host_response(response).map_err(py_err)
     }
 

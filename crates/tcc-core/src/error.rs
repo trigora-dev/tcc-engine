@@ -13,6 +13,16 @@ pub enum CoreError {
         found: u32,
         supported: u32,
     },
+    MissingHostProtocolVersion,
+    UnsupportedHostProtocol {
+        got: u32,
+        supported: u32,
+    },
+    LanguageSemanticsMismatch {
+        expected: String,
+        found: String,
+    },
+    InvalidContinuation(String),
     Terminal(&'static str),
     UnexpectedHostResponse {
         expected: &'static str,
@@ -39,6 +49,18 @@ impl fmt::Display for CoreError {
                 f,
                 "continuation format version {found} is incompatible with engine format {supported}"
             ),
+            CoreError::MissingHostProtocolVersion => {
+                write!(f, "host_protocol_version is required")
+            }
+            CoreError::UnsupportedHostProtocol { got, supported } => write!(
+                f,
+                "unsupported host_protocol_version {got} (engine supports {supported})"
+            ),
+            CoreError::LanguageSemanticsMismatch { expected, found } => write!(
+                f,
+                "continuation language_semantics_version `{found}` does not match artifact `{expected}`"
+            ),
+            CoreError::InvalidContinuation(message) => write!(f, "{message}"),
             CoreError::Terminal(status) => write!(f, "execution has already {status}"),
             CoreError::UnexpectedHostResponse { expected, got } => write!(
                 f,
