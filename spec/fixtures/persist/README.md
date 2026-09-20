@@ -1,8 +1,8 @@
 # Persist reconstruct fixtures
 
-Shared golden vectors for semantic continuation deltas. Cloud hosts (`trigora-platform` Durable Object SQLite) must apply `delta` to `base` and obtain a continuation identical to `expected` (same logical fields as `tcc_state::encode_continuation`).
+Shared golden vectors for semantic continuation deltas. A host that reconstructs from persist intent must apply `delta` to `base` and obtain a continuation identical to `expected` (same logical fields as `tcc_state::encode_continuation`).
 
-These files are the handoff. This repository does not contain Durable Object code.
+Host conformance v1 reconstruct cases point here; see [`spec/host-conformance-v1.md`](../../host-conformance-v1.md) and [`conformance/cases.json`](../../../conformance/cases.json).
 
 | File | What it covers |
 |---|---|

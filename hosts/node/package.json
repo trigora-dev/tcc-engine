@@ -17,7 +17,7 @@
     "build": "tsc -p tsconfig.build.json",
     "prepack": "pnpm build",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-sqlite --experimental-strip-types --test src/host.test.ts src/restart.test.ts src/conformance.test.ts src/persist.test.ts",
+    "test": "node --experimental-sqlite --experimental-strip-types --test src/host.test.ts src/restart.test.ts src/conformance.test.ts src/persist.test.ts src/kit.test.ts",
     "bench:persist:internal": "node --experimental-sqlite --experimental-strip-types src/persist.bench.ts"
   },
   "engines": {

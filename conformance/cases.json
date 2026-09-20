@@ -1,0 +1,43 @@
+{
+  "kit": "host-conformance-v1",
+  "host_protocol_version": 1,
+  "reconstruct": [
+    "spec/fixtures/persist/store-local.json",
+    "spec/fixtures/persist/pending-wait.json",
+    "spec/fixtures/persist/clear-pending.json",
+    "spec/fixtures/persist/slot-undefined.json"
+  ],
+  "crash_hooks": [
+    "before_persist_checkpoint",
+    "after_persist_checkpoint",
+    "after_wait_checkpoint",
+    "before_persist_effect",
+    "after_persist_effect",
+    "before_effect_provider",
+    "after_effect_provider",
+    "after_register_wait",
+    "after_register_timer",
+    "after_create_child",
+    "before_event_payload",
+    "after_event_persist",
+    "before_timer_fired",
+    "before_child_result",
+    "before_cancel"
+  ],
+  "semantic": [
+    {
+      "id": "first-example",
+      "driver": true,
+      "crash_ats": [
+        "after_persist_checkpoint:1",
+        "after_persist_effect",
+        "after_wait_checkpoint",
+        "after_effect_provider"
+      ]
+    },
+    {
+      "id": "artifact-pinning",
+      "driver": true
+    }
+  ]
+}
