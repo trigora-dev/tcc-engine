@@ -2,12 +2,26 @@
   "name": "tcc-engine",
   "private": true,
   "version": "0.1.0-rc.1",
+  "type": "module",
   "packageManager": "pnpm@9.15.0",
   "scripts": {
     "build:wasm": "cargo build -p tcc-wasm --target wasm32-unknown-unknown --release",
     "build:js": "pnpm --filter @tcc-engine/frontend-typescript build && pnpm build:wasm && pnpm --filter @tcc-engine/bindings-javascript build && pnpm --filter @tcc-engine/host-node build",
     "pack:js": "pnpm build:js && mkdir -p dist-packages && pnpm --filter @tcc-engine/frontend-typescript exec pnpm pack --pack-destination ../../dist-packages && pnpm --filter @tcc-engine/bindings-javascript exec pnpm pack --pack-destination ../../dist-packages && pnpm --filter @tcc-engine/host-node exec pnpm pack --pack-destination ../../dist-packages",
     "verify:js": "node --experimental-sqlite scripts/verify-local-packages.mjs",
-    "test:js": "pnpm --filter @tcc-engine/frontend-typescript test && pnpm --filter @tcc-engine/bindings-javascript test && pnpm --filter @tcc-engine/host-node test"
+    "test:js": "pnpm --filter @tcc-engine/frontend-typescript test && pnpm --filter @tcc-engine/bindings-javascript test && pnpm --filter @tcc-engine/host-node test",
+    "bench": "node --experimental-sqlite --experimental-strip-types bench/run.ts all",
+    "bench:persistence": "node --experimental-sqlite --experimental-strip-types bench/run.ts persistence",
+    "bench:persistence:healthy": "node --experimental-sqlite --experimental-strip-types bench/run.ts persistence:healthy",
+    "bench:persistence:group": "node --experimental-sqlite --experimental-strip-types bench/run.ts persistence:group",
+    "bench:persistence:replay": "node --experimental-sqlite --experimental-strip-types bench/run.ts persistence:replay",
+    "bench:recovery": "node --experimental-sqlite --experimental-strip-types bench/run.ts recovery",
+    "bench:recovery:history": "node --experimental-sqlite --experimental-strip-types bench/run.ts recovery:history",
+    "bench:recovery:live-state": "node --experimental-sqlite --experimental-strip-types bench/run.ts recovery:live-state",
+    "bench:recovery:wal": "node --experimental-sqlite --experimental-strip-types bench/run.ts recovery:wal"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.0"
   }
 }

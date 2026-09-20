@@ -1,10 +1,9 @@
 /**
- * Internal naive vs optimized persist benches. Not product numbers.
+ * Internal engineering persist benches (tuning / micro / adversarial).
+ * Not the public claim surface — use `pnpm bench` instead.
  *
- *   pnpm --filter @tcc-engine/host-node bench:persist
- *
- * Reports host, storage, live-state size, retained WAL, healthy-path
- * throughput, and recovery vs unrelated WAL growth / live-state size.
+ *   pnpm --filter @tcc-engine/host-node bench:persist:internal
+ *   TCC_BENCH_SCALE=quick pnpm --filter @tcc-engine/host-node bench:persist:internal
  */
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { canonicalStringify } from "../../../frontends/typescript/src/canonical.ts";
 import { compile } from "../../../frontends/typescript/src/compile.ts";
 import { startExecution } from "./host.ts";
-import { Store, type PersistMode } from "./store.ts";
+import { applyDelta, MATERIALIZE_EVERY, Store, type PersistMode } from "./store.ts";
 
 const wasmPath = path.resolve(
   fileURLToPath(
@@ -32,20 +31,8 @@ export default async function run() {
 }
 `;
 
-const LARGE = `
-import { effect, waitForEvent } from "@trigora/sdk";
-export default async function run() {
-  const a = await effect("a", async () => 1);
-  const b = await effect("b", async () => 2);
-  const c = await effect("c", async () => 3);
-  const d = await effect("d", async () => 4);
-  const approval = await waitForEvent("approved");
-  return { a, b, c, d, approval };
-}
-`;
-
 function dbFile(): string {
-  return path.join(mkdtempSync(path.join(tmpdir(), "tcc-bench-")), "tcc.db");
+  return path.join(mkdtempSync(path.join(tmpdir(), "tcc-internal-bench-")), "tcc.db");
 }
 
 function dummy(executionId: string, revision: number, locals: number): string {
@@ -70,8 +57,99 @@ function dummy(executionId: string, revision: number, locals: number): string {
   });
 }
 
-async function healthyPath(label: string, source: string, persist: PersistMode, iters: number) {
-  const artifact = canonicalStringify(compile(source, { filename: `${label}.ts` }));
+/** Micro: applyDelta cost without SQLite. */
+function microApplyDelta(iters: number) {
+  const base = JSON.parse(dummy("micro", 0, 64));
+  const delta = {
+    frames: [{ index: 0, pc: 7, locals: [{ slot: 3, value: { t: "number", v: 99 } }] }],
+    stack: [{ t: "string", v: "x" }],
+  };
+  const started = performance.now();
+  for (let i = 0; i < iters; i++) {
+    applyDelta(base, delta);
+  }
+  return {
+    kind: "micro_apply_delta",
+    iters,
+    ms: Number((performance.now() - started).toFixed(2)),
+  };
+}
+
+/** Tuning: measure delta vs snapshot payload sizes across revisions (no auto-switch). */
+function tuningDeltaRatio() {
+  const store = new Store(dbFile(), "optimized");
+  store.putArtifact("hash", "{}");
+  store.createExecution("tune", "hash", "owner-1", Date.now() + 60_000);
+  const ratios: Array<{
+    revision: number;
+    kind: string;
+    payloadBytes: number;
+    snapshotBytes: number;
+    deltaBytes: number;
+    deltaOverSnapshot: number;
+  }> = [];
+  for (let revision = 1; revision <= MATERIALIZE_EVERY + 2; revision++) {
+    const snapshot = dummy("tune", revision, 32);
+    const deltaJson = JSON.stringify({
+      frames: Array.from({ length: 16 }, (_, slot) => ({
+        index: 0,
+        locals: [{ slot, value: { t: "number", v: revision } }],
+      })),
+    });
+    store.commitCheckpoint("tune", revision, snapshot, "runnable", "owner-1", {
+      kind: revision === 1 ? "snapshot" : "delta",
+      materialize: revision === 1,
+      deltaJson,
+    });
+    const last = store.walRecords("tune").at(-1)!;
+    ratios.push({
+      revision,
+      kind: last.kind,
+      payloadBytes: last.payload.length,
+      snapshotBytes: snapshot.length,
+      deltaBytes: deltaJson.length,
+      deltaOverSnapshot: Number((deltaJson.length / snapshot.length).toFixed(4)),
+    });
+  }
+  const metrics = store.metrics();
+  store.close();
+  return { kind: "tuning_delta_ratio", ratios, metrics };
+}
+
+/** Adversarial: all-locals-dirty every step. */
+function adversarialAllDirty() {
+  const store = new Store(dbFile(), "optimized");
+  store.putArtifact("hash", "{}");
+  store.createExecution("adv", "hash", "owner-1", Date.now() + 60_000);
+  const locals = 64;
+  for (let revision = 1; revision <= 40; revision++) {
+    const snapshot = dummy("adv", revision, locals);
+    const deltaJson = JSON.stringify({
+      frames: [
+        {
+          index: 0,
+          pc: revision,
+          locals: Array.from({ length: locals }, (_, slot) => ({
+            slot,
+            value: { t: "number", v: revision * 100 + slot },
+          })),
+        },
+      ],
+    });
+    store.commitCheckpoint("adv", revision, snapshot, "runnable", "owner-1", {
+      kind: revision === 1 ? "snapshot" : "delta",
+      materialize: revision === 1,
+      deltaJson,
+    });
+  }
+  const plan = store.recoverPlan("adv");
+  const metrics = store.metrics();
+  store.close();
+  return { kind: "adversarial_all_dirty", plan, metrics };
+}
+
+async function smokeHealthy(persist: PersistMode, iters: number) {
+  const artifact = canonicalStringify(compile(FIRST, { filename: "first.ts" }));
   const started = performance.now();
   for (let i = 0; i < iters; i++) {
     const result = await startExecution({
@@ -80,98 +158,26 @@ async function healthyPath(label: string, source: string, persist: PersistMode, 
       artifactJson: artifact,
       persist,
       executionId: `exec-${i}`,
-      effects: label === "first-example" ? { generate: 42 } : { a: 1, b: 2, c: 3, d: 4 },
+      effects: { generate: 42 },
     });
     if (result.status !== "completed") {
-      throw new Error(`${label} ${persist} status ${result.status}`);
+      throw new Error(result.status);
     }
   }
-  const ms = performance.now() - started;
   return {
-    host: "node",
+    kind: "internal_healthy_smoke",
     storage: persist,
-    workload: label,
     iters,
-    ms: Number(ms.toFixed(2)),
-    perSec: Number((iters / (ms / 1000)).toFixed(2)),
+    ms: Number((performance.now() - started).toFixed(2)),
   };
 }
 
-function recoveryVsForeignWal(foreignCount: number) {
-  const dbPath = dbFile();
-  const store = new Store(dbPath, "optimized");
-  store.putArtifact("hash", "{}");
-  store.beginGroup();
-  for (let i = 0; i < foreignCount; i++) {
-    const id = `foreign-${i}`;
-    store.createExecution(id, "hash", "owner-1", Date.now() + 60_000);
-    store.commitCheckpoint(id, 1, dummy(id, 1, 4), "runnable", "owner-1", {
-      kind: "snapshot",
-      materialize: true,
-    });
-  }
-  store.createExecution("target", "hash", "owner-1", Date.now() + 60_000);
-  store.commitCheckpoint("target", 1, dummy("target", 1, 4), "runnable", "owner-1", {
-    kind: "snapshot",
-    materialize: true,
-  });
-  store.endGroup();
-  const started = performance.now();
-  const saved = store.getContinuation("target");
-  const ms = performance.now() - started;
-  const plan = store.recoverPlan("target");
-  const retainedWal = store.retainedWalBytes();
-  const ownWal = store.retainedWalBytes("target");
-  store.close();
-  if (!saved || !plan) {
-    throw new Error("missing target continuation");
-  }
-  return {
-    host: "node",
-    storage: "optimized",
-    foreignCount,
-    recoverMs: Number(ms.toFixed(4)),
-    suffixLength: plan.suffixLength,
-    usedIndex: plan.usedIndex,
-    retainedWalBytes: retainedWal,
-    liveStateBytes: ownWal,
-  };
-}
-
-function recoveryVsLiveState(locals: number) {
-  const dbPath = dbFile();
-  const store = new Store(dbPath, "optimized");
-  store.putArtifact("hash", "{}");
-  store.createExecution("live", "hash", "owner-1", Date.now() + 60_000);
-  store.commitCheckpoint("live", 1, dummy("live", 1, locals), "runnable", "owner-1", {
-    kind: "snapshot",
-    materialize: true,
-  });
-  const started = performance.now();
-  const saved = store.getContinuation("live");
-  const ms = performance.now() - started;
-  const liveStateBytes = saved ? saved.json.length : 0;
-  const retainedWal = store.retainedWalBytes("live");
-  store.close();
-  return {
-    host: "node",
-    storage: "optimized",
-    locals,
-    recoverMs: Number(ms.toFixed(4)),
-    liveStateBytes,
-    retainedWalBytes: retainedWal,
-  };
-}
-
-const rows = [];
-rows.push(await healthyPath("first-example", FIRST, "naive", 20));
-rows.push(await healthyPath("first-example", FIRST, "optimized", 20));
-rows.push(await healthyPath("larger-locals", LARGE, "naive", 20));
-rows.push(await healthyPath("larger-locals", LARGE, "optimized", 20));
-rows.push(recoveryVsForeignWal(50));
-rows.push(recoveryVsForeignWal(400));
-rows.push(recoveryVsLiveState(4));
-rows.push(recoveryVsLiveState(256));
-
-console.log("tcc persist bench (internal; not a paper claim)");
+console.log("internal persist bench — not for publication; see bench/README.md");
+const rows = [
+  microApplyDelta(5_000),
+  tuningDeltaRatio(),
+  adversarialAllDirty(),
+  await smokeHealthy("naive", 10),
+  await smokeHealthy("optimized", 10),
+];
 console.log(JSON.stringify(rows, null, 2));
