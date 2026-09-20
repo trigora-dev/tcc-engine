@@ -27,7 +27,7 @@ pub struct WaitRegistration {
 pub struct ChildSpec {
     pub invoke_id: String,
     pub child_execution_id: String,
-    pub flow_name: String,
+    pub program_name: String,
     pub input: Option<Value>,
 }
 

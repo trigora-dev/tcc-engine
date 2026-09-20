@@ -554,7 +554,7 @@ impl Engine {
     }
 
     fn yield_invoke(&mut self) -> Result<Option<EngineOutcome>, CoreError> {
-        let flow_name = expect_string(self.pop()?)?;
+        let program_name = expect_string(self.pop()?)?;
         let pc = self.frame()?.pc;
         let invoke_id = format!("{}:invoke:{}", self.continuation.execution_id, pc);
         let child_execution_id = format!("child:{invoke_id}");
@@ -569,7 +569,7 @@ impl Engine {
             child: ChildSpec {
                 invoke_id,
                 child_execution_id,
-                flow_name,
+                program_name,
                 input: None,
             },
         };

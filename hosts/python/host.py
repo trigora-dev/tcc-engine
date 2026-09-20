@@ -2,6 +2,7 @@ from crash import maybe_crash
 from tcc_engine.host import (
     encode_value,
     map_effects,
+    run_batch_on_store,
     resume_execution as _resume_execution,
     start_execution as _start_execution,
 )

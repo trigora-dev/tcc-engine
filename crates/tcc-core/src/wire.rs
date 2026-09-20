@@ -133,7 +133,10 @@ fn request_to_json(request: &HostRequest) -> Result<Json, CoreError> {
                 "child_execution_id".into(),
                 Json::String(child.child_execution_id.clone()),
             );
-            map.insert("flow_name".into(), Json::String(child.flow_name.clone()));
+            map.insert(
+                "program_name".into(),
+                Json::String(child.program_name.clone()),
+            );
             map.insert(
                 "input".into(),
                 match &child.input {

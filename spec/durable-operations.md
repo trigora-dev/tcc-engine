@@ -52,6 +52,8 @@ A child is a separate execution: its own id, artifact, continuation, and journal
 
 The parent records a child wait and suspends. A logical invoke id creates at most one child. The child's terminal result is delivered to the parent at most once.
 
+The engine assigns stable `invoke_id` and `child_execution_id` before the host writes. Those identities plus the parent wait checkpoint and child execution row are one logical transition: they must become durable together or not at all. Hosts may also group that unit with unrelated checkpoints in one commit. That coordination is optional host architecture; TCC correctness is still persist/confirm of a logical continuation.
+
 ## Cancellation
 
 Cancellation is a host-delivered terminal transition. It takes effect at the next durable boundary. It does not interrupt an in-flight external operation.

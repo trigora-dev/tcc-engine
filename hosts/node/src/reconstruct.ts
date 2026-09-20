@@ -3,7 +3,7 @@
 export const MATERIALIZE_EVERY = 32;
 
 export type PersistKind = "snapshot" | "delta";
-export type PersistMode = "naive" | "optimized";
+export type PersistMode = "naive" | "optimized" | "replay";
 
 export type TaggedValue = { t: string; v?: unknown };
 

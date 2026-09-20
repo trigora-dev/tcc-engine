@@ -25,6 +25,35 @@ export type CheckpointCommit = {
   materialize?: boolean;
 };
 
+export type CreateChildOp = {
+  invokeId: string;
+  parentExecutionId: string;
+  childExecutionId: string;
+  flowName: string;
+  artifactHash: string;
+  ownerToken: string;
+  leaseUntil: number;
+};
+
+export type CompleteChildOp = {
+  invokeId: string;
+  resultJson: string;
+};
+
+export type DurabilityOp =
+  | ({ type: "checkpoint" } & CheckpointCommit)
+  | ({ type: "createChild" } & CreateChildOp)
+  | ({ type: "completeChild" } & CompleteChildOp);
+
+export type ChildRow = {
+  invoke_id: string;
+  parent_execution_id: string;
+  child_execution_id: string;
+  flow_name: string;
+  status: string;
+  result_json: string | null;
+};
+
 export type EffectRow = {
   execution_id: string;
   key: string;
@@ -49,11 +78,49 @@ export type WaitRow = {
   status: string;
 };
 
+export type StoreMetrics = {
+  bytesWritten: number;
+  snapshotCount: number;
+  deltaCount: number;
+  commitCount: number;
+  batchOccupancySamples: number[];
+  /** Sum of payload bytes written as deltas (optimized path). */
+  deltaBytesWritten: number;
+};
+
+export type StoreProfile = { sqlApplyMs: number; commitMs: number };
+
 export class Store {
   readonly db: DatabaseSync;
   readonly persist: PersistMode;
   private groupHeld = 0;
-  private pending: CheckpointCommit[] = [];
+  private pending: DurabilityOp[] = [];
+  private createdChildren: CreateChildOp[] = [];
+  private metricBytesWritten = 0;
+  private metricSnapshotCount = 0;
+  private metricDeltaCount = 0;
+  private metricCommitCount = 0;
+  private metricDeltaBytesWritten = 0;
+  private metricBatchOccupancySamples: number[] = [];
+  private profile: StoreProfile | undefined;
+  private readonly statements = new Map<string, ReturnType<DatabaseSync["prepare"]>>();
+
+  private statement(sql: string): ReturnType<DatabaseSync["prepare"]> {
+    let prepared = this.statements.get(sql);
+    if (!prepared) {
+      prepared = this.db.prepare(sql);
+      this.statements.set(sql, prepared);
+    }
+    return prepared;
+  }
+
+  enableProfile(): void {
+    this.profile = { sqlApplyMs: 0, commitMs: 0 };
+  }
+
+  profileMetrics(): StoreProfile | undefined {
+    return this.profile ? { ...this.profile } : undefined;
+  }
 
   constructor(path: string, persist: PersistMode = persistModeFromEnv()) {
     this.persist = persist;
@@ -138,6 +205,26 @@ export class Store {
     this.db.close();
   }
 
+  resetMetrics(): void {
+    this.metricBytesWritten = 0;
+    this.metricSnapshotCount = 0;
+    this.metricDeltaCount = 0;
+    this.metricCommitCount = 0;
+    this.metricDeltaBytesWritten = 0;
+    this.metricBatchOccupancySamples = [];
+  }
+
+  metrics(): StoreMetrics {
+    return {
+      bytesWritten: this.metricBytesWritten,
+      snapshotCount: this.metricSnapshotCount,
+      deltaCount: this.metricDeltaCount,
+      commitCount: this.metricCommitCount,
+      batchOccupancySamples: this.metricBatchOccupancySamples.slice(),
+      deltaBytesWritten: this.metricDeltaBytesWritten,
+    };
+  }
+
   putArtifact(hash: string, json: string): void {
     this.db.prepare("INSERT OR IGNORE INTO artifacts(hash, json) VALUES (?, ?)").run(hash, json);
   }
@@ -158,7 +245,7 @@ export class Store {
   }
 
   getExecution(id: string): ExecutionRow | undefined {
-    return this.db.prepare("SELECT * FROM executions WHERE id = ?").get(id) as ExecutionRow | undefined;
+    return this.statement("SELECT * FROM executions WHERE id = ?").get(id) as ExecutionRow | undefined;
   }
 
   takeLease(id: string, ownerToken: string, leaseUntil: number, now: number): void {
@@ -175,6 +262,9 @@ export class Store {
   }
 
   getContinuation(executionId: string): { revision: number; json: string } | undefined {
+    if (this.persist === "replay") {
+      return undefined;
+    }
     if (this.persist === "optimized") {
       const reconstructed = this.reconstruct(executionId);
       if (reconstructed) {
@@ -188,6 +278,22 @@ export class Store {
 
   beginGroup(): void {
     this.groupHeld += 1;
+  }
+
+  isGrouping(): boolean {
+    return this.groupHeld > 0;
+  }
+
+  abortGroup(): void {
+    this.groupHeld = 0;
+    this.pending = [];
+    this.createdChildren = [];
+  }
+
+  takeCreatedChildren(): CreateChildOp[] {
+    const created = this.createdChildren;
+    this.createdChildren = [];
+    return created;
   }
 
   endGroup(): void {
@@ -206,15 +312,71 @@ export class Store {
     }
     const batch = this.pending;
     this.pending = [];
+    const before = [this.metricBytesWritten, this.metricSnapshotCount, this.metricDeltaCount, this.metricDeltaBytesWritten];
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      for (const write of batch) {
-        this.applyCheckpoint(write);
+      const applyStart = this.profile ? performance.now() : 0;
+      const created: CreateChildOp[] = [];
+      for (const op of batch) {
+        if (op.type === "createChild") {
+          this.applyCreateChild(op);
+          created.push(op);
+        } else if (op.type === "completeChild") {
+          this.applyCompleteChild(op);
+        } else {
+          this.applyCheckpoint(op);
+        }
       }
+      if (this.profile) this.profile.sqlApplyMs += performance.now() - applyStart;
+      const commitStart = this.profile ? performance.now() : 0;
       this.db.exec("COMMIT");
+      if (this.profile) this.profile.commitMs += performance.now() - commitStart;
+      this.metricCommitCount += 1;
+      this.metricBatchOccupancySamples.push(batch.filter((op) => op.type === "checkpoint").length);
+      this.createdChildren.push(...created);
     } catch (err) {
       this.db.exec("ROLLBACK");
+      [this.metricBytesWritten, this.metricSnapshotCount, this.metricDeltaCount, this.metricDeltaBytesWritten] = before;
       throw err;
+    }
+  }
+
+  enqueueCheckpoint(
+    executionId: string,
+    revision: number,
+    json: string,
+    status: string,
+    ownerToken: string,
+    extras: {
+      kind?: PersistKind;
+      deltaJson?: string | null;
+      materialize?: boolean;
+    } = {},
+  ): void {
+    this.pending.push({
+      type: "checkpoint",
+      executionId,
+      revision,
+      json,
+      status,
+      ownerToken,
+      kind: extras.kind,
+      deltaJson: extras.deltaJson,
+      materialize: extras.materialize,
+    });
+  }
+
+  enqueueCreateChild(op: CreateChildOp): void {
+    this.pending.push({ type: "createChild", ...op });
+  }
+
+  enqueueCompleteChild(op: CompleteChildOp): void {
+    this.pending.push({ type: "completeChild", ...op });
+  }
+
+  flushIfUngrouped(): void {
+    if (this.groupHeld === 0) {
+      this.flushGroup();
     }
   }
 
@@ -230,19 +392,8 @@ export class Store {
       materialize?: boolean;
     } = {},
   ): void {
-    this.pending.push({
-      executionId,
-      revision,
-      json,
-      status,
-      ownerToken,
-      kind: extras.kind,
-      deltaJson: extras.deltaJson,
-      materialize: extras.materialize,
-    });
-    if (this.groupHeld === 0) {
-      this.flushGroup();
-    }
+    this.enqueueCheckpoint(executionId, revision, json, status, ownerToken, extras);
+    this.flushIfUngrouped();
   }
 
   execHead(executionId: string):
@@ -254,7 +405,7 @@ export class Store {
         status: string;
       }
     | undefined {
-    return this.db.prepare("SELECT * FROM exec_head WHERE execution_id = ?").get(executionId) as
+    return this.statement("SELECT * FROM exec_head WHERE execution_id = ?").get(executionId) as
       | {
           execution_id: string;
           revision: number;
@@ -367,6 +518,9 @@ export class Store {
     if (current.owner_token !== write.ownerToken) {
       throw new Error(`execution \`${write.executionId}\` is owned by another worker`);
     }
+    if (this.persist === "replay" && current.revision >= write.revision) {
+      return;
+    }
     if (current.revision !== write.revision - 1) {
       throw new Error(
         `revision conflict for \`${write.executionId}\`: expected ${write.revision - 1}, found ${current.revision}`,
@@ -374,11 +528,13 @@ export class Store {
     }
     if (this.persist === "naive") {
       this.applyNaiveCheckpoint(write, current.revision);
+    } else if (this.persist === "replay") {
+      this.applyReplayCheckpoint(write);
     } else {
       this.applyOptimizedCheckpoint(write);
     }
-    const execUpdated = this.db
-      .prepare(
+    const execUpdated = this
+      .statement(
         "UPDATE executions SET revision = ?, status = ? WHERE id = ? AND revision = ? AND owner_token = ?",
       )
       .run(write.revision, write.status, write.executionId, current.revision, write.ownerToken);
@@ -388,23 +544,33 @@ export class Store {
   }
 
   private applyNaiveCheckpoint(write: CheckpointCommit, currentRevision: number): void {
-    const existing = this.db
-      .prepare("SELECT revision FROM continuations WHERE execution_id = ?")
+    this.metricBytesWritten += Buffer.byteLength(write.json);
+    this.metricSnapshotCount += 1;
+    const existing = this
+      .statement("SELECT revision FROM continuations WHERE execution_id = ?")
       .get(write.executionId) as { revision: number } | undefined;
     if (!existing) {
-      this.db
-        .prepare("INSERT INTO continuations(execution_id, revision, json) VALUES (?, ?, ?)")
+      this
+        .statement("INSERT INTO continuations(execution_id, revision, json) VALUES (?, ?, ?)")
         .run(write.executionId, write.revision, write.json);
       return;
     }
-    const updated = this.db
-      .prepare(
+    const updated = this
+      .statement(
         "UPDATE continuations SET revision = ?, json = ? WHERE execution_id = ? AND revision = ?",
       )
       .run(write.revision, write.json, write.executionId, currentRevision);
     if (updated.changes !== 1) {
       throw new Error(`continuation cas failed for \`${write.executionId}\``);
     }
+  }
+
+  private applyReplayCheckpoint(write: CheckpointCommit): void {
+    const payload = JSON.stringify({ revision: write.revision, status: write.status });
+    this.metricBytesWritten += Buffer.byteLength(payload);
+    this.statement(
+      "INSERT INTO persist_wal(execution_id, revision, kind, payload) VALUES (?, ?, 'history', ?)",
+    ).run(write.executionId, write.revision, payload);
   }
 
   private applyOptimizedCheckpoint(write: CheckpointCommit): void {
@@ -417,8 +583,15 @@ export class Store {
     const kind: PersistKind = forceSnapshot ? "snapshot" : "delta";
     const payload =
       kind === "snapshot" ? write.json : (write.deltaJson ?? write.json);
-    const inserted = this.db
-      .prepare(
+    this.metricBytesWritten += Buffer.byteLength(payload);
+    if (kind === "snapshot") {
+      this.metricSnapshotCount += 1;
+    } else {
+      this.metricDeltaCount += 1;
+      this.metricDeltaBytesWritten += Buffer.byteLength(payload);
+    }
+    const inserted = this
+      .statement(
         "INSERT INTO persist_wal(execution_id, revision, kind, payload) VALUES (?, ?, ?, ?)",
       )
       .run(write.executionId, write.revision, kind, payload);
@@ -426,8 +599,8 @@ export class Store {
     if (snapshotRevision === undefined) {
       throw new Error(`delta without snapshot for \`${write.executionId}\``);
     }
-    this.db
-      .prepare(
+    this
+      .statement(
         `INSERT INTO exec_head(execution_id, revision, snapshot_revision, wal_seq, status)
          VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(execution_id) DO UPDATE SET
@@ -553,44 +726,54 @@ export class Store {
     this.db.prepare("UPDATE timers SET status = 'resolved' WHERE execution_id = ?").run(executionId);
   }
 
+  private applyCreateChild(op: CreateChildOp): void {
+    this.statement(
+      `INSERT INTO children(invoke_id, parent_execution_id, child_execution_id, flow_name, status, result_json)
+       VALUES (?, ?, ?, ?, 'pending', NULL)
+       ON CONFLICT(invoke_id) DO NOTHING`,
+    ).run(op.invokeId, op.parentExecutionId, op.childExecutionId, op.flowName);
+    this.statement(
+      `INSERT OR IGNORE INTO executions(id, artifact_hash, revision, status, owner_token, lease_until)
+       VALUES (?, ?, 0, 'runnable', ?, ?)`,
+    ).run(op.childExecutionId, op.artifactHash, op.ownerToken, op.leaseUntil);
+  }
+
+  private applyCompleteChild(op: CompleteChildOp): void {
+    this.statement(
+      "UPDATE children SET status = 'completed', result_json = ? WHERE invoke_id = ?",
+    ).run(op.resultJson, op.invokeId);
+  }
+
   upsertChild(
     invokeId: string,
     parentExecutionId: string,
     childExecutionId: string,
     flowName: string,
   ): void {
-    this.db
-      .prepare(
-        `INSERT INTO children(invoke_id, parent_execution_id, child_execution_id, flow_name, status, result_json)
-         VALUES (?, ?, ?, ?, 'pending', NULL)
-         ON CONFLICT(invoke_id) DO NOTHING`,
-      )
-      .run(invokeId, parentExecutionId, childExecutionId, flowName);
+    this.enqueueCreateChild({
+      invokeId,
+      parentExecutionId,
+      childExecutionId,
+      flowName,
+      artifactHash: "",
+      ownerToken: "",
+      leaseUntil: 0,
+    });
+    this.flushIfUngrouped();
   }
 
-  getChild(invokeId: string): {
-    invoke_id: string;
-    parent_execution_id: string;
-    child_execution_id: string;
-    flow_name: string;
-    status: string;
-    result_json: string | null;
-  } | undefined {
-    return this.db.prepare("SELECT * FROM children WHERE invoke_id = ?").get(invokeId) as
-      | {
-          invoke_id: string;
-          parent_execution_id: string;
-          child_execution_id: string;
-          flow_name: string;
-          status: string;
-          result_json: string | null;
-        }
+  getChild(invokeId: string): ChildRow | undefined {
+    return this.statement("SELECT * FROM children WHERE invoke_id = ?").get(invokeId) as ChildRow | undefined;
+  }
+
+  getChildByExecutionId(childExecutionId: string): ChildRow | undefined {
+    return this.statement("SELECT * FROM children WHERE child_execution_id = ?").get(childExecutionId) as
+      | ChildRow
       | undefined;
   }
 
   completeChild(invokeId: string, resultJson: string): void {
-    this.db
-      .prepare("UPDATE children SET status = 'completed', result_json = ? WHERE invoke_id = ?")
-      .run(resultJson, invokeId);
+    this.enqueueCompleteChild({ invokeId, resultJson });
+    this.flushIfUngrouped();
   }
 }

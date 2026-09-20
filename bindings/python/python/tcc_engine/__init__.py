@@ -24,6 +24,7 @@ __all__ = [
     "compile",
     "encode_value",
     "map_effects",
+    "run_batch_on_store",
     "resume_execution",
     "start_execution",
 ]
@@ -38,7 +39,7 @@ def __getattr__(name: str):
         from tcc_engine.store import Store
 
         return Store
-    if name in {"start_execution", "resume_execution", "encode_value", "map_effects"}:
+    if name in {"start_execution", "resume_execution", "run_batch_on_store", "encode_value", "map_effects"}:
         from tcc_engine import host
 
         return getattr(host, name)

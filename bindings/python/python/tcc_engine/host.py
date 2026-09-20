@@ -56,36 +56,145 @@ def start_execution(
 ) -> dict[str, Any]:
     store = Store(db_path, persist)
     try:
-        import time
-
-        envelope = json.loads(artifact_json)["envelope"]
-        hash_ = envelope["artifact_hash"]
-        store.put_artifact(hash_, artifact_json)
-        store.create_execution(execution_id, hash_, owner_token, int(time.time() * 1000) + lease_ms)
-        engine = EngineBinding(artifact_json, execution_id)
-        return drive(
+        return run_on_store(
             store,
-            engine,
-            {
-                "db_path": db_path,
-                "artifact_json": artifact_json,
-                "execution_id": execution_id,
-                "owner_token": owner_token,
-                "run_effect": run_effect,
-                "effects": effects,
-                "event_payload": event_payload,
-                "budget": budget,
-                "auto_deliver_event": auto_deliver_event,
-                "effect_log_path": effect_log_path,
-                "lease_ms": lease_ms,
-                "fail_counts": fail_counts,
-                "child_artifacts": child_artifacts,
-                "cancel": cancel,
-                "crash": crash,
-            },
+            artifact_json=artifact_json,
+            execution_id=execution_id,
+            run_effect=run_effect,
+            effects=effects,
+            event_payload=event_payload,
+            owner_token=owner_token,
+            lease_ms=lease_ms,
+            budget=budget,
+            auto_deliver_event=auto_deliver_event,
+            effect_log_path=effect_log_path,
+            fail_counts=fail_counts,
+            child_artifacts=child_artifacts,
+            cancel=cancel,
+            crash=crash,
+            db_path=db_path,
         )
     finally:
         store.close()
+
+
+def run_on_store(
+    store: Store,
+    *,
+    artifact_json: str,
+    execution_id: str = "first",
+    run_effect: EffectRunner | None = None,
+    effects: FakeEffects | None = None,
+    event_payload: Any = None,
+    owner_token: str = "owner-1",
+    lease_ms: int = 60_000,
+    budget: int = 256,
+    auto_deliver_event: bool = True,
+    effect_log_path: str | None = None,
+    fail_counts: dict[str, int] | None = None,
+    child_artifacts: dict[str, str] | None = None,
+    cancel: bool = False,
+    crash: CrashHook | None = None,
+    db_path: str = "",
+) -> dict[str, Any]:
+    if store.is_grouping():
+        raise RuntimeError("run_on_store cannot acknowledge checkpoints inside an open group; use run_batch_on_store")
+    engine, options = _prepare_on_store(
+        store,
+        artifact_json=artifact_json,
+        execution_id=execution_id,
+        run_effect=run_effect,
+        effects=effects,
+        event_payload=event_payload,
+        owner_token=owner_token,
+        lease_ms=lease_ms,
+        budget=budget,
+        auto_deliver_event=auto_deliver_event,
+        effect_log_path=effect_log_path,
+        fail_counts=fail_counts,
+        child_artifacts=child_artifacts,
+        cancel=cancel,
+        crash=crash,
+        db_path=db_path,
+    )
+    return drive(store, engine, options)
+
+
+def _prepare_on_store(store: Store, **options: Any) -> tuple[EngineBinding, dict[str, Any]]:
+    import time
+
+    artifact_json = options["artifact_json"]
+    execution_id = options.get("execution_id", "first")
+    owner_token = options.get("owner_token", "owner-1")
+    lease_ms = options.get("lease_ms", 60_000)
+    envelope = json.loads(artifact_json)["envelope"]
+    hash_ = envelope["artifact_hash"]
+    store.put_artifact(hash_, artifact_json)
+    if store.get_execution(execution_id) is None:
+        store.create_execution(execution_id, hash_, owner_token, int(time.time() * 1000) + lease_ms)
+    engine = EngineBinding(artifact_json, execution_id)
+    return engine, {**options, "execution_id": execution_id, "owner_token": owner_token, "fail_counts": dict(options.get("fail_counts") or {})}
+
+
+def run_batch_on_store(
+    store: Store,
+    inputs: list[dict[str, Any]],
+    before_commit: Callable[[], None] | None = None,
+    after_commit: Callable[[], None] | None = None,
+) -> list[dict[str, Any]]:
+    """Advance one checkpoint per execution per round; confirm only after the shared commit."""
+    if store.is_grouping():
+        raise RuntimeError("batch runner requires a store without an open group")
+    sessions = [_prepare_on_store(store, **item) for item in inputs]
+    results: list[dict[str, Any] | None] = [None] * len(inputs)
+    parent_count = len(inputs)
+    while any(result is None for result in results):
+        queued: list[tuple[int, int]] = []
+        store.begin_group()
+        try:
+            for i, (engine, options) in enumerate(sessions):
+                if results[i] is not None:
+                    continue
+                result = drive(store, engine, options, defer_checkpoint=True)
+                if isinstance(result, dict) and "queuedRevision" in result:
+                    queued.append((i, result["queuedRevision"]))
+                elif not (isinstance(result, dict) and result.get("activateChild")):
+                    results[i] = result
+            if queued and before_commit:
+                before_commit()
+            store.end_group()
+        except Exception:
+            store.abort_group()
+            raise
+        if queued and after_commit:
+            after_commit()
+        for i, revision in queued:
+            engine = sessions[i][0]
+            engine.apply_response(json.dumps({"type": "persist_confirmed", "revision": revision}))
+        for created in store.take_created_children():
+            child_id = created["child_execution_id"]
+            if any(options.get("execution_id") == child_id for _, options in sessions):
+                continue
+            parent = next(
+                (options for _, options in sessions if options.get("execution_id") == created["parent_execution_id"]),
+                None,
+            )
+            artifact_json = (parent or {}).get("child_artifacts", {}).get(created["flow_name"]) if parent else None
+            if not artifact_json:
+                raise RuntimeError(f"no child artifact for `{created['flow_name']}`")
+            sessions.append(
+                _prepare_on_store(
+                    store,
+                    **{
+                        **parent,
+                        "execution_id": child_id,
+                        "artifact_json": artifact_json,
+                        "cancel": False,
+                    },
+                )
+            )
+            results.append(None)
+    return [result for result in results[:parent_count] if result is not None]
 
 
 def resume_execution(
@@ -158,14 +267,18 @@ def resume_execution(
         store.close()
 
 
-def drive(store: Store, engine: EngineBinding, options: dict[str, Any]) -> dict[str, Any]:
+def drive(store: Store, engine: EngineBinding, options: dict[str, Any], defer_checkpoint: bool = False) -> Any:
+    if store.is_grouping() and not defer_checkpoint:
+        raise RuntimeError("single-execution drive cannot run inside an open checkpoint group")
     run_effect = _effect_runner(options)
     budget = options.get("budget") or 256
-    fail_counts = dict(options.get("fail_counts") or {})
+    if options.get("fail_counts") is None:
+        options["fail_counts"] = {}
+    fail_counts = options["fail_counts"]
     state = {"engine": engine}
     while True:
         outcome = json.loads(state["engine"].run_until_host(budget))
-        next_step = handle_outcome(store, state, outcome, run_effect, fail_counts, options)
+        next_step = handle_outcome(store, state, outcome, run_effect, fail_counts, options, defer_checkpoint)
         if next_step != "continue":
             return next_step
 
@@ -177,6 +290,7 @@ def handle_outcome(
     run_effect: EffectRunner,
     fail_counts: dict[str, int],
     options: dict[str, Any],
+    defer_checkpoint: bool = False,
 ) -> Any:
     crash = _crash(options)
     kind = outcome.get("type")
@@ -189,7 +303,7 @@ def handle_outcome(
     if kind == "budget_exhausted":
         raise RuntimeError("instruction budget exhausted")
     if kind == "suspended":
-        return deliver_wake(store, state, options)
+        return deliver_wake(store, state, options, defer_checkpoint)
     if kind == "host":
         request = outcome["request"]
         rtype = request.get("type")
@@ -200,24 +314,47 @@ def handle_outcome(
         if rtype == "register_wait":
             return register_wait(store, state["engine"], request, options["execution_id"], crash)
         if rtype == "persist_checkpoint":
-            return persist_checkpoint(store, state["engine"], request, options, crash)
+            return persist_checkpoint(store, state["engine"], request, options, crash, defer_checkpoint)
         if rtype == "register_timer":
             store.upsert_timer(options["execution_id"], int(request.get("resume_at_ms") or 0))
             crash("after_register_timer", None)
             state["engine"].apply_response(json.dumps({"type": "ack"}))
             return "continue"
         if rtype == "create_child":
-            store.upsert_child(
-                str(request["invoke_id"]),
-                options["execution_id"],
-                str(request["child_execution_id"]),
-                str(request["flow_name"]),
-            )
-            crash("after_create_child", None)
-            state["engine"].apply_response(json.dumps({"type": "ack"}))
-            return "continue"
+            return enqueue_child(store, state["engine"], request, options, crash)
         raise RuntimeError(f"unsupported host request `{rtype}`")
     raise RuntimeError("unknown engine outcome")
+
+
+def enqueue_child(
+    store: Store,
+    engine: EngineBinding,
+    request: dict[str, Any],
+    options: dict[str, Any],
+    crash: CrashHook,
+) -> str:
+    program_name = str(request["program_name"])
+    artifact_json = (options.get("child_artifacts") or {}).get(program_name)
+    if not artifact_json:
+        raise RuntimeError(f"no child artifact for `{program_name}`")
+    artifact_hash = json.loads(artifact_json)["envelope"]["artifact_hash"]
+    store.put_artifact(artifact_hash, artifact_json)
+    import time
+
+    store.enqueue_create_child(
+        {
+            "invoke_id": str(request["invoke_id"]),
+            "parent_execution_id": options["execution_id"],
+            "child_execution_id": str(request["child_execution_id"]),
+            "flow_name": program_name,
+            "artifact_hash": artifact_hash,
+            "owner_token": options["owner_token"],
+            "lease_until": int(time.time() * 1000) + (options.get("lease_ms") or 60_000),
+        }
+    )
+    crash("after_create_child", None)
+    engine.apply_response(json.dumps({"type": "ack"}))
+    return "continue"
 
 
 def execute_effect(
@@ -283,16 +420,22 @@ def register_wait(
 
 
 def persist_checkpoint(
-    store: Store, engine: EngineBinding, request: dict[str, Any], options: dict[str, Any], crash: CrashHook
-) -> str:
+    store: Store, engine: EngineBinding, request: dict[str, Any], options: dict[str, Any], crash: CrashHook,
+    defer_checkpoint: bool = False,
+) -> Any:
     crash("before_persist_checkpoint", None)
     revision = int(request["revision"])
+    if store.persist == "replay":
+        current = store.get_execution(options["execution_id"])
+        if current is not None and current["revision"] >= revision:
+            engine.apply_response(json.dumps({"type": "persist_confirmed", "revision": revision}))
+            return "continue"
     parsed = json.loads(engine.continuation_json())
     parsed["revision"] = revision
     json_text = json.dumps(parsed, separators=(",", ":"))
     kind = "delta" if request.get("kind") == "delta" else "snapshot"
     delta = request.get("delta")
-    store.commit_checkpoint(
+    store.enqueue_checkpoint(
         options["execution_id"],
         revision,
         json_text,
@@ -302,6 +445,16 @@ def persist_checkpoint(
         delta_json=None if delta is None else json.dumps(delta, separators=(",", ":")),
         materialize=bool(request.get("materialize")) or kind == "snapshot",
     )
+    if parsed["status"] == "completed":
+        related = store.get_child_by_execution_id(options["execution_id"])
+        if related is not None:
+            store.enqueue_complete_child(
+                related["invoke_id"],
+                json.dumps(parsed.get("result") or {"t": "undefined"}, separators=(",", ":")),
+            )
+    if defer_checkpoint:
+        return {"queuedRevision": revision}
+    store.flush_if_ungrouped()
     crash("after_persist_checkpoint", None)
     if parsed["status"] == "suspended":
         crash("after_wait_checkpoint", None)
@@ -309,7 +462,9 @@ def persist_checkpoint(
     return "continue"
 
 
-def deliver_wake(store: Store, state: dict[str, EngineBinding], options: dict[str, Any]) -> Any:
+def deliver_wake(
+    store: Store, state: dict[str, EngineBinding], options: dict[str, Any], defer_checkpoint: bool = False
+) -> Any:
     crash = _crash(options)
     if options.get("cancel"):
         crash("before_cancel", None)
@@ -327,12 +482,16 @@ def deliver_wake(store: Store, state: dict[str, EngineBinding], options: dict[st
         return "continue"
     if wait_kind == "child":
         invoke_id = ((continuation.get("pending") or {}).get("kind") or {}).get("invoke_id")
-        return deliver_child(store, state, options, invoke_id)
+        return deliver_child(store, state, options, invoke_id, defer_checkpoint)
     return deliver_event(store, state["engine"], options)
 
 
 def deliver_child(
-    store: Store, state: dict[str, EngineBinding], options: dict[str, Any], invoke_id: str | None
+    store: Store,
+    state: dict[str, EngineBinding],
+    options: dict[str, Any],
+    invoke_id: str | None,
+    defer_checkpoint: bool = False,
 ) -> Any:
     crash = _crash(options)
     if not invoke_id:
@@ -346,6 +505,8 @@ def deliver_child(
             json.dumps({"type": "child_result", "value": json.loads(child["result_json"])})
         )
         return "continue"
+    if store.is_grouping() or defer_checkpoint:
+        return {"activateChild": True}
     artifact_json = (options.get("child_artifacts") or {}).get(child["flow_name"])
     if not artifact_json:
         raise RuntimeError(f"no child artifact for `{child['flow_name']}`")

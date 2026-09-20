@@ -7,6 +7,10 @@ import { Store, type PersistMode } from "./store.ts";
 export type FakeEffects = Record<string, unknown>;
 export type EffectRunner = (key: string) => unknown;
 
+export async function ensureEngineLoaded(wasmPath?: string): Promise<void> {
+  await loadEngine(wasmPath);
+}
+
 export type RunOptions = {
   dbPath: string;
   wasmPath?: string;
@@ -26,6 +30,18 @@ export type RunOptions = {
   childArtifacts?: Record<string, string>;
   cancel?: boolean;
   persist?: PersistMode;
+  /** Give this execution its own WASM instance when several engines are in flight. */
+  isolatedEngine?: boolean;
+  profile?: PersistProfile;
+};
+
+export type PersistProfile = {
+  engineRequestMs: number;
+  continuationEncodeMs: number;
+  hostEncodeMs: number;
+  storeCommitMs: number;
+  persistConfirmedMs: number;
+  checkpoints: number;
 };
 
 export type ResumeOptions = Omit<RunOptions, "artifactJson"> & {
@@ -59,22 +75,101 @@ export async function startExecution(options: RunOptions): Promise<RunResult> {
   await loadEngine(options.wasmPath);
   const store = new Store(options.dbPath, options.persist);
   try {
-    const executionId = options.executionId ?? "first";
-    const ownerToken = options.ownerToken ?? "owner-1";
-    const envelope = JSON.parse(options.artifactJson) as { envelope: { artifact_hash: string } };
-    const hash = envelope.envelope.artifact_hash;
-    store.putArtifact(hash, options.artifactJson);
+    return runOnStore(store, options);
+  } finally {
+    store.close();
+  }
+}
+
+/** Drive one execution on an existing store (shared-DB / group-commit benches). */
+export function runOnStore(
+  store: Store,
+  options: RunOptions & { artifactJson: string },
+): RunResult {
+  if (store.isGrouping()) {
+    throw new Error("runOnStore cannot acknowledge checkpoints inside an open group; use runBatchOnStore");
+  }
+  const prepared = prepareOnStore(store, options);
+  return drive(store, prepared.engine, prepared.options);
+}
+
+function prepareOnStore(store: Store, options: RunOptions & { artifactJson: string }) {
+  const executionId = options.executionId ?? "first";
+  const ownerToken = options.ownerToken ?? "owner-1";
+  const envelope = JSON.parse(options.artifactJson) as { envelope: { artifact_hash: string } };
+  const hash = envelope.envelope.artifact_hash;
+  store.putArtifact(hash, options.artifactJson);
+  if (!store.getExecution(executionId)) {
     store.createExecution(executionId, hash, ownerToken, Date.now() + (options.leaseMs ?? 60_000));
-    const engine = new EngineBinding(options.artifactJson, executionId);
-    return drive(store, engine, {
+  }
+  const engine = new EngineBinding(options.artifactJson, executionId, options.isolatedEngine === true);
+  return {
+    engine,
+    options: {
       ...options,
       executionId,
       ownerToken,
       autoDeliverEvent: options.autoDeliverEvent ?? true,
-    });
-  } finally {
-    store.close();
+      failCounts: { ...(options.failCounts ?? {}) },
+    },
+  };
+}
+
+/** Cooperatively advance executions, committing each durability batch before acknowledgment. */
+export function runBatchOnStore(
+  store: Store,
+  inputs: Array<RunOptions & { artifactJson: string }>,
+  beforeCommit?: () => void,
+  afterCommit?: () => void,
+): RunResult[] {
+  if (store.isGrouping()) {
+    throw new Error("batch runner requires a store without an open group");
   }
+  const sessions = inputs.map((input) => prepareOnStore(store, { ...input, isolatedEngine: true }));
+  const results: Array<RunResult | undefined> = Array(inputs.length).fill(undefined);
+  while (results.some((result) => result === undefined)) {
+    const queued: Array<{ index: number; revision: number }> = [];
+    store.beginGroup();
+    try {
+      for (let i = 0; i < sessions.length; i++) {
+        if (results[i]) continue;
+        const session = sessions[i]!;
+        const result = drive(store, session.engine, session.options, true);
+        if ("queuedRevision" in result) queued.push({ index: i, revision: result.queuedRevision });
+        else if (!("activateChild" in result)) results[i] = result;
+      }
+      if (queued.length > 0) beforeCommit?.();
+      store.endGroup();
+    } catch (error) {
+      store.abortGroup();
+      throw error;
+    }
+    if (queued.length > 0) afterCommit?.();
+    for (const item of queued) {
+      sessions[item.index]!.engine.applyHostResponse({ type: "persist_confirmed", revision: item.revision });
+    }
+    for (const created of store.takeCreatedChildren()) {
+      if (sessions.some((session) => session.options.executionId === created.childExecutionId)) {
+        continue;
+      }
+      const parent = sessions.find((session) => session.options.executionId === created.parentExecutionId);
+      const artifactJson = parent?.options.childArtifacts?.[created.flowName];
+      if (!artifactJson) {
+        throw new Error(`no child artifact for \`${created.flowName}\``);
+      }
+      sessions.push(
+        prepareOnStore(store, {
+          ...parent!.options,
+          executionId: created.childExecutionId,
+          artifactJson,
+          isolatedEngine: true,
+          cancel: false,
+        }),
+      );
+      results.push(undefined);
+    }
+  }
+  return results.slice(0, inputs.length) as RunResult[];
 }
 
 export async function resumeExecution(options: ResumeOptions): Promise<RunResult> {
@@ -130,15 +225,32 @@ function drive(
   store: Store,
   engine: EngineBinding,
   options: RunOptions & { ownerToken: string; executionId: string },
-): RunResult {
+): RunResult;
+function drive(
+  store: Store,
+  engine: EngineBinding,
+  options: RunOptions & { ownerToken: string; executionId: string },
+  deferCheckpoint: true,
+): RunResult | { queuedRevision: number } | { activateChild: true };
+function drive(
+  store: Store,
+  engine: EngineBinding,
+  options: RunOptions & { ownerToken: string; executionId: string },
+  deferCheckpoint = false,
+): RunResult | { queuedRevision: number } | { activateChild: true } {
+  if (store.isGrouping() && !deferCheckpoint) {
+    throw new Error("single-execution drive cannot run inside an open checkpoint group");
+  }
   const runEffect = effectRunner(options);
   const budget = options.budget ?? 256;
   const state = { engine };
-  const failCounts = { ...(options.failCounts ?? {}) };
+  const failCounts = options.failCounts ?? {};
 
   for (;;) {
+    const requestStart = options.profile ? performance.now() : 0;
     const outcome = state.engine.runUntilHost(budget);
-    const next = handleOutcome(store, state, outcome, runEffect, failCounts, options);
+    if (options.profile) options.profile.engineRequestMs += performance.now() - requestStart;
+    const next = handleOutcome(store, state, outcome, runEffect, failCounts, options, deferCheckpoint);
     if (next === "continue") {
       continue;
     }
@@ -155,7 +267,8 @@ function handleOutcome(
   runEffect: EffectRunner,
   failCounts: Record<string, number>,
   options: RunOptions & { ownerToken: string; executionId: string },
-): "continue" | RunResult {
+  deferCheckpoint = false,
+): "continue" | { queuedRevision: number } | { activateChild: true } | RunResult {
   switch (outcome.type) {
     case "completed":
       return snapshot(store, options.executionId, "completed", outcome.result);
@@ -166,7 +279,7 @@ function handleOutcome(
     case "budget_exhausted":
       throw new Error("instruction budget exhausted");
     case "suspended":
-      return deliverWake(store, state, options);
+      return deliverWake(store, state, options, deferCheckpoint);
     case "host": {
       const request = outcome.request;
       switch (request.type) {
@@ -177,22 +290,14 @@ function handleOutcome(
         case "register_wait":
           return registerWait(store, state.engine, request, options.executionId);
         case "persist_checkpoint":
-          return persistCheckpoint(store, state.engine, request, options);
+          return persistCheckpoint(store, state.engine, request, options, deferCheckpoint);
         case "register_timer":
           store.upsertTimer(options.executionId, Number(request.resume_at_ms ?? 0));
           maybeCrash("after_register_timer");
           state.engine.applyHostResponse({ type: "ack" });
           return "continue";
         case "create_child":
-          store.upsertChild(
-            String(request.invoke_id),
-            options.executionId,
-            String(request.child_execution_id),
-            String(request.flow_name),
-          );
-          maybeCrash("after_create_child");
-          state.engine.applyHostResponse({ type: "ack" });
-          return "continue";
+          return enqueueChild(store, state.engine, request, options);
         default:
           throw new Error(`unsupported host request \`${String(request.type)}\``);
       }
@@ -200,6 +305,33 @@ function handleOutcome(
     default:
       throw new Error("unknown engine outcome");
   }
+}
+
+function enqueueChild(
+  store: Store,
+  engine: EngineBinding,
+  request: Record<string, unknown>,
+  options: RunOptions & { ownerToken: string; executionId: string },
+): "continue" {
+  const programName = String(request.program_name);
+  const artifactJson = options.childArtifacts?.[programName];
+  if (!artifactJson) {
+    throw new Error(`no child artifact for \`${programName}\``);
+  }
+  const artifactHash = String(JSON.parse(artifactJson).envelope.artifact_hash);
+  store.putArtifact(artifactHash, artifactJson);
+  store.enqueueCreateChild({
+    invokeId: String(request.invoke_id),
+    parentExecutionId: options.executionId,
+    childExecutionId: String(request.child_execution_id),
+    flowName: programName,
+    artifactHash,
+    ownerToken: options.ownerToken,
+    leaseUntil: Date.now() + (options.leaseMs ?? 60_000),
+  });
+  maybeCrash("after_create_child");
+  engine.applyHostResponse({ type: "ack" });
+  return "continue";
 }
 
 function executeEffect(
@@ -277,26 +409,58 @@ function persistCheckpoint(
   engine: EngineBinding,
   request: Record<string, unknown>,
   options: RunOptions & { ownerToken: string; executionId: string },
-): "continue" {
+  deferCheckpoint = false,
+): "continue" | { queuedRevision: number } {
   maybeCrash("before_persist_checkpoint");
   const revision = Number(request.revision);
+  if (store.persist === "replay") {
+    const current = store.getExecution(options.executionId);
+    if (current && current.revision >= revision) {
+      engine.applyHostResponse({ type: "persist_confirmed", revision });
+      return "continue";
+    }
+  }
+  const continuationStart = options.profile ? performance.now() : 0;
   const parsed = JSON.parse(engine.continuationJson()) as {
     status: string;
     revision: number;
+    result?: unknown;
   };
+  if (options.profile) options.profile.continuationEncodeMs += performance.now() - continuationStart;
+  const encodeStart = options.profile ? performance.now() : 0;
   parsed.revision = revision;
   const json = JSON.stringify(parsed);
   const kind = request.kind === "delta" ? "delta" : "snapshot";
-  store.commitCheckpoint(options.executionId, revision, json, parsed.status, options.ownerToken, {
+  const deltaJson = request.delta == null ? null : JSON.stringify(request.delta);
+  if (options.profile) options.profile.hostEncodeMs += performance.now() - encodeStart;
+  const storeStart = options.profile ? performance.now() : 0;
+  store.enqueueCheckpoint(options.executionId, revision, json, parsed.status, options.ownerToken, {
     kind,
     materialize: request.materialize === true || kind === "snapshot",
-    deltaJson: request.delta == null ? null : JSON.stringify(request.delta),
+    deltaJson,
   });
+  if (parsed.status === "completed") {
+    const related = store.getChildByExecutionId(options.executionId);
+    if (related) {
+      store.enqueueCompleteChild({
+        invokeId: related.invoke_id,
+        resultJson: JSON.stringify(parsed.result ?? { t: "undefined" }),
+      });
+    }
+  }
+  if (deferCheckpoint) return { queuedRevision: revision };
+  store.flushIfUngrouped();
+  if (options.profile) {
+    options.profile.storeCommitMs += performance.now() - storeStart;
+    options.profile.checkpoints += 1;
+  }
   maybeCrash("after_persist_checkpoint");
   if (parsed.status === "suspended") {
     maybeCrash("after_wait_checkpoint");
   }
+  const confirmStart = options.profile ? performance.now() : 0;
   engine.applyHostResponse({ type: "persist_confirmed", revision });
+  if (options.profile) options.profile.persistConfirmedMs += performance.now() - confirmStart;
   return "continue";
 }
 
@@ -304,7 +468,8 @@ function deliverWake(
   store: Store,
   state: EngineState,
   options: RunOptions & { ownerToken: string; executionId: string },
-): "continue" | RunResult {
+  deferCheckpoint = false,
+): "continue" | { activateChild: true } | RunResult {
   if (options.cancel) {
     maybeCrash("before_cancel");
     state.engine.applyHostResponse({ type: "cancel" });
@@ -325,7 +490,7 @@ function deliverWake(
     return "continue";
   }
   if (waitKind === "child") {
-    return deliverChild(store, state, options, continuation.pending?.kind?.invoke_id);
+    return deliverChild(store, state, options, continuation.pending?.kind?.invoke_id, deferCheckpoint);
   }
   return deliverEvent(store, state.engine, options);
 }
@@ -335,7 +500,8 @@ function deliverChild(
   state: EngineState,
   options: RunOptions & { ownerToken: string; executionId: string },
   invokeId: string | undefined,
-): "continue" | RunResult {
+  deferCheckpoint = false,
+): "continue" | { activateChild: true } | RunResult {
   if (!invokeId) {
     return snapshot(store, options.executionId, "suspended", undefined);
   }
@@ -350,6 +516,9 @@ function deliverChild(
       value: JSON.parse(child.result_json),
     });
     return "continue";
+  }
+  if (store.isGrouping() || deferCheckpoint) {
+    return { activateChild: true };
   }
   const artifactJson = options.childArtifacts?.[child.flow_name];
   if (!artifactJson) {

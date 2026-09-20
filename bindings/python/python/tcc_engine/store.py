@@ -24,6 +24,13 @@ class Store:
         self.db.execute("PRAGMA busy_timeout = 5000")
         self._group_held = 0
         self._pending: list[dict[str, Any]] = []
+        self._created_children: list[dict[str, Any]] = []
+        self._metric_bytes_written = 0
+        self._metric_snapshot_count = 0
+        self._metric_delta_count = 0
+        self._metric_commit_count = 0
+        self._metric_delta_bytes_written = 0
+        self._metric_batch_occupancy_samples: list[int] = []
         self.db.executescript(
             """
             CREATE TABLE IF NOT EXISTS artifacts (
@@ -101,6 +108,24 @@ class Store:
     def close(self) -> None:
         self.db.close()
 
+    def reset_metrics(self) -> None:
+        self._metric_bytes_written = 0
+        self._metric_snapshot_count = 0
+        self._metric_delta_count = 0
+        self._metric_commit_count = 0
+        self._metric_delta_bytes_written = 0
+        self._metric_batch_occupancy_samples = []
+
+    def metrics(self) -> dict[str, Any]:
+        return {
+            "bytesWritten": self._metric_bytes_written,
+            "snapshotCount": self._metric_snapshot_count,
+            "deltaCount": self._metric_delta_count,
+            "commitCount": self._metric_commit_count,
+            "batchOccupancySamples": list(self._metric_batch_occupancy_samples),
+            "deltaBytesWritten": self._metric_delta_bytes_written,
+        }
+
     def put_artifact(self, hash_: str, json: str) -> None:
         self.db.execute("INSERT OR IGNORE INTO artifacts(hash, json) VALUES (?, ?)", (hash_, json))
         self.db.commit()
@@ -131,6 +156,8 @@ class Store:
             raise RuntimeError(f"execution `{id_}` is owned by another worker")
 
     def get_continuation(self, execution_id: str) -> sqlite3.Row | dict[str, Any] | None:
+        if self.persist == "replay":
+            return None
         if self.persist == "optimized":
             reconstructed = self._reconstruct(execution_id)
             if reconstructed is not None:
@@ -141,6 +168,19 @@ class Store:
 
     def begin_group(self) -> None:
         self._group_held += 1
+
+    def is_grouping(self) -> bool:
+        return self._group_held > 0
+
+    def abort_group(self) -> None:
+        self._group_held = 0
+        self._pending = []
+        self._created_children = []
+
+    def take_created_children(self) -> list[dict[str, Any]]:
+        created = self._created_children
+        self._created_children = []
+        return created
 
     def end_group(self) -> None:
         if self._group_held == 0:
@@ -154,16 +194,29 @@ class Store:
             return
         batch = self._pending
         self._pending = []
+        before = (self._metric_bytes_written, self._metric_snapshot_count, self._metric_delta_count, self._metric_delta_bytes_written)
         self.db.execute("BEGIN IMMEDIATE")
         try:
-            for write in batch:
-                self._apply_checkpoint(write)
+            created: list[dict[str, Any]] = []
+            for op in batch:
+                kind = op.get("type") or "checkpoint"
+                if kind == "createChild":
+                    self._apply_create_child(op)
+                    created.append(op)
+                elif kind == "completeChild":
+                    self._apply_complete_child(op)
+                else:
+                    self._apply_checkpoint(op)
             self.db.execute("COMMIT")
+            self._metric_commit_count += 1
+            self._metric_batch_occupancy_samples.append(sum(1 for op in batch if (op.get("type") or "checkpoint") == "checkpoint"))
+            self._created_children.extend(created)
         except Exception:
             self.db.execute("ROLLBACK")
+            (self._metric_bytes_written, self._metric_snapshot_count, self._metric_delta_count, self._metric_delta_bytes_written) = before
             raise
 
-    def commit_checkpoint(
+    def enqueue_checkpoint(
         self,
         execution_id: str,
         revision: int,
@@ -177,6 +230,7 @@ class Store:
     ) -> None:
         self._pending.append(
             {
+                "type": "checkpoint",
                 "execution_id": execution_id,
                 "revision": revision,
                 "json": json_text,
@@ -187,8 +241,40 @@ class Store:
                 "materialize": materialize,
             }
         )
+
+    def enqueue_create_child(self, op: dict[str, Any]) -> None:
+        self._pending.append({"type": "createChild", **op})
+
+    def enqueue_complete_child(self, invoke_id: str, result_json: str) -> None:
+        self._pending.append({"type": "completeChild", "invoke_id": invoke_id, "result_json": result_json})
+
+    def flush_if_ungrouped(self) -> None:
         if self._group_held == 0:
             self.flush_group()
+
+    def commit_checkpoint(
+        self,
+        execution_id: str,
+        revision: int,
+        json_text: str,
+        status: str,
+        owner_token: str,
+        *,
+        kind: str = "snapshot",
+        delta_json: str | None = None,
+        materialize: bool = True,
+    ) -> None:
+        self.enqueue_checkpoint(
+            execution_id,
+            revision,
+            json_text,
+            status,
+            owner_token,
+            kind=kind,
+            delta_json=delta_json,
+            materialize=materialize,
+        )
+        self.flush_if_ungrouped()
 
     def exec_head(self, execution_id: str) -> sqlite3.Row | None:
         return self.db.execute("SELECT * FROM exec_head WHERE execution_id = ?", (execution_id,)).fetchone()
@@ -267,12 +353,16 @@ class Store:
             raise RuntimeError(f"unknown execution `{write['execution_id']}`")
         if current["owner_token"] != write["owner_token"]:
             raise RuntimeError(f"execution `{write['execution_id']}` is owned by another worker")
+        if self.persist == "replay" and current["revision"] >= write["revision"]:
+            return
         if current["revision"] != write["revision"] - 1:
             raise RuntimeError(
                 f"revision conflict for `{write['execution_id']}`: expected {write['revision'] - 1}, found {current['revision']}"
             )
         if self.persist == "naive":
             self._apply_naive_checkpoint(write, current["revision"])
+        elif self.persist == "replay":
+            self._apply_replay_checkpoint(write)
         else:
             self._apply_optimized_checkpoint(write)
         exec_updated = self.db.execute(
@@ -289,6 +379,8 @@ class Store:
             raise RuntimeError(f"execution cas failed for `{write['execution_id']}`")
 
     def _apply_naive_checkpoint(self, write: dict[str, Any], current_revision: int) -> None:
+        self._metric_bytes_written += len(write["json"].encode("utf-8"))
+        self._metric_snapshot_count += 1
         existing = self.db.execute(
             "SELECT revision FROM continuations WHERE execution_id = ?", (write["execution_id"],)
         ).fetchone()
@@ -305,6 +397,14 @@ class Store:
         if updated.rowcount != 1:
             raise RuntimeError(f"continuation cas failed for `{write['execution_id']}`")
 
+    def _apply_replay_checkpoint(self, write: dict[str, Any]) -> None:
+        payload = json.dumps({"revision": write["revision"], "status": write["status"]}, separators=(",", ":"))
+        self._metric_bytes_written += len(payload.encode("utf-8"))
+        self.db.execute(
+            "INSERT INTO persist_wal(execution_id, revision, kind, payload) VALUES (?, ?, 'history', ?)",
+            (write["execution_id"], write["revision"], payload),
+        )
+
     def _apply_optimized_checkpoint(self, write: dict[str, Any]) -> None:
         head = self.exec_head(write["execution_id"])
         requested_kind = write.get("kind") or "snapshot"
@@ -318,6 +418,12 @@ class Store:
         )
         kind = "snapshot" if force_snapshot else "delta"
         payload = write["json"] if kind == "snapshot" else (write.get("delta_json") or write["json"])
+        self._metric_bytes_written += len(payload.encode("utf-8"))
+        if kind == "snapshot":
+            self._metric_snapshot_count += 1
+        else:
+            self._metric_delta_count += 1
+            self._metric_delta_bytes_written += len(payload.encode("utf-8"))
         cur = self.db.execute(
             "INSERT INTO persist_wal(execution_id, revision, kind, payload) VALUES (?, ?, ?, ?)",
             (write["execution_id"], write["revision"], kind, payload),
@@ -438,23 +544,49 @@ class Store:
         self.db.execute("UPDATE timers SET status = 'resolved' WHERE execution_id = ?", (execution_id,))
         self.db.commit()
 
-    def upsert_child(
-        self, invoke_id: str, parent_execution_id: str, child_execution_id: str, flow_name: str
-    ) -> None:
+    def _apply_create_child(self, op: dict[str, Any]) -> None:
         self.db.execute(
             """INSERT INTO children(invoke_id, parent_execution_id, child_execution_id, flow_name, status, result_json)
                VALUES (?, ?, ?, ?, 'pending', NULL)
                ON CONFLICT(invoke_id) DO NOTHING""",
-            (invoke_id, parent_execution_id, child_execution_id, flow_name),
+            (op["invoke_id"], op["parent_execution_id"], op["child_execution_id"], op["flow_name"]),
         )
-        self.db.commit()
+        self.db.execute(
+            """INSERT OR IGNORE INTO executions(id, artifact_hash, revision, status, owner_token, lease_until)
+               VALUES (?, ?, 0, 'runnable', ?, ?)""",
+            (op["child_execution_id"], op["artifact_hash"], op["owner_token"], op["lease_until"]),
+        )
+
+    def _apply_complete_child(self, op: dict[str, Any]) -> None:
+        self.db.execute(
+            "UPDATE children SET status = 'completed', result_json = ? WHERE invoke_id = ?",
+            (op["result_json"], op["invoke_id"]),
+        )
+
+    def upsert_child(
+        self, invoke_id: str, parent_execution_id: str, child_execution_id: str, flow_name: str
+    ) -> None:
+        self.enqueue_create_child(
+            {
+                "invoke_id": invoke_id,
+                "parent_execution_id": parent_execution_id,
+                "child_execution_id": child_execution_id,
+                "flow_name": flow_name,
+                "artifact_hash": "",
+                "owner_token": "",
+                "lease_until": 0,
+            }
+        )
+        self.flush_if_ungrouped()
 
     def get_child(self, invoke_id: str) -> sqlite3.Row | None:
         return self.db.execute("SELECT * FROM children WHERE invoke_id = ?", (invoke_id,)).fetchone()
 
+    def get_child_by_execution_id(self, child_execution_id: str) -> sqlite3.Row | None:
+        return self.db.execute(
+            "SELECT * FROM children WHERE child_execution_id = ?", (child_execution_id,)
+        ).fetchone()
+
     def complete_child(self, invoke_id: str, result_json: str) -> None:
-        self.db.execute(
-            "UPDATE children SET status = 'completed', result_json = ? WHERE invoke_id = ?",
-            (result_json, invoke_id),
-        )
-        self.db.commit()
+        self.enqueue_complete_child(invoke_id, result_json)
+        self.flush_if_ungrouped()

@@ -21,7 +21,7 @@ The engine does not depend on a particular database, operating system, or cloud 
 | `persist_effect` | Persist the effect journal record |
 | `register_timer` | Arrange a wake at `resume_at_ms` |
 | `register_wait` | Persist the event wait. Wake on a matching event or timeout |
-| `create_child` | Create the child execution. Wake the parent when the child is terminal |
+| `create_child` | Create the child execution named by `program_name`. Wake the parent when the child is terminal |
 | `fetch_artifact` | Return the artifact for the given hash |
 
 `persist_checkpoint` carries persist intent. Naive hosts may ignore everything except `revision` and persist `continuationJson()` as a full snapshot. Optimized hosts (`host.persist_checkpoint_delta`) persist the payload below.
@@ -39,7 +39,11 @@ Delta ops name changed continuation fields (frame locals by slot, pc, stack, pen
 
 The engine tracks dirtiness against the last **confirmed** revision. A crash before `persist_confirmed` does not advance that base. `engine_format_version` is unchanged; resume still consumes a full continuation.
 
-A host may coalesce several persist writes into one durable group commit (one fsync covering many executions). `persist_confirmed` is valid only after that revision is in a committed group. `ack` still does not commit.
+A host may commit each persist individually or coordinate several transition records into one durability boundary. Coordinated commit is host policy, not a TCC semantic requirement. `persist_confirmed` is valid only after that revision is durable. `ack` still does not commit.
+
+Related records of one logical transition must become durable consistently even on a host that never groups unrelated executions. For `invoke`, that unit is the parent wait checkpoint, the engine-stable child identity, the child execution row, and the parent–child edge. `create_child` `ack` is not a commit. Retry before that commit finds no child; retry after it finds the same child.
+
+The Node and Python reference hosts use a durability coordinator by default. The batch drivers pause each execution with one outstanding `persist_checkpoint`, commit the pending transition records together, then confirm. Newly created children become runnable only after that commit. A failed transaction confirms none; a crash before commit restores each execution from its previous confirmed revision. Coordinated waves measure this path rather than independently advancing executions past uncommitted checkpoints.
 
 Artifacts that list `host.persist_checkpoint` remain valid on optimized hosts. `host.persist_checkpoint_delta` is an additional capability, not a replacement.
 

@@ -24,6 +24,7 @@ export type Outcome =
   | { type: "suspended" };
 
 let wasm: WasmExports | undefined;
+let wasmModule: WebAssembly.Module | undefined;
 
 export type EngineSource = string | BufferSource | WebAssembly.Module | WebAssembly.Instance;
 
@@ -33,24 +34,26 @@ function isBufferSource(value: unknown): value is BufferSource {
 
 async function instantiateEngine(source?: EngineSource): Promise<WebAssembly.Instance> {
   if (source instanceof WebAssembly.Instance) {
+    wasmModule = undefined;
     return source;
   }
 
   if (source instanceof WebAssembly.Module) {
+    wasmModule = source;
     return WebAssembly.instantiate(source, {});
   }
 
   if (isBufferSource(source)) {
-    const result = await WebAssembly.instantiate(source, {});
-    return result.instance;
+    wasmModule = await WebAssembly.compile(source);
+    return WebAssembly.instantiate(wasmModule, {});
   }
 
   const { readFile } = await import("node:fs/promises");
   const { fileURLToPath } = await import("node:url");
   const resolved = source ?? fileURLToPath(new URL("./tcc_wasm.wasm", import.meta.url));
   const bytes = await readFile(resolved);
-  const result = await WebAssembly.instantiate(bytes, {});
-  return result.instance;
+  wasmModule = await WebAssembly.compile(bytes);
+  return WebAssembly.instantiate(wasmModule, {});
 }
 
 export async function loadEngine(source?: EngineSource): Promise<void> {
@@ -63,38 +66,43 @@ export function engineFormatVersion(): number {
 }
 
 export class EngineBinding {
-  constructor(artifactJson: string, executionId: string) {
-    const artifact = writeString(artifactJson);
-    const exec = writeString(executionId);
-    const code = api().tcc_start(artifact.ptr, artifact.len, exec.ptr, exec.len);
-    api().tcc_free(artifact.ptr, artifact.len);
-    api().tcc_free(exec.ptr, exec.len);
+  private exports: WasmExports;
+
+  constructor(artifactJson: string, executionId: string, isolated = false) {
+    if (isolated && !wasmModule) throw new Error("isolated engine requires a loaded WASM module");
+    this.exports = isolated ? new WebAssembly.Instance(wasmModule!, {}).exports as unknown as WasmExports : api();
+    const artifact = writeString(this.exports, artifactJson);
+    const exec = writeString(this.exports, executionId);
+    const code = this.exports.tcc_start(artifact.ptr, artifact.len, exec.ptr, exec.len);
+    this.exports.tcc_free(artifact.ptr, artifact.len);
+    this.exports.tcc_free(exec.ptr, exec.len);
     if (code !== 0) {
-      throw new Error(readLast());
+      throw new Error(readLast(this.exports));
     }
   }
 
   static resume(artifactJson: string, continuationJson: string): EngineBinding {
     const binding = Object.create(EngineBinding.prototype) as EngineBinding;
-    const artifact = writeString(artifactJson);
-    const continuation = writeString(continuationJson);
-    const code = api().tcc_resume(
+    binding.exports = api();
+    const artifact = writeString(binding.exports, artifactJson);
+    const continuation = writeString(binding.exports, continuationJson);
+    const code = binding.exports.tcc_resume(
       artifact.ptr,
       artifact.len,
       continuation.ptr,
       continuation.len,
     );
-    api().tcc_free(artifact.ptr, artifact.len);
-    api().tcc_free(continuation.ptr, continuation.len);
+    binding.exports.tcc_free(artifact.ptr, artifact.len);
+    binding.exports.tcc_free(continuation.ptr, continuation.len);
     if (code !== 0) {
-      throw new Error(readLast());
+      throw new Error(readLast(binding.exports));
     }
     return binding;
   }
 
   runUntilHost(budget = 256): Outcome {
-    const code = api().tcc_run_until_host(budget);
-    const json = readLast();
+    const code = this.exports.tcc_run_until_host(budget);
+    const json = readLast(this.exports);
     if (code !== 0) {
       throw new Error(json);
     }
@@ -102,17 +110,17 @@ export class EngineBinding {
   }
 
   applyHostResponse(response: Record<string, unknown>): void {
-    const payload = writeString(JSON.stringify(response));
-    const code = api().tcc_apply_response(payload.ptr, payload.len);
-    api().tcc_free(payload.ptr, payload.len);
+    const payload = writeString(this.exports, JSON.stringify(response));
+    const code = this.exports.tcc_apply_response(payload.ptr, payload.len);
+    this.exports.tcc_free(payload.ptr, payload.len);
     if (code !== 0) {
-      throw new Error(readLast());
+      throw new Error(readLast(this.exports));
     }
   }
 
   continuationJson(): string {
-    const code = api().tcc_continuation();
-    const json = readLast();
+    const code = this.exports.tcc_continuation();
+    const json = readLast(this.exports);
     if (code !== 0) {
       throw new Error(json);
     }
@@ -127,15 +135,15 @@ function api(): WasmExports {
   return wasm;
 }
 
-function writeString(text: string): { ptr: number; len: number } {
+function writeString(exports: WasmExports, text: string): { ptr: number; len: number } {
   const bytes = encoder.encode(text);
-  const ptr = api().tcc_alloc(bytes.length);
-  new Uint8Array(api().memory.buffer, ptr, bytes.length).set(bytes);
+  const ptr = exports.tcc_alloc(bytes.length);
+  new Uint8Array(exports.memory.buffer, ptr, bytes.length).set(bytes);
   return { ptr, len: bytes.length };
 }
 
-function readLast(): string {
-  const ptr = api().tcc_json_ptr();
-  const len = api().tcc_json_len();
-  return decoder.decode(new Uint8Array(api().memory.buffer, ptr, len));
+function readLast(exports: WasmExports): string {
+  const ptr = exports.tcc_json_ptr();
+  const len = exports.tcc_json_len();
+  return decoder.decode(new Uint8Array(exports.memory.buffer, ptr, len));
 }

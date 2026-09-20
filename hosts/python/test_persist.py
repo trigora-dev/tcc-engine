@@ -2,11 +2,14 @@ from pathlib import Path
 import json
 import sys
 import tempfile
+import os
+import signal
+import subprocess
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from tcc_engine.compile import artifact_json, compile
-from tcc_engine.host import resume_execution, start_execution
+from tcc_engine.host import resume_execution, run_batch_on_store, run_on_store, start_execution
 from tcc_engine.persist import MATERIALIZE_EVERY, apply_delta, reconstruct_continuation
 from tcc_engine.store import Store
 
@@ -47,6 +50,93 @@ def _dummy(execution_id: str, revision: int) -> str:
         },
         separators=(",", ":"),
     )
+
+
+def test_batch_confirms_after_commit_across_rounds():
+    store = Store(_db(), "optimized")
+    artifact = _artifact()
+    inputs = [
+        {"artifact_json": artifact, "execution_id": name, "effects": {"generate": 42}}
+        for name in ("batch-a", "batch-b")
+    ]
+    rounds = []
+    try:
+        results = run_batch_on_store(store, inputs, lambda: rounds.append(1))
+        assert len(rounds) == 4
+        assert [result["status"] for result in results] == ["completed", "completed"]
+        assert store.metrics()["commitCount"] == 4
+        assert store.metrics()["batchOccupancySamples"] == [2] * 4
+        for item in inputs:
+            assert store.get_execution(item["execution_id"])["revision"] == 4
+        store.begin_group()
+        try:
+            import pytest
+            with pytest.raises(RuntimeError, match="open group"):
+                run_on_store(store, **inputs[0])
+        finally:
+            store.abort_group()
+    finally:
+        store.close()
+
+
+def test_failed_batch_confirms_no_pending_revision():
+    import pytest
+    db_path = _db()
+    store = Store(db_path, "optimized")
+    artifact = _artifact()
+    rounds = []
+
+    def fail_second():
+        rounds.append(1)
+        if len(rounds) == 2:
+            store.db.execute("""CREATE TEMP TRIGGER fail_checkpoint BEFORE INSERT ON persist_wal
+                WHEN NEW.revision = 2 BEGIN SELECT RAISE(ABORT, 'injected commit failure'); END""")
+
+    try:
+        with pytest.raises(Exception, match="injected commit failure"):
+            run_batch_on_store(store, [
+                {"artifact_json": artifact, "execution_id": name, "effects": {"generate": 42}}
+                for name in ("fail-a", "fail-b")
+            ], fail_second)
+        for name in ("fail-a", "fail-b"):
+            assert store.get_execution(name)["revision"] == 1
+            assert store.get_continuation(name)["revision"] == 1
+    finally:
+        store.close()
+    for name in ("fail-a", "fail-b"):
+        result = resume_execution(db_path=db_path, execution_id=name, artifact_json=artifact, persist="optimized")
+        assert result["status"] == "completed"
+
+
+def test_sigkill_before_batch_commit_restores_prior_revision():
+    db_path = _db()
+    artifact = _artifact()
+    script = """
+import os, signal
+from tcc_engine.host import run_batch_on_store
+from tcc_engine.store import Store
+store = Store(os.environ["TCC_DB"], "optimized")
+rounds = [0]
+def before_commit():
+    rounds[0] += 1
+    if rounds[0] == 2:
+        os.kill(os.getpid(), signal.SIGKILL)
+run_batch_on_store(store, [
+    {"artifact_json": os.environ["TCC_ARTIFACT"], "execution_id": name, "effects": {"generate": 42}}
+    for name in ("crash-a", "crash-b")
+], before_commit)
+"""
+    child = subprocess.run([sys.executable, "-c", script], env={**os.environ, "TCC_DB": db_path, "TCC_ARTIFACT": artifact}, capture_output=True)
+    assert child.returncode == -signal.SIGKILL, child.stderr.decode()
+    store = Store(db_path, "optimized")
+    try:
+        for name in ("crash-a", "crash-b"):
+            assert store.get_continuation(name)["revision"] == 1
+    finally:
+        store.close()
+    for name in ("crash-a", "crash-b"):
+        result = resume_execution(db_path=db_path, execution_id=name, artifact_json=artifact, persist="optimized")
+        assert result["status"] == "completed"
 
 
 def test_reconstruct_goldens():
@@ -182,3 +272,216 @@ def test_optimized_resume_matches_naive():
     assert naive["status"] == "completed"
     assert optimized["status"] == "completed"
     assert optimized["result"] == naive["result"]
+
+
+INVOKE = """
+from trigora import invoke
+
+async def run():
+    result = await invoke("child")
+    return result
+"""
+
+CHILD = """
+from trigora import effect
+
+async def run():
+    result = await effect("child_work", child_work)
+    return result
+"""
+
+
+def _child_count(store: Store) -> int:
+    row = store.db.execute("SELECT COUNT(*) AS n FROM children").fetchone()
+    return int(row["n"])
+
+
+def _invoke_inputs(names: list[str], parent: str, child: str):
+    return [
+        {
+            "artifact_json": parent,
+            "execution_id": name,
+            "child_artifacts": {"child": child},
+            "effects": {"child_work": 7},
+        }
+        for name in names
+    ]
+
+
+def test_batch_invoke_completes_with_independent_work():
+    store = Store(_db(), "optimized")
+    parent = artifact_json(compile(INVOKE, filename="parent.py"))
+    child = artifact_json(compile(CHILD, filename="child.py"))
+    independent = _artifact()
+    try:
+        results = run_batch_on_store(
+            store,
+            [
+                *_invoke_inputs(["invoke-a", "invoke-b"], parent, child),
+                {"artifact_json": independent, "execution_id": "solo", "effects": {"generate": 42}},
+            ],
+        )
+        assert [result["status"] for result in results] == ["completed", "completed", "completed"]
+        assert results[0]["result"] == {"t": "number", "v": 7}
+        assert results[1]["result"] == {"t": "number", "v": 7}
+        assert _child_count(store) == 2
+        assert any(count >= 2 for count in store.metrics()["batchOccupancySamples"])
+    finally:
+        store.close()
+
+
+def test_crash_before_invoke_commit_leaves_no_child():
+    db_path = _db()
+    parent = artifact_json(compile(INVOKE, filename="parent.py"))
+    child = artifact_json(compile(CHILD, filename="child.py"))
+    script = """
+import os, signal
+from tcc_engine.host import run_batch_on_store
+from tcc_engine.store import Store
+store = Store(os.environ["TCC_DB"], "optimized")
+run_batch_on_store(store, [{
+    "artifact_json": os.environ["TCC_PARENT"], "execution_id": "p1",
+    "child_artifacts": {"child": os.environ["TCC_CHILD"]}, "effects": {"child_work": 7},
+}], lambda: os.kill(os.getpid(), signal.SIGKILL))
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**os.environ, "TCC_DB": db_path, "TCC_PARENT": parent, "TCC_CHILD": child},
+        capture_output=True,
+    )
+    assert proc.returncode == -signal.SIGKILL, proc.stderr.decode()
+    store = Store(db_path, "optimized")
+    try:
+        assert store.get_execution("p1")["revision"] == 0
+        assert store.get_continuation("p1") is None
+        assert _child_count(store) == 0
+    finally:
+        store.close()
+
+
+def test_commit_then_crash_before_ack_keeps_child():
+    db_path = _db()
+    parent = artifact_json(compile(INVOKE, filename="parent.py"))
+    child = artifact_json(compile(CHILD, filename="child.py"))
+    script = """
+import os, signal
+from tcc_engine.host import run_batch_on_store
+from tcc_engine.store import Store
+store = Store(os.environ["TCC_DB"], "optimized")
+run_batch_on_store(store, [{
+    "artifact_json": os.environ["TCC_PARENT"], "execution_id": "p1",
+    "child_artifacts": {"child": os.environ["TCC_CHILD"]}, "effects": {"child_work": 7},
+}], None, lambda: os.kill(os.getpid(), signal.SIGKILL))
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**os.environ, "TCC_DB": db_path, "TCC_PARENT": parent, "TCC_CHILD": child},
+        capture_output=True,
+    )
+    assert proc.returncode == -signal.SIGKILL, proc.stderr.decode()
+    store = Store(db_path, "optimized")
+    try:
+        assert store.get_continuation("p1")["revision"] == 1
+        assert _child_count(store) == 1
+    finally:
+        store.close()
+    resumed = resume_execution(
+        db_path=db_path,
+        artifact_json=parent,
+        execution_id="p1",
+        child_artifacts={"child": child},
+        effects={"child_work": 7},
+        persist="optimized",
+    )
+    assert resumed["status"] == "completed"
+    assert resumed["result"] == {"t": "number", "v": 7}
+    after = Store(db_path, "optimized")
+    try:
+        assert _child_count(after) == 1
+    finally:
+        after.close()
+
+
+def test_duplicate_invoke_resume_one_child():
+    db_path = _db()
+    parent = artifact_json(compile(INVOKE, filename="parent.py"))
+    child = artifact_json(compile(CHILD, filename="child.py"))
+    first = start_execution(
+        db_path=db_path,
+        artifact_json=parent,
+        execution_id="dup",
+        child_artifacts={"child": child},
+        effects={"child_work": 7},
+        persist="optimized",
+    )
+    assert first["status"] == "completed"
+    again = resume_execution(
+        db_path=db_path,
+        artifact_json=parent,
+        execution_id="dup",
+        child_artifacts={"child": child},
+        effects={"child_work": 7},
+        persist="optimized",
+    )
+    assert again["status"] == "completed"
+    store = Store(db_path, "optimized")
+    try:
+        assert _child_count(store) == 1
+    finally:
+        store.close()
+
+
+def test_replay_persist_and_resume():
+    db_path = _db()
+    artifact = _artifact()
+    first = start_execution(
+        db_path=db_path, artifact_json=artifact, persist="replay", auto_deliver_event=False
+    )
+    assert first["status"] == "suspended"
+    store = Store(db_path, "replay")
+    try:
+        assert store.get_continuation("first") is None
+        assert store.get_execution("first")["revision"] == 2
+        assert all(row["kind"] == "history" for row in store.wal_records("first"))
+    finally:
+        store.close()
+    resumed = resume_execution(db_path=db_path, artifact_json=artifact, persist="replay", event_payload="ok")
+    assert resumed["status"] == "completed"
+
+
+def test_replay_sigkill_does_not_reinvoke_effect():
+    db_path = _db()
+    artifact = _artifact()
+    log_path = str(Path(db_path).parent / "effects.log")
+    script = """
+import os, signal
+from tcc_engine.host import start_execution
+def crash(hook, detail=None):
+    if hook == "after_persist_checkpoint":
+        os.kill(os.getpid(), signal.SIGKILL)
+start_execution(
+    db_path=os.environ["TCC_DB"],
+    artifact_json=os.environ["TCC_ARTIFACT"],
+    persist="replay",
+    auto_deliver_event=False,
+    effect_log_path=os.environ["TCC_LOG"],
+    crash=crash,
+)
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**os.environ, "TCC_DB": db_path, "TCC_ARTIFACT": artifact, "TCC_LOG": log_path},
+        capture_output=True,
+    )
+    assert proc.returncode == -signal.SIGKILL, proc.stderr.decode()
+    resumed = resume_execution(
+        db_path=db_path,
+        artifact_json=artifact,
+        persist="replay",
+        effect_log_path=log_path,
+        event_payload="ok",
+    )
+    assert resumed["status"] == "completed"
+    log = Path(log_path).read_text().strip().splitlines()
+    assert log == ["generate"]
+
