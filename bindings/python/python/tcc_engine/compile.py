@@ -444,7 +444,7 @@ class Lowerer:
             self.durable(node)
             return
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-            refuse_collection_truthiness(node.operand)
+            refuse_collection_truthiness(node.operand, self.filename)
             self.expression(node.operand)
             self.emit({"op": "Not"}, node)
             return
