@@ -9,5 +9,6 @@ These files are the handoff. This repository does not contain Durable Object cod
 | `store-local.json` | Frame pc + one local slot + operand stack replace |
 | `pending-wait.json` | Pending wait + status + empty stack |
 | `clear-pending.json` | Pending cleared (`null`) + stack + status |
+| `slot-undefined.json` | Frame pc + one local slot patched to `{ t: "undefined" }` (ceased to be live). Reconstruct must not resurrect the previous payload. |
 
 Reconstruction is host packing. It is not execution of completed instructions. Resume still consumes a full continuation in `spec/continuation-format.md`.

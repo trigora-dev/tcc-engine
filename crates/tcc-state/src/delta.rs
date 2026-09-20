@@ -453,11 +453,43 @@ mod tests {
     }
 
     #[test]
+    fn patch_to_undefined_clears_slot_omission_resurrects() {
+        let mut base = start();
+        base.frames[0].locals[0] = Value::String("dead-payload".into());
+        let mut omitted = base.clone();
+        omitted.frames[0].pc = 8;
+        let omit = diff_continuation(&base, &omitted).unwrap();
+        assert!(omit
+            .frames
+            .iter()
+            .all(|frame| frame.locals.iter().all(|patch| patch.slot != 0)));
+        let resurrected = apply_continuation_delta(base.clone(), &omit).unwrap();
+        assert_eq!(
+            resurrected.frames[0].locals[0],
+            Value::String("dead-payload".into())
+        );
+
+        let mut killed = base.clone();
+        killed.frames[0].pc = 8;
+        killed.frames[0].locals[0] = Value::Undefined;
+        let kill = diff_continuation(&base, &killed).unwrap();
+        assert!(kill.frames.iter().any(|frame| {
+            frame
+                .locals
+                .iter()
+                .any(|patch| patch.slot == 0 && patch.value == Value::Undefined)
+        }));
+        let applied = apply_continuation_delta(base, &kill).unwrap();
+        assert_eq!(applied.frames[0].locals[0], Value::Undefined);
+    }
+
+    #[test]
     fn reconstruct_goldens_match_encode_continuation() {
         for name in [
             "store-local.json",
             "pending-wait.json",
             "clear-pending.json",
+            "slot-undefined.json",
         ] {
             let path = format!(
                 "{}/../../spec/fixtures/persist/{name}",

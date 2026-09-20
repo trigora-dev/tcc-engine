@@ -63,4 +63,27 @@ impl Instruction {
         }
         targets.into_iter()
     }
+
+    /// Locals read by this instruction. `LoadLocal` is the only use.
+    pub fn uses_local(&self) -> Option<LocalId> {
+        match self {
+            Instruction::LoadLocal { local } => Some(*local),
+            _ => None,
+        }
+    }
+
+    /// Locals defined (killed) by this instruction. `StoreLocal` overwrites the slot.
+    pub fn defs_local(&self) -> Option<LocalId> {
+        match self {
+            Instruction::StoreLocal { local } => Some(*local),
+            _ => None,
+        }
+    }
+
+    pub fn falls_through(&self) -> bool {
+        !matches!(
+            self,
+            Instruction::Jump { .. } | Instruction::Return | Instruction::Throw
+        )
+    }
 }

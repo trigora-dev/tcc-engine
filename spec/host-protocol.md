@@ -37,6 +37,8 @@ persist_checkpoint
 
 Delta ops name changed continuation fields (frame locals by slot, pc, stack, pending, status, result, try_stack). They are not a byte-diff of JSON. Reconstruction must yield a continuation in `spec/continuation-format.md`. Shared golden vectors live in `spec/fixtures/persist/`.
 
+Hosts persist the snapshot or delta the core emits. They do not drop locals, invent delete ops, or guess liveness. Dead slots are already `undefined` in that payload.
+
 The engine tracks dirtiness against the last **confirmed** revision. A crash before `persist_confirmed` does not advance that base. `engine_format_version` is unchanged; resume still consumes a full continuation.
 
 A host may commit each persist individually or coordinate several transition records into one durability boundary. Coordinated commit is host policy, not a TCC semantic requirement. `persist_confirmed` is valid only after that revision is durable. `ack` still does not commit.

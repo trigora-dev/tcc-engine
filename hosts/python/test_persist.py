@@ -12,6 +12,7 @@ from tcc_engine.compile import artifact_json, compile
 from tcc_engine.host import resume_execution, run_batch_on_store, run_on_store, start_execution
 from tcc_engine.persist import MATERIALIZE_EVERY, apply_delta, reconstruct_continuation
 from tcc_engine.store import Store
+from conformance import kill_and_resume, run_wasm_uninterrupted
 
 FIRST = """
 from trigora import effect, wait_for_event
@@ -141,7 +142,7 @@ run_batch_on_store(store, [
 
 def test_reconstruct_goldens():
     files = sorted(p for p in FIXTURES.iterdir() if p.suffix == ".json")
-    assert len(files) >= 3
+    assert len(files) >= 4
     for path in files:
         fixture = json.loads(path.read_text())
         applied = apply_delta(fixture["base"], fixture["delta"])
@@ -568,4 +569,222 @@ def test_host_on_event_reports_persist_restore_journal_and_child_without_blockin
         assert_clean(errors)
     finally:
         fail_store.close()
+
+
+def _compile(source: str, filename: str = "live.py") -> str:
+    return artifact_json(compile(source, filename=filename))
+
+
+def _load_head(db_path: str) -> dict:
+    store = Store(db_path, "optimized")
+    try:
+        saved = store.get_continuation("first")
+        assert saved is not None
+        return {
+            "json": saved["json"],
+            "parsed": json.loads(saved["json"]),
+            "records": store.wal_records("first"),
+        }
+    finally:
+        store.close()
+
+
+def _suspend(source: str, effects: dict, filename: str = "live.py") -> dict:
+    db_path = _db()
+    artifact = _compile(source, filename)
+    result = start_execution(
+        db_path=db_path,
+        artifact_json=artifact,
+        effects=effects,
+        auto_deliver_event=False,
+    )
+    assert result["status"] == "suspended", result
+    return {"db_path": db_path, "artifact": artifact, "result": result}
+
+
+def test_reconstruct_golden_slot_undefined_does_not_resurrect():
+    fixture = json.loads((FIXTURES / "slot-undefined.json").read_text())
+    applied = apply_delta(fixture["base"], fixture["delta"])
+    applied["revision"] = fixture["expected"]["revision"]
+    assert applied == fixture["expected"]
+    assert "DEAD_SHOULD_NOT_RESURRECT" not in json.dumps(applied)
+
+
+def test_dead_scalar_undefined_after_later_wait():
+    source = """
+from trigora import effect, wait_for_event
+
+async def run():
+    dead = await effect("dead", lambda: "dead-scalar")
+    live = await effect("live", lambda: "live-scalar")
+    await wait_for_event("go")
+    return live
+"""
+    head = _load_head(_suspend(source, {"dead": "dead-scalar", "live": "live-scalar"})["db_path"])
+    locals_json = json.dumps(head["parsed"]["frames"][0]["locals"])
+    assert "dead-scalar" not in locals_json
+    assert "live-scalar" in locals_json
+
+
+def test_large_dead_string_absent_from_committed_continuation():
+    marker = "DEADBLOB_MARKER"
+    blob = marker + ("x" * 1_000_000)
+    source = """
+from trigora import effect, wait_for_event
+
+async def run():
+    blob = await effect("blob", lambda: "unused")
+    await wait_for_event("go")
+    return 1
+"""
+    head = _load_head(_suspend(source, {"blob": blob})["db_path"])
+    assert marker not in head["json"]
+    assert len(head["json"]) < 50_000
+    snapshot = next(row for row in head["records"] if row["kind"] == "snapshot")
+    assert marker in snapshot["payload"]
+    assert len(snapshot["payload"]) > 1_000_000
+    assert len(head["json"]) < len(snapshot["payload"]) / 2
+
+
+def test_live_value_survives_several_waits():
+    source = """
+from trigora import effect, wait_for_event
+
+async def run():
+    live = await effect("live", lambda: "stay-live")
+    await wait_for_event("a")
+    await wait_for_event("b")
+    return live
+"""
+    started = _suspend(source, {"live": "stay-live"})
+    assert "stay-live" in _load_head(started["db_path"])["json"]
+    second = resume_execution(
+        db_path=started["db_path"],
+        artifact_json=started["artifact"],
+        event_payload="ok",
+        auto_deliver_event=False,
+    )
+    assert second["status"] == "suspended"
+    assert "stay-live" in _load_head(started["db_path"])["json"]
+
+
+def test_dead_after_taken_branch_is_gone():
+    source = """
+from trigora import effect, wait_for_event
+
+async def run():
+    flag = await effect("flag", lambda: 1)
+    if flag:
+        taken = await effect("taken", lambda: 42)
+        dead = await effect("dead", lambda: "arm-dead")
+        await wait_for_event("go")
+        return taken
+    else:
+        skipped = await effect("skipped", lambda: 99)
+        await wait_for_event("go")
+        return skipped
+"""
+    locals_json = json.dumps(
+        _load_head(_suspend(source, {"flag": 1, "taken": 42, "dead": "arm-dead", "skipped": 99})["db_path"])[
+            "parsed"
+        ]["frames"][0]["locals"],
+        separators=(",", ":"),
+    )
+    assert "arm-dead" not in locals_json
+    assert '"v":42' in locals_json
+    assert '"v":99' not in locals_json
+
+
+def test_loop_carried_value_remains():
+    source = """
+from trigora import effect, wait_for_event
+
+async def run():
+    acc = await effect("start", lambda: "loop-acc")
+    go = await effect("go", lambda: 1)
+    while go:
+        tmp = await effect("tmp", lambda: "loop-tmp")
+        await wait_for_event("tick")
+        go = 0
+    return acc
+"""
+    json_text = _load_head(_suspend(source, {"start": "loop-acc", "go": 1, "tmp": "loop-tmp"})["db_path"])["json"]
+    assert "loop-acc" in json_text
+    assert "loop-tmp" not in json_text
+
+
+def test_try_except_keeps_catch_live_value_and_finally_drops_dead():
+    keep = """
+from trigora import effect, wait_for_event
+
+async def run():
+    try:
+        keep = await effect("keep", lambda: "keep-me")
+        await wait_for_event("in-try")
+        raise Exception("boom")
+    except Exception as e:
+        return keep
+"""
+    assert "keep-me" in _load_head(_suspend(keep, {"keep": "keep-me"}, "keep.py")["db_path"])["json"]
+
+    gone = """
+from trigora import effect, wait_for_event
+
+async def run():
+    try:
+        gone = await effect("gone", lambda: "drop-me")
+    except Exception as e:
+        return e
+    finally:
+        await wait_for_event("f")
+    return 1
+"""
+    assert "drop-me" not in _load_head(_suspend(gone, {"gone": "drop-me"}, "gone.py")["db_path"])["json"]
+
+
+def test_sigkill_after_compaction_resumes_live_result():
+    source = """
+from trigora import effect, wait_for_event
+
+async def run():
+    dead = await effect("dead", lambda: "dead-scalar")
+    live = await effect("live", lambda: "live-scalar")
+    await wait_for_event("go")
+    return live
+"""
+    recovered = kill_and_resume(
+        source,
+        "after_wait_checkpoint",
+        effects={"dead": "dead-scalar", "live": "live-scalar"},
+        event_payload="ok",
+    )
+    assert recovered["resumed"]["status"] == "completed"
+    assert recovered["resumed"]["result"] == {"t": "string", "v": "live-scalar"}
+
+
+def test_native_and_wasm_agree_on_compacted_locals():
+    source = """
+from trigora import effect, wait_for_event
+
+async def run():
+    dead = await effect("dead", lambda: "dead-scalar")
+    live = await effect("live", lambda: "live-scalar")
+    await wait_for_event("go")
+    return live
+"""
+    native = _suspend(source, {"dead": "dead-scalar", "live": "live-scalar"})
+    native_json = json.dumps(_load_head(native["db_path"])["parsed"]["frames"][0]["locals"])
+    wasm = run_wasm_uninterrupted(
+        native["artifact"],
+        effects={"dead": "dead-scalar", "live": "live-scalar"},
+        auto_deliver_event=False,
+    )
+    if wasm.get("skipped"):
+        return
+    assert wasm["status"] == "suspended"
+    wasm_json = json.dumps(json.loads(wasm["continuationJson"])["frames"][0]["locals"])
+    assert "dead-scalar" not in native_json
+    assert "live-scalar" in native_json
+    assert "dead-scalar" not in wasm_json
+    assert "live-scalar" in wasm_json
 

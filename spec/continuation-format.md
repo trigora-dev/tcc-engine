@@ -34,6 +34,10 @@ If a host reconstructs continuation bytes from a log or deltas, the result must 
 
 The engine may emit semantic continuation deltas as persist intent on `persist_checkpoint`. Those deltas are not a continuation encoding and are not an `engine_format_version` change. Resume still consumes a full continuation in this format. Golden reconstruct vectors are in `spec/fixtures/persist/`.
 
+Committed frames keep function-level slot topology: `locals.len()` equals the function's `local_count`. At persist the engine sets destination-dead slots to `undefined` in place. A later snapshot or omitted delta slot cannot resurrect a compacted payload.
+
+Delta omission means the slot is unchanged. A `LocalPatch` to `{ t: "undefined" }` means the slot ceased to be live (or was assigned `undefined`). Omission is not a tombstone.
+
 Recovery uses the latest committed continuation for the execution. Resume is `Engine::resume` with that continuation and the artifact whose hash matches `artifact.hash`.
 
 ## Encoding

@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import { canonicalStringify } from "../../../frontends/typescript/src/canonical.ts";
 import { compile } from "../../../frontends/typescript/src/compile.ts";
+import { killAndResume } from "./conformance.ts";
 import { ensureEngineLoaded, resumeExecution, runBatchOnStore, runOnStore, startExecution } from "./host.ts";
 import {
   applyDelta,
@@ -153,7 +154,7 @@ runBatchOnStore(store, ["crash-a", "crash-b"].map((executionId) => ({
 
 test("reconstruct goldens match applyDelta", () => {
   const files = readdirSync(fixturesDir).filter((name) => name.endsWith(".json"));
-  assert.ok(files.length >= 3);
+  assert.ok(files.length >= 4);
   for (const name of files) {
     const fixture = JSON.parse(readFileSync(path.join(fixturesDir, name), "utf8")) as {
       base: ContinuationJson;
@@ -628,5 +629,213 @@ test("host onEvent reports persist restore journal and child without blocking", 
   } finally {
     failStore.close();
   }
+});
+
+function compileSource(source: string, filename = "live.ts"): string {
+  return canonicalStringify(compile(source, { filename }));
+}
+
+function loadHead(dbPath: string): { json: string; parsed: ContinuationJson; records: Array<{ kind: string; payload: string }> } {
+  const store = new Store(dbPath, "optimized");
+  try {
+    const saved = store.getContinuation("first");
+    assert.ok(saved);
+    return {
+      json: saved.json,
+      parsed: JSON.parse(saved.json) as ContinuationJson,
+      records: store.walRecords("first"),
+    };
+  } finally {
+    store.close();
+  }
+}
+
+async function suspendOnWait(source: string, effects: Record<string, unknown>, filename = "live.ts") {
+  const dbPath = dbFile();
+  const artifactJson = compileSource(source, filename);
+  const result = await startExecution({
+    dbPath,
+    wasmPath,
+    artifactJson,
+    effects,
+    autoDeliverEvent: false,
+  });
+  assert.equal(result.status, "suspended", result);
+  return { dbPath, artifactJson };
+}
+
+test("reconstruct golden patches a dead slot to undefined without resurrecting it", () => {
+  const fixture = JSON.parse(readFileSync(path.join(fixturesDir, "slot-undefined.json"), "utf8")) as {
+    base: ContinuationJson;
+    delta: Parameters<typeof applyDelta>[1];
+    expected: ContinuationJson;
+  };
+  const applied = applyDelta(fixture.base, fixture.delta);
+  applied.revision = fixture.expected.revision;
+  assert.deepEqual(applied, fixture.expected);
+  assert.equal(JSON.stringify(applied).includes("DEAD_SHOULD_NOT_RESURRECT"), false);
+  const omitted = structuredClone(fixture.base);
+  omitted.frames[0]!.pc = 8;
+  assert.equal(JSON.stringify(omitted).includes("DEAD_SHOULD_NOT_RESURRECT"), true);
+});
+
+test("dead scalar is undefined after a later wait; live value remains", async () => {
+  const source = `
+import { effect, waitForEvent } from "@trigora/sdk";
+export default async function run() {
+  const dead = await effect("dead", async () => "dead-scalar");
+  const live = await effect("live", async () => "live-scalar");
+  await waitForEvent("go");
+  return live;
+}
+`;
+  const { dbPath } = await suspendOnWait(source, { dead: "dead-scalar", live: "live-scalar" });
+  const head = loadHead(dbPath);
+  const locals = JSON.stringify(head.parsed.frames[0]?.locals ?? []);
+  assert.equal(locals.includes("dead-scalar"), false);
+  assert.equal(locals.includes("live-scalar"), true);
+});
+
+test("large dead string is absent from the committed continuation", async () => {
+  const marker = "DEADBLOB_MARKER";
+  const blob = marker + "x".repeat(1_000_000);
+  const source = `
+import { effect, waitForEvent } from "@trigora/sdk";
+export default async function run() {
+  const blob = await effect("blob", async () => "unused");
+  await waitForEvent("go");
+  return 1;
+}
+`;
+  const { dbPath } = await suspendOnWait(source, { blob });
+  const head = loadHead(dbPath);
+  assert.equal(head.json.includes(marker), false);
+  assert.ok(head.json.length < 50_000, `continuation still large: ${head.json.length}`);
+  const snapshot = head.records.find((row) => row.kind === "snapshot");
+  assert.ok(snapshot);
+  assert.equal(snapshot.payload.includes(marker), true);
+  assert.ok(snapshot.payload.length > 1_000_000);
+  assert.ok(head.json.length < snapshot.payload.length / 2);
+});
+
+test("value live across several waits remains", async () => {
+  const source = `
+import { effect, waitForEvent } from "@trigora/sdk";
+export default async function run() {
+  const live = await effect("live", async () => "stay-live");
+  await waitForEvent("a");
+  await waitForEvent("b");
+  return live;
+}
+`;
+  const { dbPath, artifactJson } = await suspendOnWait(source, { live: "stay-live" });
+  assert.equal(loadHead(dbPath).json.includes("stay-live"), true);
+  const second = await resumeExecution({
+    dbPath,
+    wasmPath,
+    artifactJson,
+    eventPayload: "ok",
+    autoDeliverEvent: false,
+  });
+  assert.equal(second.status, "suspended");
+  assert.equal(loadHead(dbPath).json.includes("stay-live"), true);
+});
+
+test("dead after taken branch is gone; live arm value stays", async () => {
+  const source = `
+import { effect, waitForEvent } from "@trigora/sdk";
+export default async function run() {
+  const flag = await effect("flag", async () => 1);
+  if (flag) {
+    const taken = await effect("taken", async () => 42);
+    const dead = await effect("dead", async () => "arm-dead");
+    await waitForEvent("go");
+    return taken;
+  } else {
+    const skipped = await effect("skipped", async () => 99);
+    await waitForEvent("go");
+    return skipped;
+  }
+}
+`;
+  const { dbPath } = await suspendOnWait(source, { flag: 1, taken: 42, dead: "arm-dead", skipped: 99 });
+  const locals = JSON.stringify(loadHead(dbPath).parsed.frames[0]?.locals ?? []);
+  assert.equal(locals.includes("arm-dead"), false);
+  assert.equal(locals.includes('"v":42'), true);
+  assert.equal(locals.includes('"v":99'), false);
+});
+
+test("loop-carried value remains at the wait inside the loop", async () => {
+  const source = `
+import { effect, waitForEvent } from "@trigora/sdk";
+export default async function run() {
+  let acc = await effect("start", async () => "loop-acc");
+  let go = await effect("go", async () => 1);
+  while (go) {
+    const tmp = await effect("tmp", async () => "loop-tmp");
+    await waitForEvent("tick");
+    go = 0;
+  }
+  return acc;
+}
+`;
+  const { dbPath } = await suspendOnWait(source, { start: "loop-acc", go: 1, tmp: "loop-tmp" });
+  const json = loadHead(dbPath).json;
+  assert.equal(json.includes("loop-acc"), true);
+  assert.equal(json.includes("loop-tmp"), false);
+});
+
+test("try/catch keeps a catch-live value across persist in try; finally drops dead locals", async () => {
+  const keepSource = `
+import { effect, waitForEvent } from "@trigora/sdk";
+export default async function run() {
+  let keep = "";
+  try {
+    keep = await effect("keep", async () => "keep-me");
+    await waitForEvent("in-try");
+    throw "boom";
+  } catch (e) {
+    return keep;
+  }
+}
+`;
+  const { dbPath: keepDb } = await suspendOnWait(keepSource, { keep: "keep-me" }, "keep.ts");
+  assert.equal(loadHead(keepDb).json.includes("keep-me"), true);
+
+  const goneSource = `
+import { effect, waitForEvent } from "@trigora/sdk";
+export default async function run() {
+  try {
+    const gone = await effect("gone", async () => "drop-me");
+  } catch (e) {
+    return e;
+  } finally {
+    await waitForEvent("f");
+  }
+  return 1;
+}
+`;
+  const { dbPath: goneDb } = await suspendOnWait(goneSource, { gone: "drop-me" }, "gone.ts");
+  assert.equal(loadHead(goneDb).json.includes("drop-me"), false);
+});
+
+test("SIGKILL after compaction resumes the live result", async () => {
+  const source = `
+import { effect, waitForEvent } from "@trigora/sdk";
+export default async function run() {
+  const dead = await effect("dead", async () => "dead-scalar");
+  const live = await effect("live", async () => "live-scalar");
+  await waitForEvent("go");
+  return live;
+}
+`;
+  const recovered = await killAndResume({
+    source,
+    crashAt: "after_wait_checkpoint",
+    effects: { dead: "dead-scalar", live: "live-scalar" },
+    eventPayload: "ok",
+  });
+  assert.equal(recovered.resumed.status, "completed");
+  assert.deepEqual(recovered.resumed.result, { t: "string", v: "live-scalar" });
 });
 

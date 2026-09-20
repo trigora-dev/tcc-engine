@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use tcc_ir::{
-    validate, Artifact, ConstValue, EngineCaps, FuncId, Instruction, ENGINE_FORMAT_VERSION,
+    analyze_program, validate, Artifact, ConstValue, EngineCaps, FuncId, FunctionLiveness,
+    Instruction, ENGINE_FORMAT_VERSION,
 };
 use tcc_state::{
     persist_intent, Continuation, ContinuationStatus, PendingOp, PersistKind, Value, WaitKind,
@@ -28,6 +31,7 @@ pub struct Engine {
     /// Last continuation confirmed by `persist_confirmed`. Unacked persists do not update this.
     confirmed: Option<Continuation>,
     deltas_since_snapshot: u32,
+    liveness: HashMap<FuncId, FunctionLiveness>,
 }
 
 impl Engine {
@@ -48,12 +52,14 @@ impl Engine {
             entry.id.0,
             entry.local_count,
         );
+        let liveness = analyze_program(&artifact.program);
         Ok(Self {
             artifact,
             continuation,
             outstanding: None,
             confirmed: None,
             deltas_since_snapshot: 0,
+            liveness,
         })
     }
 
@@ -81,12 +87,14 @@ impl Engine {
             ContinuationStatus::Cancelled => return Err(CoreError::Terminal("cancelled")),
             _ => {}
         }
+        let liveness = analyze_program(&artifact.program);
         Ok(Self {
             artifact,
             continuation,
             outstanding: None,
             confirmed: None,
             deltas_since_snapshot: 0,
+            liveness,
         })
     }
 
@@ -268,6 +276,7 @@ impl Engine {
     }
 
     fn queue_persist(&mut self) {
+        self.compact_dead_locals();
         let intent = persist_intent(
             self.confirmed.as_ref(),
             &self.continuation,
@@ -280,6 +289,19 @@ impl Engine {
             materialize: intent.materialize,
             delta: intent.delta,
         });
+    }
+
+    fn compact_dead_locals(&mut self) {
+        for frame in &mut self.continuation.frames {
+            let Some(live) = self.liveness.get(&FuncId(frame.func_id)) else {
+                continue;
+            };
+            for (slot, value) in frame.locals.iter_mut().enumerate() {
+                if !live.is_live_at(frame.pc, slot as u32) {
+                    *value = Value::Undefined;
+                }
+            }
+        }
     }
 
     pub fn run_until_host(&mut self, budget: u32) -> EngineOutcome {

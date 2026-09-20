@@ -11,6 +11,7 @@ pub mod error;
 pub mod features;
 pub mod instruction;
 mod json;
+pub mod liveness;
 pub mod validate;
 
 pub use artifact::{
@@ -23,4 +24,5 @@ pub use features::{
     FRONTEND_TYPESCRIPT, LANGUAGE_SEMANTICS_PY, LANGUAGE_SEMANTICS_TS,
 };
 pub use instruction::{ConstValue, Instruction};
+pub use liveness::{analyze_function, analyze_program, FunctionLiveness, LiveSet};
 pub use validate::{validate, EngineCaps};
