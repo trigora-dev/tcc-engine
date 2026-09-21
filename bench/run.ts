@@ -4,7 +4,7 @@
  *
  *   pnpm bench
  *   pnpm bench:persistence
- *   pnpm bench:recovery
+ *   pnpm bench:recovery        # history depth + vs-replay + live-state + WAL
  *   TCC_BENCH_SCALE=quick pnpm bench
  *
  * Optional targeted aliases:
@@ -14,6 +14,7 @@
  *   pnpm bench:recovery:history
  *   pnpm bench:recovery:live-state
  *   pnpm bench:recovery:wal
+ *   pnpm bench:recovery:replay
  */
 import { runConcurrencyGroupCommit } from "./concurrency_group_commit.ts";
 import { runHealthyPathPersistence } from "./healthy_path_persistence.ts";
@@ -22,6 +23,7 @@ import { runLiveStateScaling } from "./live_state_scaling.ts";
 import { DISCLAIMER } from "./lib/scale.ts";
 import { requireWasm } from "./lib/store_metrics.ts";
 import { runRecoveryHistoryDepth } from "./recovery_history_depth.ts";
+import { runRecoveryHistoryReplayBaseline } from "./recovery_history_replay_baseline.ts";
 import { runWalIsolation } from "./wal_isolation.ts";
 
 const ALIASES: Record<string, string> = {
@@ -31,7 +33,7 @@ const ALIASES: Record<string, string> = {
 };
 
 const USAGE =
-  "usage: node bench/run.ts [all|persistence|recovery|persistence:healthy|persistence:group|persistence:replay|recovery:history|recovery:live-state|recovery:wal]";
+  "usage: node bench/run.ts [all|persistence|recovery|persistence:healthy|persistence:group|persistence:replay|recovery:history|recovery:live-state|recovery:wal|recovery:replay]";
 
 const known = new Set([
   "all",
@@ -43,6 +45,7 @@ const known = new Set([
   "recovery:history",
   "recovery:live-state",
   "recovery:wal",
+  "recovery:replay",
 ]);
 
 const requested = process.argv[2] ?? "all";
@@ -60,7 +63,11 @@ console.log(DISCLAIMER);
 
 const all: unknown[] = [];
 
-if (mode === "all" || mode === "persistence" || mode === "persistence:healthy") {
+if (
+  mode === "all" ||
+  mode === "persistence" ||
+  mode === "persistence:healthy"
+) {
   all.push(...(await runHealthyPathPersistence()));
 }
 if (mode === "all" || mode === "persistence" || mode === "persistence:group") {
@@ -72,6 +79,9 @@ if (mode === "all" || mode === "persistence" || mode === "persistence:replay") {
 
 if (mode === "all" || mode === "recovery" || mode === "recovery:history") {
   all.push(...(await runRecoveryHistoryDepth()));
+}
+if (mode === "all" || mode === "recovery" || mode === "recovery:replay") {
+  all.push(...(await runRecoveryHistoryReplayBaseline()));
 }
 if (mode === "all" || mode === "recovery" || mode === "recovery:live-state") {
   all.push(...(await runLiveStateScaling()));

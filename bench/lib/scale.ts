@@ -9,6 +9,8 @@ export type BenchScale = {
   concurrencyLevels: number[];
   liveStateLocals: number[];
   historyRevisions: number[];
+  recoveryReplayDepths: number[];
+  recoveryReplayLiveBytes: number[];
   targetSuffix: number;
 };
 
@@ -23,6 +25,8 @@ export function benchScale(): BenchScale {
       concurrencyLevels: [1, 4, 8],
       liveStateLocals: [4, 256],
       historyRevisions: [1, 8, 33],
+      recoveryReplayDepths: [10, 100],
+      recoveryReplayLiveBytes: [4096],
       targetSuffix: 10,
     };
   }
@@ -35,6 +39,8 @@ export function benchScale(): BenchScale {
     concurrencyLevels: [1, 2, 4, 8, 16, 32],
     liveStateLocals: [4, 256, 1024],
     historyRevisions: [1, 8, 33, 64],
+    recoveryReplayDepths: [10, 100, 500, 1_000, 5_000],
+    recoveryReplayLiveBytes: [4096, 16_384, 65_536],
     targetSuffix: 10,
   };
 }

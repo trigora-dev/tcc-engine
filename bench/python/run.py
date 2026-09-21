@@ -9,7 +9,7 @@ Node remains the canonical public claim surface.
   TCC_BENCH_SCALE=quick python bench/python/run.py
 
 Optional targeted modes: persistence:healthy, persistence:group, persistence:replay,
-recovery:live-state, recovery:wal. recovery:history is Node-canonical.
+recovery:live-state, recovery:wal. recovery:history and recovery:replay are Node-canonical.
 """
 
 from __future__ import annotations
@@ -467,6 +467,9 @@ def main() -> None:
     mode = ALIASES.get(requested, requested)
     if requested == "recovery:history" or mode == "recovery:history":
         print("recovery:history is Node-canonical; use: pnpm bench:recovery:history", file=sys.stderr)
+        sys.exit(1)
+    if requested == "recovery:replay" or mode == "recovery:replay":
+        print("recovery:replay is Node-canonical; use: pnpm bench:recovery:replay", file=sys.stderr)
         sys.exit(1)
     if mode not in KNOWN:
         print(f"unknown mode: {requested}", file=sys.stderr)

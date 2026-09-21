@@ -18,7 +18,8 @@
     "bench:recovery": "node --experimental-sqlite --experimental-strip-types bench/run.ts recovery",
     "bench:recovery:history": "node --experimental-sqlite --experimental-strip-types bench/run.ts recovery:history",
     "bench:recovery:live-state": "node --experimental-sqlite --experimental-strip-types bench/run.ts recovery:live-state",
-    "bench:recovery:wal": "node --experimental-sqlite --experimental-strip-types bench/run.ts recovery:wal"
+    "bench:recovery:wal": "node --experimental-sqlite --experimental-strip-types bench/run.ts recovery:wal",
+    "bench:recovery:replay": "node --experimental-sqlite --experimental-strip-types bench/run.ts recovery:replay"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

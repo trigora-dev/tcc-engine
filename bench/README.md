@@ -10,7 +10,7 @@ Build the release WASM once, then run. Benches do not rebuild it; they fail if t
 pnpm build:wasm
 pnpm bench                 # full suite
 pnpm bench:persistence     # healthy path + group commit + replay baseline
-pnpm bench:recovery        # history depth + live-state + WAL isolation
+pnpm bench:recovery        # history depth + vs-replay + live-state + WAL isolation
 ```
 
 Optional targeted aliases (contributors / CI):
@@ -20,6 +20,7 @@ pnpm bench:persistence:healthy
 pnpm bench:persistence:group
 pnpm bench:persistence:replay
 pnpm bench:recovery:history
+pnpm bench:recovery:replay
 pnpm bench:recovery:live-state
 pnpm bench:recovery:wal
 ```
@@ -37,7 +38,8 @@ Output is a human summary plus machine-readable JSON (`meta` + `results`).
 | `healthy_path_persistence` | Naive vs optimized throughput for mutation shapes A–D |
 | `concurrency_group_commit` | Shared-store waves at concurrency 1…32; commit count and batch occupancy |
 | `healthy_path_replay_baseline` | Replay/history persist vs TCC optimized, sequential A–D and coordinated waves on A |
-| `recovery_history_depth` | Reconstruct vs target revision depth (bounded suffix) |
+| `recovery_history_replay_baseline` | Matched recovery: TCC reconstruct vs journal prefix replay at fixed live continuation (~4 KB; full also 16/64 KB) |
+| `recovery_history_depth` | Reconstruct vs target revision depth (bounded suffix; not the matched-replay chart) |
 | `live_state_scaling` | Reconstruct vs live continuation size |
 | `wal_isolation` | Reconstruct with foreign WAL 0…100k and **target suffix = 10** |
 
@@ -47,9 +49,11 @@ Healthy-path workloads: A has one effect-result local with no reassignment; B cr
 
 `healthy_path_replay_baseline` is a matched local-host comparison of replay/history persistence against TCC optimized continuation persistence. It is not the research-prototype ~10% number. `overheadVsReplay` is `(tccMedianMs - replayMedianMs) / replayMedianMs` on optimized rows so a single GC/scheduler pause cannot dominate. `executionsPerSec` remains mean throughput and is not the comparison metric. Sequential rows use `coordination: "single"`; waves use `runBatchOnStore` for both models so group commit is not TCC-only. Do not fold this table into `healthy_path_persistence`. Optimized packing defaults to `follow`. Adaptive packing is an internal policy, not a product option; no tested threshold beat `follow` on both sequential A–D and coordinated waves. Optimized is not always faster than naive.
 
+`recovery_history_replay_baseline` is the matched recovery comparison. At a measured live continuation (~4 KB primary; 16 KB and 64 KB on full scale) TCC loads/reconstructs the latest committed continuation while the replay baseline starts the engine and replays the committed prefix from the effect journal (`history` WAL, no continuation row). Timed replay recovery must not invoke the effect provider. `liveStateBytes` is actual continuation JSON length, not a local-count proxy. History grows by reassigning one scratch local after the live blob. `overheadVsReplay` uses the same median formula; negative means TCC is faster. Do not fold this table into `recovery_history_depth`. Primary chart series: `liveStateTargetBytes = 4096`. Output is the same `meta` + `results` JSON as the rest of the suite.
+
 ## Python mirror
 
-Same scenario names / JSON fields; secondary to Node. Recovery here covers live-state and WAL isolation (history depth is Node-canonical).
+Same scenario names / JSON fields; secondary to Node. Recovery here covers live-state and WAL isolation (`recovery:history` and `recovery:replay` are Node-canonical).
 
 ```bash
 TCC_BENCH_SCALE=quick python bench/python/run.py
