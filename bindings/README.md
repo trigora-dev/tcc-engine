@@ -17,4 +17,4 @@ Build the module with `cargo build -p tcc-wasm --target wasm32-unknown-unknown -
 
 ## Python
 
-The Python binding exposes `EngineBinding` (`start` via the constructor, plus `resume`, `run_until_host`, `apply_response`, `continuation_json`) using the same JSON host protocol. The `tcc-engine` wheel also includes `compile` / `CompileError` and a SQLite host driver. Build it with `maturin develop` from `bindings/python`. This is not the public `trigora` SDK.
+The Python binding exposes `EngineBinding` (`start` via the constructor, plus `resume`, `run_until_host`, `apply_response`, `continuation_json`) using the same JSON host protocol. The `tcc-engine` wheel also includes `compile` / `CompileError`, `tcc_engine.primitives`, and a SQLite host driver. Authoring names live on `tcc_engine.primitives`; embedding APIs (`compile`, `Store`, `EngineBinding`) stay on `tcc_engine`. Build it with `maturin develop` from `bindings/python`.

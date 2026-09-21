@@ -33,6 +33,8 @@ The TypeScript frontend implements `ts.subset.v1`. The Python frontend implement
 
 Arbitrary packages do not run inside the Rust/WASM engine. Supported libraries need compilation or runtime support. External operations need an explicit **host capability** (effects, HTTP, timers). Unsupported constructs are compile errors.
 
+Durable operations are resolved imports. Engine-native spelling is `@tcc-engine/primitives` / `tcc_engine.primitives`. Trigora spelling (`@trigora/sdk` / `trigora`) is also accepted and lowers to the same instructions.
+
 ## Adding a frontend
 
 1. Place tooling and dependencies under `frontends/<language>/`.
