@@ -14,7 +14,9 @@ const binding = tarballs.find((name) => name.includes("bindings-javascript"));
 const host = tarballs.find((name) => name.includes("host-node"));
 const primitives = tarballs.find((name) => name.includes("primitives"));
 if (!frontend || !binding || !host || !primitives) {
-  throw new Error(`missing npm packs in ${dist}: ${tarballs.join(", ")}`);
+  throw new Error(
+    `missing npm packs in ${dist}: found ${tarballs.join(", ") || "(none)"}; need frontend-typescript, bindings-javascript, host-node, and primitives`,
+  );
 }
 
 const dir = mkdtempSync(path.join(tmpdir(), "tcc-pack-verify-"));
