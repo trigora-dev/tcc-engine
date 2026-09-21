@@ -83,7 +83,7 @@ Recovery loads the latest committed continuation.
 
 A custom host talks [host protocol v1](spec/host-protocol.md) to the binding. It does not need the reference SQLite hosts or Trigora.
 
-[Host conformance v1](spec/host-conformance-v1.md) is a named claim: protocol versioning, artifact pinning, reconstruct goldens in [`spec/fixtures/persist/`](spec/fixtures/persist/), and SIGKILL recovery at documented crash hooks. Reconstruct cases are host-agnostic. Semantic and crash cases currently wrap the Node and Python reference drivers.
+[Host conformance v1](spec/host-conformance-v1.md) is a named claim: protocol versioning, artifact pinning, reconstruct goldens in [`spec/fixtures/persist/`](spec/fixtures/persist/), and SIGKILL recovery at documented crash hooks. The kit is a generic runner plus host drivers. Semantic cases wrap the Node and Python SQLite adapters in this repository; a third-party host implements the same driver contract.
 
 ## This repository
 

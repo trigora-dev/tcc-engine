@@ -125,7 +125,7 @@ resumed = resume_execution(
 
 Implement [host protocol v1](../spec/host-protocol.md) against `EngineBinding`. Persist continuations, the effect journal, waits, timers, children, and artifact blobs. Reply `persist_confirmed` only after commit. Resume the stored artifact, not whatever source is currently compiled.
 
-[Host conformance v1](../spec/host-conformance-v1.md) and the reconstruct goldens in [`spec/fixtures/persist/`](../spec/fixtures/persist/) are the correctness target. Semantic and crash cases today wrap the Node and Python reference drivers; a Postgres host would implement the driver contract itself. There is no `createPostgresHost()` helper.
+[Host conformance v1](../spec/host-conformance-v1.md) and the reconstruct goldens in [`spec/fixtures/persist/`](../spec/fixtures/persist/) are the correctness target. Implement `HostConformanceDriver` (`applyDelta`, `start`, `crashAt`, `resume`, `readContinuation`, `effectLog`) and run [`conformance/runner.ts`](../conformance/runner.ts) with `--driver`. This repository ships Node and Python SQLite adapters; a Postgres host would implement the same contract. There is no `createPostgresHost()` helper.
 
 ## What this path does not include
 

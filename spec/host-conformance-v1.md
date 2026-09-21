@@ -1,6 +1,6 @@
 # Host conformance v1
 
-A named kit a host can claim. This repository’s Node and Python SQLite hosts are the reference drivers.
+A named kit a host can claim. This repository ships a generic runner plus Node and Python SQLite adapters. Trigora Cloud is not a driver in this repository.
 
 `engine_format_version` stays `1`. Every host-protocol JSON message must declare `host_protocol_version: 1`. Missing is not version 1.
 
@@ -14,23 +14,35 @@ A host that claims **host conformance v1** must:
 4. Recover from SIGKILL at the crash hooks below with the same terminal result and effect log as an uninterrupted run.
 5. Treat `persist_confirmed` as the durability boundary. `ack` on `persist_checkpoint` does not commit.
 
-Reconstruct cases are host-agnostic: any `applyDelta` implementation can pass them. Semantic and crash cases require a driver.
+The claim is semantic. Passing does not require SQLite, `exec_head`, a WAL schema, group-commit policy, or a packing heuristic.
 
 ## Driver contract
 
-A driver exposes:
+The runner asserts observable TCC semantics. A driver operates one host:
+
+```ts
+export type HostConformanceDriver = {
+  applyDelta(base: ContinuationJson, delta: ContinuationDelta): ContinuationJson;
+  start(input: StartInput): Promise<RunResult>;
+  crashAt(input: CrashInput): Promise<Handle>;
+  resume(input: ResumeInput): Promise<RunResult>;
+  readContinuation(handle: Handle): Promise<ContinuationJson>;
+  effectLog(handle: Handle): Promise<string[]>;
+};
+```
 
 | Operation | Meaning |
 |---|---|
-| `start` | Create an execution from an artifact and run until terminal or suspend |
-| `crashAt` | Start in a child process and `SIGKILL` at a named hook (`TCC_CRASH_AT`) |
-| `resume` | Open the same durable store and continue from the last committed continuation |
-| `readContinuation` | Load the committed continuation JSON for an execution |
-| `effectLog` | Ordered effect-provider invocations |
+| `applyDelta` | The host’s reconstruct function. Goldens are continuation JSON, not SQLite. Snapshot-only hosts may ship the kit’s reference `applyDelta` in [`conformance/reconstruct.ts`](../conformance/reconstruct.ts) / [`conformance/reconstruct.py`](../conformance/reconstruct.py). |
+| `start` | Create an execution from an artifact and run until terminal or suspend. |
+| `crashAt` | Start an execution, kill the worker at a named hook, and return an opaque handle to the durable workspace. |
+| `resume` | Continue from the last committed continuation. A different compiled artifact must fail with an artifact-mismatch error. |
+| `readContinuation` | Load the committed continuation JSON for an execution. |
+| `effectLog` | Ordered effect-provider invocations. |
 
-Node wraps [`hosts/node/src/conformance.ts`](../hosts/node/src/conformance.ts). Python wraps [`hosts/python/conformance.py`](../hosts/python/conformance.py). CI still runs those suites; this kit names them.
+Third parties implement this interface against their own host. This repository’s runner also requires `language` and `compile` so it can load the shared TypeScript/Python sources. Adapters are [`conformance/drivers/node-sqlite.ts`](../conformance/drivers/node-sqlite.ts) and [`conformance/drivers/python_sqlite.py`](../conformance/drivers/python_sqlite.py). Reference-host crash helpers stay in [`hosts/node/src/conformance.ts`](../hosts/node/src/conformance.ts) and [`hosts/python/conformance.py`](../hosts/python/conformance.py) for the language suite.
 
-Kit entry points: [`conformance/run-node.ts`](../conformance/run-node.ts), [`conformance/run_python.py`](../conformance/run_python.py). Case index: [`conformance/cases.json`](../conformance/cases.json).
+Kit entry points: [`conformance/run-node.ts`](../conformance/run-node.ts), [`conformance/run_python.py`](../conformance/run_python.py). Public runner: [`conformance/runner.ts`](../conformance/runner.ts) (`--driver` via [`conformance/run.ts`](../conformance/run.ts)). Case index: [`conformance/cases.json`](../conformance/cases.json).
 
 ## Crash hooks
 
@@ -60,4 +72,4 @@ Resume must load the blob stored under `artifact.hash`. Passing a different comp
 
 ## Out of scope for this kit version
 
-Closures, broader JavaScript/Python, `Promise.all`, extra persist heuristics, Docker, and a third language.
+Closures, broader JavaScript/Python, `Promise.all`, extra persist heuristics, Docker, and a third language. The language recovery suite (`if`/`else`, loops, invoke, cancel, sleep) stays on the reference hosts and is not part of this kit.

@@ -1,4 +1,4 @@
-/** Host conformance v1 driver: wraps the Node SQLite host. */
+/** Crash helpers for the language suite. The host-agnostic kit lives in conformance/. */
 export {
   assertConformance,
   compileArtifact,

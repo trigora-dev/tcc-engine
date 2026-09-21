@@ -27,17 +27,42 @@
   "semantic": [
     {
       "id": "first-example",
-      "driver": true,
+      "kind": "crash-resume",
       "crash_ats": [
         "after_persist_checkpoint:1",
         "after_persist_effect",
         "after_wait_checkpoint",
         "after_effect_provider"
-      ]
+      ],
+      "expected_result": {
+        "t": "object",
+        "v": {
+          "approval": { "t": "string", "v": "ok" },
+          "result": { "t": "number", "v": 42 }
+        }
+      },
+      "typescript": { "file": "cases/first.ts" },
+      "python": { "file": "cases/first.py" }
     },
     {
       "id": "artifact-pinning",
-      "driver": true
+      "kind": "artifact-pinning",
+      "typescript": {
+        "stored": { "file": "cases/first.ts" },
+        "other": { "file": "cases/other.ts" }
+      },
+      "python": {
+        "stored": { "file": "cases/first.py" },
+        "other": { "file": "cases/other.py" }
+      }
+    },
+    {
+      "id": "generated-branch",
+      "kind": "crash-resume",
+      "crash_ats": ["after_persist_checkpoint:1", "after_wait_checkpoint"],
+      "expected_result": { "t": "string", "v": "ok" },
+      "typescript": { "file": "cases/branch.ts" },
+      "python": { "file": "cases/branch.py" }
     }
   ]
 }

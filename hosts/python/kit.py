@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Host conformance v1 driver: wraps the Python SQLite host."""
+"""Crash helpers for the language suite. The host-agnostic kit lives in conformance/."""
 
 from conformance import (
     assert_conformance,

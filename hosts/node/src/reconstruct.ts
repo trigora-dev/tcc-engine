@@ -100,6 +100,7 @@ export function persistModeFromEnv(): PersistMode {
   return process.env.TCC_PERSIST === "naive" ? "naive" : "optimized";
 }
 
+/** Keep in sync with conformance/reconstruct.ts (kit reference for snapshot-only hosts). */
 export function applyDelta(base: ContinuationJson, delta: ContinuationDelta): ContinuationJson {
   const next: ContinuationJson = {
     ...base,

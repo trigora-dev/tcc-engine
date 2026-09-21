@@ -60,6 +60,7 @@ def choose_packed_kind(
 
 
 def apply_delta(base: Continuation, delta: ContinuationDelta) -> Continuation:
+    """Keep in sync with conformance/reconstruct.ts; the kit re-exports this helper."""
     next_ = copy.deepcopy(base)
     frames = next_.get("frames") or []
     for frame_delta in delta.get("frames") or []:
