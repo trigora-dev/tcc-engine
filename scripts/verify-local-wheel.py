@@ -29,7 +29,7 @@ import tempfile
 
 assert PACKAGE_VERSION != LANGUAGE_SEMANTICS_VERSION
 src = '''
-from trigora import effect, wait_for_event
+from tcc_engine.primitives import effect, wait_for_event
 
 async def run():
     result = await effect("generate", generate_something)

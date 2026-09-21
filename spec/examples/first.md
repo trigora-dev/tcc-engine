@@ -1,17 +1,17 @@
 # First example
 
-A TypeScript program that imports durable operations from `@trigora/sdk` and exports a default async function. There is no context object or workflow wrapper.
+A TypeScript program that imports durable operations from `@tcc-engine/primitives` and exports a default async function. There is no context object or workflow wrapper.
 
-The TypeScript frontend treats `@trigora/sdk` as the durable-operations module. That package is not published from this repository. The frontend recognizes resolved imports of `effect` and `waitForEvent`. Aliasing works:
+The TypeScript frontend treats `@tcc-engine/primitives` and `@trigora/sdk` as durable-operations modules. The frontend recognizes resolved imports of `effect` and `waitForEvent`. Programs that differ only in that specifier produce the same artifact hash. Aliasing works:
 
 ```ts
-import { effect as durableEffect } from "@trigora/sdk";
+import { effect as durableEffect } from "@tcc-engine/primitives";
 ```
 
 A locally declared `function effect` is not durable.
 
 ```ts
-import { effect, waitForEvent } from "@trigora/sdk";
+import { effect, waitForEvent } from "@tcc-engine/primitives";
 
 export default async function run() {
   const result = await effect("generate", async () => {

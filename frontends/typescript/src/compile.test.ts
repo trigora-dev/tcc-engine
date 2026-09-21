@@ -345,3 +345,71 @@ export async function run() {
     CompileError,
   );
 });
+
+const FIRST_PRIMITIVES = `
+import { effect, waitForEvent } from "@tcc-engine/primitives";
+
+export default async function run() {
+  const result = await effect("generate", async () => {
+    return generateSomething();
+  });
+  const approval = await waitForEvent("approved");
+  return { result, approval };
+}
+`;
+
+test("compiles the first example from primitives", () => {
+  const artifact = compile(FIRST_PRIMITIVES, { filename: "first.ts" });
+  assert.equal(artifact.program.functions[0]?.instructions[1]?.op, "Effect");
+  assert.equal(artifact.program.functions[0]?.instructions[4]?.op, "WaitForEvent");
+});
+
+test("primitives and SDK imports produce the same artifact hash", () => {
+  const fromSdk = compile(FIRST, { filename: "first.ts" });
+  const fromPrimitives = compile(FIRST_PRIMITIVES, { filename: "first.ts" });
+  assert.equal(fromSdk.envelope.artifact_hash, fromPrimitives.envelope.artifact_hash);
+});
+
+test("accepts aliased primitives imports", () => {
+  const source = `
+import { effect as durableEffect, waitForEvent as wait } from "@tcc-engine/primitives";
+
+export default async function run() {
+  const result = await durableEffect("generate", async () => 1);
+  const approval = await wait("approved");
+  return { result, approval };
+}
+`;
+  const artifact = compile(source);
+  assert.equal(artifact.program.functions[0]?.instructions[1]?.op, "Effect");
+});
+
+test("rejects imports from other modules", () => {
+  assert.throws(
+    () =>
+      compile(`
+import { effect } from "somewhere-else";
+export default async function run() {
+  const result = await effect("generate", async () => 1);
+  return result;
+}
+`),
+    CompileError,
+  );
+});
+
+test("accepts mixed primitives and SDK imports in one file", () => {
+  const source = `
+import { effect } from "@tcc-engine/primitives";
+import { waitForEvent } from "@trigora/sdk";
+
+export default async function run() {
+  const result = await effect("generate", async () => 1);
+  const approval = await waitForEvent("approved");
+  return { result, approval };
+}
+`;
+  const artifact = compile(source, { filename: "first.ts" });
+  assert.equal(artifact.program.functions[0]?.instructions[1]?.op, "Effect");
+  assert.equal(artifact.program.functions[0]?.instructions[4]?.op, "WaitForEvent");
+});

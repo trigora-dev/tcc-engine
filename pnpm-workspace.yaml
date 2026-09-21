@@ -1,4 +1,5 @@
 packages:
+  - primitives
   - frontends/typescript
   - bindings/javascript
   - hosts/node

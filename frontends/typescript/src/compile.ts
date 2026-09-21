@@ -18,10 +18,13 @@ import {
 } from "./types.ts";
 
 const SDK_SPECIFIER = "@trigora/sdk";
+const PRIMITIVES_SPECIFIER = "@tcc-engine/primitives";
+const DURABLE_SPECIFIERS = new Set([SDK_SPECIFIER, PRIMITIVES_SPECIFIER]);
 const SDK_PATH = "/__tcc/@trigora/sdk/index.d.ts";
+const PRIMITIVES_PATH = "/__tcc/@tcc-engine/primitives/index.d.ts";
 const INPUT_PATH = "/__tcc/input.ts";
 
-const SDK_SOURCE = `export declare function effect<T>(key: string, fn: () => T | Promise<T>): Promise<T>;
+const DURABLE_SOURCE = `export declare function effect<T>(key: string, fn: () => T | Promise<T>): Promise<T>;
 export declare function waitForEvent(name: string): Promise<unknown>;
 export declare function sleep(ms: number): Promise<void>;
 export declare function invoke(name: string): Promise<unknown>;
@@ -117,7 +120,8 @@ function createProgram(source: string): {
 } {
   const files = new Map<string, string>([
     [INPUT_PATH, source],
-    [SDK_PATH, SDK_SOURCE],
+    [SDK_PATH, DURABLE_SOURCE],
+    [PRIMITIVES_PATH, DURABLE_SOURCE],
   ]);
   const compilerOptions: ts.CompilerOptions = {
     target: ts.ScriptTarget.ES2022,
@@ -128,6 +132,7 @@ function createProgram(source: string): {
     skipLibCheck: true,
     paths: {
       [SDK_SPECIFIER]: [SDK_PATH],
+      [PRIMITIVES_SPECIFIER]: [PRIMITIVES_PATH],
     },
     baseUrl: "/",
   };
@@ -168,7 +173,7 @@ function findDefaultExport(sourceFile: ts.SourceFile, filename: string): ts.Func
   for (const statement of sourceFile.statements) {
     if (ts.isImportDeclaration(statement)) {
       const spec = importSpecifier(statement);
-      if (spec !== SDK_SPECIFIER) {
+      if (!spec || !DURABLE_SPECIFIERS.has(spec)) {
         fail(filename, sourceFile, statement, `unsupported import from \`${spec ?? "?"}\``, WHY_SUBSET);
       }
       continue;
@@ -647,7 +652,7 @@ class Lowerer {
 
   durable(expression: ts.AwaitExpression): void {
     if (!ts.isCallExpression(expression.expression)) {
-      throw new CompileError("await a `@trigora/sdk` call");
+      throw new CompileError("await a durable operation");
     }
     const call = expression.expression;
     const durable = resolveDurable(call.expression, this.checker);
@@ -686,7 +691,7 @@ class Lowerer {
       this.emit({ op: "Invoke" }, call);
       return;
     }
-    throw new CompileError("call is not a resolved `@trigora/sdk` durable operation");
+    throw new CompileError("call is not a resolved durable operation");
   }
 
   hasBinding(name: string): boolean {
@@ -802,10 +807,19 @@ function resolveDurable(
     return undefined;
   }
   const file = declaration.getSourceFile().fileName.replace(/\\/g, "/");
-  if (!file.endsWith("@trigora/sdk/index.d.ts") && file !== SDK_PATH) {
+  if (!isDurableDeclarationFile(file)) {
     return undefined;
   }
   return name;
+}
+
+function isDurableDeclarationFile(file: string): boolean {
+  return (
+    file === SDK_PATH ||
+    file === PRIMITIVES_PATH ||
+    file.endsWith("@trigora/sdk/index.d.ts") ||
+    file.endsWith("@tcc-engine/primitives/index.d.ts")
+  );
 }
 
 function stringLiteral(node: ts.Expression, label: string): string {

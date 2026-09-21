@@ -17,6 +17,8 @@ FRONTEND_ID = FRONTEND_IDENTITY
 FRONTEND_VERSION = PACKAGE_VERSION
 LANGUAGE_SEMANTICS_VERSION = "py.subset.v1"
 SDK_MODULE = "trigora"
+PRIMITIVES_MODULE = "tcc_engine.primitives"
+DURABLE_MODULES = {SDK_MODULE, PRIMITIVES_MODULE}
 DURABLE = {"effect", "wait_for_event", "sleep", "invoke"}
 
 
@@ -98,7 +100,7 @@ def collect_imports(tree: ast.Module, filename: str) -> dict[str, str]:
     aliases: dict[str, str] = {}
     for statement in tree.body:
         if isinstance(statement, ast.ImportFrom):
-            if statement.module != SDK_MODULE or statement.level:
+            if statement.module not in DURABLE_MODULES or statement.level:
                 raise CompileError(
                     f"unsupported import from `{statement.module or '?'}`",
                     filename=filename,
@@ -489,7 +491,7 @@ class Lowerer:
         if isinstance(node, ast.Lambda):
             self.fail(node, "lambdas are not compiled; pass them only as effect callbacks", WHY_SUBSET)
         if isinstance(node, ast.Call):
-            self.fail(node, "call is not a resolved `trigora` durable operation", WHY_SUBSET)
+            self.fail(node, "call is not a resolved durable operation", WHY_SUBSET)
         self.fail(node, f"unsupported expression: {type(node).__name__}", WHY_SUBSET)
 
     def compare(self, node: ast.Compare) -> None:
@@ -529,7 +531,7 @@ class Lowerer:
 
     def durable(self, node: ast.Await) -> None:
         if not isinstance(node.value, ast.Call):
-            raise CompileError("await a `trigora` call")
+            raise CompileError("await a durable operation")
         call = node.value
         durable = self.resolve_durable(call.func)
         if durable == "effect":
@@ -559,13 +561,13 @@ class Lowerer:
             self.emit({"op": "LoadConst", "value": {"t": "string", "v": name}}, call)
             self.emit({"op": "Invoke"}, call)
             return
-        raise CompileError("call is not a resolved `trigora` durable operation")
+        raise CompileError("call is not a resolved durable operation")
 
     def resolve_durable(self, node: ast.expr) -> str | None:
         if isinstance(node, ast.Name):
             return self.aliases.get(node.id)
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-            raise CompileError("import durable operations from `trigora`")
+            raise CompileError("import durable operations from `tcc_engine.primitives` or `trigora`")
         return None
 
     def seal(self) -> None:

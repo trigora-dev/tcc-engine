@@ -1,0 +1,27 @@
+{
+  "name": "@tcc-engine/primitives",
+  "version": "0.1.0-rc.1",
+  "private": true,
+  "type": "module",
+  "description": "Compiler intrinsics for TCC durable operations. Compile with the TypeScript frontend; do not call at runtime.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm build",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}

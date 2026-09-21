@@ -2,12 +2,12 @@
 
 `language_semantics_version` `py.subset.v1`. A construct is supported only when it compiles, runs through the native Python binding, runs through WASM on the same artifact, and recovers from SIGKILL at every durable boundary with the same observable result.
 
-Authoring uses resolved `trigora` imports. There is no `ctx` and no `workflow()` wrapper. The exact import names are a working sketch, not a published SDK.
+Authoring uses resolved imports from `tcc_engine.primitives` (engine-native) or `trigora` (Trigora product). Both lower to the same durable operations. There is no `ctx` and no `workflow()` wrapper.
 
 ## Supported
 
 - A single top-level `async def run()` with no parameters
-- Imports from `trigora`: `effect`, `wait_for_event`, `sleep`, `invoke` (aliases included)
+- Imports from `tcc_engine.primitives` or `trigora`: `effect`, `wait_for_event`, `sleep`, `invoke` (aliases included)
 - Assignment to simple locals
 - `if` / `elif` / `else`
 - `while`

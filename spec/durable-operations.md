@@ -4,7 +4,7 @@ Durable operations are explicit instructions. Ordinary computation is not journa
 
 A library call is not a durable operation unless a frontend lowers it to one of the operations below, or the host exposes it as a capability.
 
-For the TypeScript frontend, durable operations are **resolved imports** of `@trigora/sdk` exports `effect`, `waitForEvent`, `sleep`, and `invoke`. For the Python frontend, they are **resolved imports** of `trigora` exports `effect`, `wait_for_event`, `sleep`, and `invoke`. The SDK package is not required at compile time or at runtime. Aliased imports are durable. A function that is merely named `effect` is not. Durable operations are imports, not a context object or a `workflow()` wrapper.
+For the TypeScript frontend, durable operations are **resolved imports** of `@tcc-engine/primitives` or `@trigora/sdk` exports `effect`, `waitForEvent`, `sleep`, and `invoke`. For the Python frontend, they are **resolved imports** of `tcc_engine.primitives` or `trigora` exports `effect`, `wait_for_event`, `sleep`, and `invoke`. Both spellings lower to the same instructions. Neither package is required at compile time: the frontend injects declarations. Aliased imports are durable. A function that is merely named `effect` is not. Durable operations are imports, not a context object or a `workflow()` wrapper.
 
 The effect callback is not compiled into the artifact. The host performs the work identified by the string-literal key.
 

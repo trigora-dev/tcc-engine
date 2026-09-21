@@ -12,12 +12,13 @@ const tarballs = readdirSync(dist).filter((name) => name.endsWith(".tgz"));
 const frontend = tarballs.find((name) => name.includes("frontend-typescript"));
 const binding = tarballs.find((name) => name.includes("bindings-javascript"));
 const host = tarballs.find((name) => name.includes("host-node"));
-if (!frontend || !binding || !host) {
+const primitives = tarballs.find((name) => name.includes("primitives"));
+if (!frontend || !binding || !host || !primitives) {
   throw new Error(`missing npm packs in ${dist}: ${tarballs.join(", ")}`);
 }
 
 const dir = mkdtempSync(path.join(tmpdir(), "tcc-pack-verify-"));
-const npm = spawnSync("npm", ["install", path.join(dist, frontend), path.join(dist, binding), path.join(dist, host)], {
+const npm = spawnSync("npm", ["install", path.join(dist, primitives), path.join(dist, frontend), path.join(dist, binding), path.join(dist, host)], {
   cwd: dir,
   encoding: "utf8",
 });
@@ -36,7 +37,7 @@ const { startExecution } = await import(path.join(dir, "node_modules/@tcc-engine
 assert.notEqual(PACKAGE_VERSION, LANGUAGE_SEMANTICS_VERSION);
 
 const source = `
-import { effect, waitForEvent } from "@trigora/sdk";
+import { effect, waitForEvent } from "@tcc-engine/primitives";
 
 export default async function run() {
   const result = await effect("generate", async () => {

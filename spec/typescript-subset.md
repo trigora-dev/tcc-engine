@@ -2,12 +2,12 @@
 
 `language_semantics_version` `ts.subset.v1`. A construct is supported only when it compiles, runs natively and through WASM, and recovers from SIGKILL at every durable boundary with the same observable result.
 
-Authoring uses resolved `@trigora/sdk` imports. There is no `ctx` and no `workflow()` wrapper.
+Authoring uses resolved imports from `@tcc-engine/primitives` (engine-native) or `@trigora/sdk` (Trigora product). Both lower to the same durable operations. There is no `ctx` and no `workflow()` wrapper.
 
 ## Supported
 
 - Default-export async function with no parameters
-- Imports from `@trigora/sdk`: `effect`, `waitForEvent`, `sleep`, `invoke` (aliases included)
+- Imports from `@tcc-engine/primitives` or `@trigora/sdk`: `effect`, `waitForEvent`, `sleep`, `invoke` (aliases included)
 - `const` / `let` with a single identifier and an initializer
 - Assignment to `let` locals
 - `if` / `else` / `else if`

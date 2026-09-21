@@ -145,3 +145,58 @@ async def run():
     assert err.value.frontend_id == FRONTEND_IDENTITY
     assert err.value.frontend_version == PACKAGE_VERSION
     assert err.value.language_semantics_version == LANGUAGE_SEMANTICS_VERSION
+
+
+FIRST_PRIMITIVES = """
+from tcc_engine.primitives import effect, wait_for_event
+
+async def run():
+    result = await effect("generate", generate_something)
+    approval = await wait_for_event("approved")
+    return {"result": result, "approval": approval}
+"""
+
+
+def test_compiles_the_first_example_from_primitives():
+    artifact = compile(FIRST_PRIMITIVES, filename="first.py")
+    ops = [instruction["op"] for instruction in artifact["program"]["functions"][0]["instructions"]]
+    assert ops[1] == "Effect"
+    assert ops[4] == "WaitForEvent"
+
+
+def test_primitives_and_trigora_imports_produce_the_same_hash():
+    from_sdk = compile(FIRST, filename="first.py")
+    from_primitives = compile(FIRST_PRIMITIVES, filename="first.py")
+    assert from_sdk["envelope"]["artifact_hash"] == from_primitives["envelope"]["artifact_hash"]
+
+
+def test_accepts_aliased_primitives_imports():
+    source = """
+from tcc_engine.primitives import effect as durable_effect, wait_for_event as wait
+
+async def run():
+    result = await durable_effect("generate", lambda: 1)
+    approval = await wait("approved")
+    return {"result": result, "approval": approval}
+"""
+    artifact = compile(source)
+    assert artifact["program"]["functions"][0]["instructions"][1]["op"] == "Effect"
+
+
+def test_rejects_imports_from_other_modules():
+    source = """
+from somewhere_else import effect
+
+async def run():
+    result = await effect("generate", lambda: 1)
+    return result
+"""
+    with pytest.raises(CompileError):
+        compile(source)
+
+
+def test_primitives_are_not_runtime_callable():
+    from tcc_engine.primitives import effect
+
+    with pytest.raises(RuntimeError, match="compiler intrins"):
+        effect("generate", lambda: 1)

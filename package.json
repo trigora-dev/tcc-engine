@@ -6,8 +6,8 @@
   "packageManager": "pnpm@9.15.0",
   "scripts": {
     "build:wasm": "cargo build -p tcc-wasm --target wasm32-unknown-unknown --release",
-    "build:js": "pnpm --filter @tcc-engine/frontend-typescript build && pnpm build:wasm && pnpm --filter @tcc-engine/bindings-javascript build && pnpm --filter @tcc-engine/host-node build",
-    "pack:js": "pnpm build:js && mkdir -p dist-packages && pnpm --filter @tcc-engine/frontend-typescript exec pnpm pack --pack-destination ../../dist-packages && pnpm --filter @tcc-engine/bindings-javascript exec pnpm pack --pack-destination ../../dist-packages && pnpm --filter @tcc-engine/host-node exec pnpm pack --pack-destination ../../dist-packages",
+    "build:js": "pnpm --filter @tcc-engine/primitives build && pnpm --filter @tcc-engine/frontend-typescript build && pnpm build:wasm && pnpm --filter @tcc-engine/bindings-javascript build && pnpm --filter @tcc-engine/host-node build",
+    "pack:js": "pnpm build:js && mkdir -p dist-packages && pnpm --filter @tcc-engine/primitives exec pnpm pack --pack-destination ../../dist-packages && pnpm --filter @tcc-engine/frontend-typescript exec pnpm pack --pack-destination ../../dist-packages && pnpm --filter @tcc-engine/bindings-javascript exec pnpm pack --pack-destination ../../dist-packages && pnpm --filter @tcc-engine/host-node exec pnpm pack --pack-destination ../../dist-packages",
     "verify:js": "node --experimental-sqlite scripts/verify-local-packages.mjs",
     "test:js": "pnpm --filter @tcc-engine/frontend-typescript test && pnpm --filter @tcc-engine/bindings-javascript test && pnpm --filter @tcc-engine/host-node test",
     "bench": "node --experimental-sqlite --experimental-strip-types bench/run.ts all",
