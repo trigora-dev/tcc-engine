@@ -6,7 +6,7 @@ Authoring uses resolved imports from `@tcc-engine/primitives` (engine-native) or
 
 ## Supported
 
-- Default-export async function with no parameters
+- Default-export async function `run(a, b, ...)` with plain identifier parameters. No default, rest, optional `?`, or binding pattern. A short argument vector leaves the remaining parameters `undefined`. Extra arguments are ignored. Explicit `null` stays `null`
 - Imports from `@tcc-engine/primitives` or `@trigora/sdk`: `effect`, `waitForEvent`, `sleep`, `invoke` (aliases included)
 - `const` / `let` with a single identifier and an initializer
 - Assignment to `let` locals
@@ -21,7 +21,8 @@ Authoring uses resolved imports from `@tcc-engine/primitives` (engine-native) or
 - Property read `obj.key`
 - `===` / `!==`, unary `!`, numeric `<` `<=` `>` `>=`
 - Sequential and branched mixes of durable operations
-- Direct `await Promise.all([effect | waitForEvent | sleep | invoke, ...])` and `await Promise.race([...])` of at most 32 branches, including `return await` of either and an outer use of that await. Array destructuring is supported only for `await Promise.all(...)`. See [concurrency.md](concurrency.md).
+- Direct `await Promise.all([effect | waitForEvent | sleep | invoke, ...])` and `await Promise.race([...])` of at most 32 branches, including `return await` of either and an outer use of that await. Array destructuring is supported only for `await Promise.all(...)`. See [concurrency.md](concurrency.md)
+- `invoke(name, ...args)`. Each argument after the name is a subset value. See [durable-operations.md](durable-operations.md)
 
 Effect keys, event names, and invoke names are string literals. Effect callbacks are not compiled into the artifact.
 
@@ -39,4 +40,4 @@ Effect keys, event names, and invoke names are string literals. Effect callbacks
 - `++` / `--`, arithmetic, logical `&&` / `||` (use nested `if`)
 - Destructuring other than `const [a, b] = await Promise.all(...)`, rest/spread, optional chaining, `new`
 - Stored promises, `Promise.any` / `Promise.allSettled`, spread or dynamic `Promise.all` / `Promise.race` arguments
-- Parameters on the entry function
+- Entry-parameter defaults, rest, optional parameters, and binding patterns

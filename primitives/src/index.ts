@@ -18,6 +18,6 @@ export function sleep(_ms: number): Promise<void> {
   notRuntime();
 }
 
-export function invoke(_name: string): Promise<unknown> {
+export function invoke(_name: string, ..._args: unknown[]): Promise<unknown> {
   notRuntime();
 }

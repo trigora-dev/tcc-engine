@@ -99,6 +99,13 @@ pub fn validate(artifact: &Artifact, caps: &EngineCaps) -> Result<(), IrError> {
         }
         seen.push(function.id.0);
 
+        if function.param_count > function.local_count {
+            return Err(IrError::InvalidEncoding(format!(
+                "function {} param_count {} exceeds local_count {}",
+                function.id.0, function.param_count, function.local_count
+            )));
+        }
+
         if function.local_count > MAX_LOCALS {
             return Err(IrError::LimitsExceeded {
                 what: "local_count",

@@ -1,10 +1,13 @@
+import tempfile
 from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from tcc_engine.compile import artifact_json, compile
+from tcc_engine.store import Store
 from conformance import assert_conformance, run_uninterrupted, kill_and_resume
+from host import start_execution
 
 FIRST = """
 from trigora import effect, wait_for_event
@@ -346,3 +349,117 @@ def test_child_invoke_recovers():
         expected_effect_log=["child_work"],
         crash_ats=["after_create_child", "after_wait_checkpoint"],
     )
+
+
+INPUT_PROGRAM = """
+async def run(input):
+    return input
+"""
+
+NO_PARAM = """
+async def run():
+    return 1
+"""
+
+ANALYZE = """
+async def run(input):
+    return input["query"]
+"""
+
+PARENT_ANALYZE = """
+from tcc_engine.primitives import invoke
+
+async def run():
+    return await invoke("analyze", {"query": "hello"})
+"""
+
+
+def _start(source: str, **kwargs):
+    db = Path(tempfile.mkdtemp()) / "tcc.db"
+    return start_execution(db_path=str(db), artifact_json=artifact_json(compile(source)), **kwargs)
+
+
+def test_python_start_requires_exact_arity():
+    try:
+        _start(INPUT_PROGRAM)
+    except Exception as error:
+        assert "missing" in str(error)
+    else:
+        raise AssertionError("run(input) started with no arguments")
+    explicit = _start(INPUT_PROGRAM, program_args=[None])
+    assert explicit["result"] == {"t": "null"}
+    try:
+        _start(NO_PARAM, program_args=[None])
+    except Exception as error:
+        assert "were given" in str(error)
+    else:
+        raise AssertionError("run() accepted an extra argument")
+    child = artifact_json(
+        compile(
+            """
+async def run(a, b):
+    return a
+""",
+            filename="two.py",
+        )
+    )
+    try:
+        _start(PARENT_ANALYZE, child_artifacts={"analyze": child})
+    except Exception as error:
+        assert "missing" in str(error)
+    else:
+        raise AssertionError("a short vector started a two-parameter child")
+
+
+def test_invoke_input_is_stable_across_resume():
+    child_json = artifact_json(compile(ANALYZE, filename="analyze.py"))
+    assert_conformance(
+        PARENT_ANALYZE,
+        child_artifacts={"analyze": child_json},
+        expected_result={"t": "string", "v": "hello"},
+        crash_ats=["after_create_child", "after_wait_checkpoint"],
+    )
+
+
+def test_first_committed_child_args_stay_authoritative():
+    store = Store(str(Path(tempfile.mkdtemp()) / "tcc.db"))
+    store.put_artifact("h", "{}")
+    base = {
+        "parent_execution_id": "parent",
+        "flow_name": "analyze",
+        "artifact_hash": "h",
+        "owner_token": "o",
+        "lease_until": 1,
+    }
+    first = '[{"t":"string","v":"first"}]'
+    store.enqueue_create_child({**base, "invoke_id": "same", "child_execution_id": "child", "args_json": first})
+    store.flush_if_ungrouped()
+    store.enqueue_create_child({**base, "invoke_id": "same", "child_execution_id": "child", "args_json": first})
+    store.flush_if_ungrouped()
+    assert store.get_child("same")["args_json"] == first
+    try:
+        store.enqueue_create_child(
+            {**base, "invoke_id": "same", "child_execution_id": "child", "args_json": '[{"t":"string","v":"second"}]'}
+        )
+        store.flush_if_ungrouped()
+    except Exception as error:
+        assert "argument vector mismatch" in str(error)
+    else:
+        raise AssertionError("a conflicting argument vector was accepted")
+    assert store.get_child("same")["args_json"] == first
+    store.enqueue_create_child(
+        {**base, "invoke_id": "absent", "child_execution_id": "child-absent", "args_json": "[]"}
+    )
+    store.flush_if_ungrouped()
+    assert store.get_child("absent")["args_json"] is None
+    store.enqueue_create_child(
+        {
+            **base,
+            "invoke_id": "explicit-null",
+            "child_execution_id": "child-null",
+            "args_json": '[{"t":"null"}]',
+        }
+    )
+    store.flush_if_ungrouped()
+    assert store.get_child("explicit-null")["args_json"] == '[{"t":"null"}]'
+    store.close()

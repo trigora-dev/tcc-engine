@@ -6,7 +6,7 @@ Authoring uses resolved imports from `tcc_engine.primitives` (engine-native) or 
 
 ## Supported
 
-- A single top-level `async def run()` with no parameters
+- A single top-level `async def run(a, b, ...)` with plain parameters. No default, `*args`, keyword-only, positional-only, or pattern. The argument vector must match the parameter count. Too few or too many arguments is a start error. Explicit `None` stays null. A missing argument is not filled with `undefined`
 - Imports from `tcc_engine.primitives` or `trigora`: `effect`, `wait_for_event`, `sleep`, `invoke`, `gather`, `race` (aliases included). `gather` and `race` are compiler intrinsics for [concurrency.md](concurrency.md), not runtime coroutine helpers.
 - Assignment to simple locals
 - `if` / `elif` / `else`
@@ -20,6 +20,7 @@ Authoring uses resolved imports from `tcc_engine.primitives` (engine-native) or 
 - Property read `obj.key` or `obj["key"]`
 - `==` / `!=`, `is None` / `is not None`, unary `not`, numeric `<` `<=` `>` `>=`
 - Sequential and branched mixes of durable operations
+- `invoke(name, *args)`. Each argument after the name is a subset value. See [durable-operations.md](durable-operations.md)
 
 `if` / `while` / `not` operands must be bool, number, string, `None`, or a comparison. Collection literals used as conditions are compile errors. Effect keys, event names, and invoke names are string literals. Effect callbacks are not compiled into the artifact.
 
@@ -38,4 +39,4 @@ Authoring uses resolved imports from `tcc_engine.primitives` (engine-native) or 
 - Collection truthiness (`if []:` / `if {}:`)
 - Integers that are not exact binary64 values
 - `asyncio.gather`, `asyncio.wait`, `asyncio.FIRST_COMPLETED`, stored `gather` / `race`, and pre-awaited branch arguments (see [concurrency.md](concurrency.md))
-- Parameters on the entry function
+- Entry-parameter defaults, rest, keyword-only, positional-only, or a binding pattern

@@ -66,7 +66,7 @@ fn envelope(hash: String, instructions: &[Instruction]) -> Envelope {
                 add_engine(EngineFeature::DURABLE_SLEEP);
                 add_host(HostCapability::TIMER);
             }
-            Instruction::Invoke => {
+            Instruction::Invoke { .. } => {
                 add_engine(EngineFeature::DURABLE_INVOKE);
                 add_host(HostCapability::CHILD);
             }
@@ -273,7 +273,7 @@ fn invoke_then_wait(seed: u64) -> Artifact {
         1,
         vec![
             load_string("child"),
-            Instruction::Invoke,
+            Instruction::Invoke { arg_count: 0 },
             Instruction::StoreLocal { local: LocalId(0) },
             Instruction::LoadLocal { local: LocalId(0) },
             Instruction::Return,

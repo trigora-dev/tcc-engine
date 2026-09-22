@@ -27,7 +27,7 @@ Host conformance for this protocol is the named kit in [host-conformance-v1.md](
 | `persist_effect` | Persist the effect journal record |
 | `register_timer` | Arrange a wake at `resume_at_ms`. Inside a join, `branch` is the timer id |
 | `register_wait` | Persist the event wait. Wake on a matching event or timeout |
-| `create_child` | Create the child execution named by `program_name`. Wake the parent when the child is terminal |
+| `create_child` | Create the child execution named by `program_name`. `args` omitted means `[]`. Encode never writes `args: []` or `args: null`. Decode accepts a missing field and `args: []` as `[]`, and rejects `null`, an object, or a string. A present array element `{"t":"null"}` is one explicit null. Wake the parent when the child is terminal |
 | `fetch_artifact` | Return the artifact for the given hash |
 
 `persist_checkpoint` carries persist intent. Naive hosts may ignore everything except `revision` and persist `continuationJson()` as a full snapshot. Optimized hosts (`host.persist_checkpoint_delta`) persist the payload below.
@@ -50,6 +50,10 @@ The engine tracks dirtiness against the last **confirmed** revision. A crash bef
 A host may commit each persist individually or coordinate several transition records into one durability boundary. Coordinated commit is host policy, not a TCC semantic requirement. `persist_confirmed` is valid only after that revision is durable. `ack` still does not commit.
 
 Related records of one logical transition must become durable consistently even on a host that never groups unrelated executions. For `invoke`, that unit is the parent wait checkpoint, the engine-stable child identity, the child execution row, and the parent–child edge. `create_child` `ack` is not a commit. Retry before that commit finds no child; retry after it finds the same child.
+
+A child invocation identity permanently binds to its first committed argument vector. Re-creation with the same vector is idempotent. Re-creation with a different vector leaves that row unchanged and fails as an invariant mismatch. Reference hosts store `[]` as SQL `NULL` and never as the text `[]`. A non-empty vector is a JSON array. `[{"t":"null"}]` is one explicit null.
+
+Top-level start passes the same vector. The caller supplies the ordered arguments. The invoked program's `language_semantics_version` determines how that vector binds: TypeScript leaves missing parameters `undefined` and ignores extras; Python requires an exact count. Binding happens on a fresh start, not on resume. An out-of-tree client follows that contract, for example `client.executions.start(program, { args })`. This repository's Node `RunOptions.args` and Python `start_execution(program_args=...)` are that option. Absent means `[]`.
 
 The Node and Python reference hosts use a durability coordinator by default. The batch drivers pause each execution with one outstanding `persist_checkpoint`, commit the pending transition records together, then confirm. Newly created children become runnable only after that commit. A failed transaction confirms none; a crash before commit restores each execution from its previous confirmed revision. Coordinated waves measure this path rather than independently advancing executions past uncommitted checkpoints.
 

@@ -143,7 +143,8 @@ class Store:
               child_execution_id TEXT NOT NULL,
               flow_name TEXT NOT NULL,
               status TEXT NOT NULL,
-              result_json TEXT
+              result_json TEXT,
+              args_json TEXT
             );
             """
         )
@@ -696,12 +697,27 @@ class Store:
         self.db.commit()
 
     def _apply_create_child(self, op: dict[str, Any]) -> None:
+        args_json = _canonical_args_json(op.get("args_json"))
+        existing = self.get_child(op["invoke_id"])
+        if existing is not None:
+            if existing["args_json"] != args_json:
+                raise RuntimeError(f"child {op['invoke_id']} argument vector mismatch")
+            return
         self.db.execute(
-            """INSERT INTO children(invoke_id, parent_execution_id, child_execution_id, flow_name, status, result_json)
-               VALUES (?, ?, ?, ?, 'pending', NULL)
+            """INSERT INTO children(invoke_id, parent_execution_id, child_execution_id, flow_name, status, result_json, args_json)
+               VALUES (?, ?, ?, ?, 'pending', NULL, ?)
                ON CONFLICT(invoke_id) DO NOTHING""",
-            (op["invoke_id"], op["parent_execution_id"], op["child_execution_id"], op["flow_name"]),
+            (
+                op["invoke_id"],
+                op["parent_execution_id"],
+                op["child_execution_id"],
+                op["flow_name"],
+                args_json,
+            ),
         )
+        stored = self.get_child(op["invoke_id"])
+        if stored is None or stored["args_json"] != args_json:
+            raise RuntimeError(f"child {op['invoke_id']} argument vector mismatch")
         self.db.execute(
             """INSERT OR IGNORE INTO executions(id, artifact_hash, revision, status, owner_token, lease_until)
                VALUES (?, ?, 0, 'runnable', ?, ?)""",
@@ -734,6 +750,7 @@ class Store:
                 "artifact_hash": "",
                 "owner_token": "",
                 "lease_until": 0,
+                "args_json": None,
             }
         )
         self.flush_if_ungrouped()
@@ -749,3 +766,9 @@ class Store:
     def complete_child(self, invoke_id: str, result_json: str) -> None:
         self.enqueue_complete_child(invoke_id, result_json)
         self.flush_if_ungrouped()
+
+
+def _canonical_args_json(text: str | None) -> str | None:
+    if text is None or text == "[]":
+        return None
+    return text

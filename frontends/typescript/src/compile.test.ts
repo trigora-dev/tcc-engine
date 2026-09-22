@@ -326,7 +326,7 @@ export default async function run() {
     () =>
       compile(`
 import { effect } from "@trigora/sdk";
-export default async function run(ctx: unknown) {
+export default async function run(ctx: unknown, ...extra: unknown[]) {
   const result = await effect("generate", async () => 1);
   return result;
 }
@@ -497,5 +497,49 @@ export default async function run() {
         { filename: "any.ts" },
       ),
     /Promise.any is not supported/,
+  );
+});
+
+test("run takes plain parameters and invoke carries an argument vector", () => {
+  const program = compile(`
+export default async function run(a, b, c) {
+  return a;
+}
+`);
+  assert.equal(program.program.functions[0]?.param_count, 3);
+  assert.equal(program.program.functions[0]?.local_count, 3);
+  const invoked = compile(`
+import { invoke } from "@tcc-engine/primitives";
+export default async function run() {
+  return await invoke("analyze", { sources: 1 }, 2);
+}
+`);
+  const invokeOp = invoked.program.functions[0]?.instructions.find((instruction) => instruction.op === "Invoke");
+  assert.equal(invokeOp?.arg_count, 2);
+  const plain = compile(`
+import { invoke } from "@tcc-engine/primitives";
+export default async function run() {
+  return await invoke("analyze");
+}
+`);
+  const plainOp = plain.program.functions[0]?.instructions.find((instruction) => instruction.op === "Invoke");
+  assert.equal(plainOp && "arg_count" in plainOp, false);
+  assert.throws(
+    () =>
+      compile(`
+export default async function run({ query }) {
+  return query;
+}
+`),
+    /plain identifier/,
+  );
+  assert.throws(
+    () =>
+      compile(`
+export default async function run(input = null) {
+  return input;
+}
+`),
+    /plain identifier/,
   );
 });

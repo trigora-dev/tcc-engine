@@ -122,6 +122,25 @@ def collect_imports(tree: ast.Module, filename: str) -> dict[str, str]:
     return aliases
 
 
+def entry_param_count(entry: ast.AsyncFunctionDef, filename: str) -> int:
+    args = entry.args
+    if args.posonlyargs or args.kwonlyargs or args.vararg or args.kwarg:
+        raise CompileError(
+            "entry parameters must be plain identifiers",
+            filename=filename,
+            why=WHY_SUBSET,
+            node=entry,
+        )
+    if args.defaults:
+        raise CompileError(
+            "entry parameter defaults are not supported",
+            filename=filename,
+            why=WHY_SUBSET,
+            node=entry,
+        )
+    return len(args.args)
+
+
 def find_entry(tree: ast.Module, filename: str) -> ast.AsyncFunctionDef:
     entry: ast.AsyncFunctionDef | None = None
     for statement in tree.body:
@@ -135,20 +154,7 @@ def find_entry(tree: ast.Module, filename: str) -> ast.AsyncFunctionDef:
                     why=WHY_SUBSET,
                     node=statement,
                 )
-            if statement.args.args or statement.args.posonlyargs or statement.args.kwonlyargs:
-                raise CompileError(
-                    "entry function must not take parameters",
-                    filename=filename,
-                    why=WHY_SUBSET,
-                    node=statement,
-                )
-            if statement.args.vararg or statement.args.kwarg:
-                raise CompileError(
-                    "entry function must not take parameters",
-                    filename=filename,
-                    why=WHY_SUBSET,
-                    node=statement,
-                )
+            entry_param_count(statement, filename)
             entry = statement
             continue
         raise CompileError(
@@ -167,6 +173,9 @@ def lower_function(
 ) -> dict[str, Any]:
     lower = Lowerer(aliases, filename)
     lower.push_scope()
+    param_count = entry_param_count(entry, filename)
+    for parameter in entry.args.args:
+        lower.declare(parameter.arg)
     for statement in entry.body:
         lower.statement(statement)
     lower.pop_scope()
@@ -174,7 +183,7 @@ def lower_function(
     return {
         "id": 0,
         "name": entry.name,
-        "param_count": 0,
+        "param_count": param_count,
         "local_count": lower.max_slots,
         "instructions": lower.instructions,
         "spans": lower.spans,
@@ -568,11 +577,18 @@ class Lowerer:
             self.emit({"op": "Sleep"}, call)
             return
         if durable == "invoke":
-            if len(call.args) != 1:
-                raise CompileError("`invoke` takes a flow name")
+            if call.keywords or any(isinstance(arg, ast.Starred) for arg in call.args):
+                raise CompileError("`invoke` does not take keywords or spread")
+            if len(call.args) < 1:
+                raise CompileError("`invoke` takes a flow name and optional arguments")
+            for argument in call.args[1:]:
+                self.expression(argument)
             name = string_literal(call.args[0], "invoke name")
             self.emit({"op": "LoadConst", "value": {"t": "string", "v": name}}, call)
-            self.emit({"op": "Invoke"}, call)
+            instruction: dict[str, Any] = {"op": "Invoke"}
+            if len(call.args) > 1:
+                instruction["arg_count"] = len(call.args) - 1
+            self.emit(instruction, call)
             return
         raise CompileError("call is not a resolved durable operation")
 

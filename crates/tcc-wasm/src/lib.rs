@@ -6,9 +6,9 @@
 use std::cell::RefCell;
 use std::slice;
 
-use tcc_core::{decode_response, encode_outcome, Engine};
+use tcc_core::{decode_args_array, decode_response, encode_outcome, Engine};
 use tcc_ir::{decode_artifact, EngineCaps, ENGINE_FORMAT_VERSION};
-use tcc_state::{decode_continuation, encode_continuation};
+use tcc_state::{decode_continuation, encode_continuation, Value};
 
 pub use tcc_core::{
     ChildSpec, EffectRecord, EffectStatus, Engine as CoreEngine, EngineOutcome, HostRequest,
@@ -66,7 +66,30 @@ pub extern "C" fn tcc_start(
 ) -> i32 {
     let artifact_json = unsafe { read_str(artifact_ptr, artifact_len) };
     let execution_id = unsafe { read_str(exec_ptr, exec_len) };
-    match start_engine(artifact_json, execution_id) {
+    match start_engine(artifact_json, execution_id, &[]) {
+        Ok(()) => 0,
+        Err(message) => set_error(&message),
+    }
+}
+
+#[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub extern "C" fn tcc_start_with_args(
+    artifact_ptr: *const u8,
+    artifact_len: u32,
+    exec_ptr: *const u8,
+    exec_len: u32,
+    args_ptr: *const u8,
+    args_len: u32,
+) -> i32 {
+    let artifact_json = unsafe { read_str(artifact_ptr, artifact_len) };
+    let execution_id = unsafe { read_str(exec_ptr, exec_len) };
+    let args_json = unsafe { read_str(args_ptr, args_len) };
+    let args = match decode_args_array(args_json) {
+        Ok(args) => args,
+        Err(err) => return set_error(&err.to_string()),
+    };
+    match start_engine(artifact_json, execution_id, &args) {
         Ok(()) => 0,
         Err(message) => set_error(&message),
     }
@@ -138,9 +161,9 @@ pub extern "C" fn tcc_continuation() -> i32 {
     })
 }
 
-fn start_engine(artifact_json: &str, execution_id: &str) -> Result<(), String> {
+fn start_engine(artifact_json: &str, execution_id: &str, args: &[Value]) -> Result<(), String> {
     let artifact = decode_artifact(artifact_json).map_err(|err| err.to_string())?;
-    let engine = Engine::start(artifact, execution_id, &EngineCaps::current())
+    let engine = Engine::start_with_args(artifact, execution_id, &EngineCaps::current(), args)
         .map_err(|err| err.to_string())?;
     ENGINE.with(|slot| {
         *slot.borrow_mut() = Some(engine);
@@ -181,7 +204,7 @@ mod tests {
     use tcc_core::{Engine as NativeEngine, EngineOutcome, HostRequest, HostResponse};
     use tcc_ir::encode_artifact;
     use tcc_ir::gen::{generate, seed_count};
-    use tcc_ir::{ConstValue, Envelope, FuncId, Function, Instruction, Pc, Program};
+    use tcc_ir::{ConstValue, Envelope, FuncId, Function, Instruction, LocalId, Pc, Program};
     use tcc_state::Value;
 
     #[test]
@@ -280,6 +303,24 @@ mod tests {
         let code = tcc_resume(artifact_buf.0, artifact_buf.1, cont_buf.0, cont_buf.1);
         tcc_free(artifact_buf.0, artifact_buf.1);
         tcc_free(cont_buf.0, cont_buf.1);
+        assert_eq!(code, 0, "{}", last_json());
+    }
+
+    fn start_with_args(artifact: &str, execution_id: &str, args_json: &str) {
+        let artifact_buf = write_str(artifact);
+        let exec_buf = write_str(execution_id);
+        let args_buf = write_str(args_json);
+        let code = tcc_start_with_args(
+            artifact_buf.0,
+            artifact_buf.1,
+            exec_buf.0,
+            exec_buf.1,
+            args_buf.0,
+            args_buf.1,
+        );
+        tcc_free(artifact_buf.0, artifact_buf.1);
+        tcc_free(exec_buf.0, exec_buf.1);
+        tcc_free(args_buf.0, args_buf.1);
         assert_eq!(code, 0, "{}", last_json());
     }
 
@@ -451,6 +492,69 @@ mod tests {
             let cabi_result = drive_cabi();
             assert_eq!(native_result, cabi_result, "seed {seed}");
         }
+    }
+
+    #[test]
+    fn native_and_c_abi_agree_on_program_input() {
+        let instructions = vec![
+            Instruction::LoadLocal { local: LocalId(0) },
+            Instruction::Return,
+        ];
+        let spans = vec![None; instructions.len()];
+        let artifact = Artifact {
+            envelope: Envelope {
+                artifact_hash: "program-input".into(),
+                frontend_id: "typescript".into(),
+                frontend_version: "0.0.0".into(),
+                language_semantics_version: "ts.subset.v1".into(),
+                engine_format_version: ENGINE_FORMAT_VERSION,
+                required_engine_features: tcc_ir::FeatureSet::current_engine(),
+                required_host_capabilities: tcc_ir::HostCapability::known()
+                    .iter()
+                    .map(|id| tcc_ir::HostCapability((*id).to_string()))
+                    .collect(),
+                runtime_modules: Vec::new(),
+            },
+            program: Program {
+                entry: FuncId(0),
+                functions: vec![Function {
+                    id: FuncId(0),
+                    name: "run".into(),
+                    param_count: 1,
+                    local_count: 1,
+                    instructions,
+                    spans,
+                }],
+            },
+        };
+        let json = encode_artifact(&artifact).unwrap();
+        let mut native = NativeEngine::start_with_args(
+            artifact,
+            "program-input",
+            &EngineCaps::current(),
+            &[Value::String("hi".into())],
+        )
+        .unwrap();
+        let native_result = loop {
+            match native.run_until_host(32) {
+                EngineOutcome::Host(HostRequest::PersistCheckpoint { revision, .. }) => {
+                    native
+                        .apply_host_response(HostResponse::PersistConfirmed { revision })
+                        .unwrap();
+                }
+                EngineOutcome::Completed { .. } => {
+                    break String::from_utf8(
+                        tcc_state::encode_continuation(native.continuation()).unwrap(),
+                    )
+                    .unwrap();
+                }
+                other => panic!("native {other:?}"),
+            }
+        };
+        start_with_args(&json, "program-input", r#"[{"t":"string","v":"hi"}]"#);
+        let cabi_result = drive_cabi();
+        assert_eq!(native_result, cabi_result);
+        assert!(cabi_result.contains("\"v\":\"hi\""));
     }
 
     fn drive_native(artifact: Artifact, execution_id: &str) -> String {

@@ -30,7 +30,7 @@ Each function has:
 
 - a unique function id
 - a name
-- parameter and local counts
+- parameter and local counts. `param_count` is not greater than `local_count`. Slots `0..param_count-1` are the program parameters, in source order
 - an instruction sequence
 - a source-span array of the same length as the instruction sequence (`null` spans are allowed)
 
@@ -71,7 +71,7 @@ Durable operations:
 - `Effect`
 - `Sleep`
 - `WaitForEvent`
-- `Invoke`
+- `Invoke`. Optional `arg_count`. Omitted or zero pops only the program name. A positive count pops that many values underneath the name, in reverse, and restores source order. Encode omits `arg_count` when it is zero; a missing field decodes as zero
 - `Fork { count, join_pc }` / `JoinAll` / `JoinAny` — require `durable.concurrent_group`; `count` is 1 through 32. `JoinAny` is `Promise.race`. See [concurrency.md](concurrency.md)
 
 Exceptions:
@@ -85,6 +85,8 @@ Constants are `undefined`, `null`, boolean, IEEE-754 binary64 number, and string
 ## Language semantics
 
 Instruction meaning is bound to `language_semantics_version`. Sharing an encoding does not make language rules identical.
+
+The caller supplies an ordered argument vector. The invoked program's `language_semantics_version` determines how that vector binds to its declared parameters. `Invoke` consumes exactly `arg_count` values under the program name (`arg_count` omitted means zero). Parameter slots are written on a fresh start only. Resume does not bind them again.
 
 A frontend that needs different numeric types, truthiness, exceptions, or object identity must introduce new instructions or runtime helpers and declare a new required engine feature. Existing artifacts must not change meaning when the format is extended.
 

@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use tcc_ir::{
     analyze_program, validate, Artifact, ConstValue, EngineCaps, FuncId, FunctionLiveness,
-    Instruction, Pc, ENGINE_FORMAT_VERSION, MAX_JOIN_BRANCHES,
+    Instruction, Pc, ENGINE_FORMAT_VERSION, LANGUAGE_SEMANTICS_PY, LANGUAGE_SEMANTICS_TS,
+    MAX_JOIN_BRANCHES,
 };
 use tcc_state::{
     persist_intent, BranchOp, BranchPhase, Continuation, ContinuationStatus, JoinBranch, JoinKind,
@@ -43,11 +44,21 @@ impl Engine {
         execution_id: impl Into<String>,
         caps: &EngineCaps,
     ) -> Result<Self, CoreError> {
+        Self::start_with_args(artifact, execution_id, caps, &[])
+    }
+
+    /// `args` is the ordered program argument vector. An empty slice is no arguments.
+    pub fn start_with_args(
+        artifact: Artifact,
+        execution_id: impl Into<String>,
+        caps: &EngineCaps,
+        args: &[Value],
+    ) -> Result<Self, CoreError> {
         validate(&artifact, caps)?;
         let entry = artifact
             .function(artifact.program.entry)
             .expect("validated artifact has an entry function");
-        let continuation = Continuation::start(
+        let mut continuation = Continuation::start(
             execution_id,
             artifact.envelope.artifact_hash.clone(),
             artifact.envelope.engine_format_version,
@@ -55,6 +66,12 @@ impl Engine {
             entry.id.0,
             entry.local_count,
         );
+        bind_program_args(
+            &artifact.envelope.language_semantics_version,
+            entry.param_count,
+            args,
+            &mut continuation.frames[0].locals,
+        )?;
         let liveness = analyze_program(&artifact.program);
         Ok(Self {
             artifact,
@@ -582,7 +599,7 @@ impl Engine {
             Instruction::Effect => self.yield_effect(),
             Instruction::Sleep => self.yield_sleep(),
             Instruction::WaitForEvent => self.yield_wait(),
-            Instruction::Invoke => self.yield_invoke(),
+            Instruction::Invoke { arg_count } => self.yield_invoke(arg_count),
             Instruction::Fork { count, join_pc } => self.begin_join(count, join_pc),
             Instruction::JoinAll => self.finish_join(),
             Instruction::JoinAny => self.finish_any(),
@@ -687,8 +704,13 @@ impl Engine {
         Ok(Some(EngineOutcome::Host(request)))
     }
 
-    fn yield_invoke(&mut self) -> Result<Option<EngineOutcome>, CoreError> {
+    fn yield_invoke(&mut self, arg_count: u32) -> Result<Option<EngineOutcome>, CoreError> {
         let program_name = expect_string(self.pop()?)?;
+        let mut args = Vec::with_capacity(arg_count as usize);
+        for _ in 0..arg_count {
+            args.push(self.pop()?);
+        }
+        args.reverse();
         let (invoke_id, child_execution_id) = if self.join_is_active() {
             let invoke_id = self.next_planned_branch_id()?;
             let child_execution_id = format!("child:{invoke_id}");
@@ -716,7 +738,7 @@ impl Engine {
                 invoke_id,
                 child_execution_id,
                 program_name,
-                input: None,
+                args,
             },
         };
         self.outstanding = Some(request.clone());
@@ -1333,6 +1355,44 @@ fn const_to_value(value: &ConstValue) -> Value {
         ConstValue::Bool(flag) => Value::Bool(*flag),
         ConstValue::Number(number) => Value::Number(*number),
         ConstValue::String(text) => Value::String(text.clone()),
+    }
+}
+
+/// The only language dispatch for program arguments. After this returns, slots are ordinary locals.
+fn bind_program_args(
+    language_semantics_version: &str,
+    param_count: u32,
+    args: &[Value],
+    locals: &mut [Value],
+) -> Result<(), CoreError> {
+    let expected = param_count as usize;
+    match language_semantics_version {
+        LANGUAGE_SEMANTICS_TS => {
+            for (index, value) in args.iter().take(expected).enumerate() {
+                locals[index] = value.clone();
+            }
+            Ok(())
+        }
+        LANGUAGE_SEMANTICS_PY => {
+            let given = args.len();
+            if given != expected {
+                return Err(CoreError::TypeError(if given < expected {
+                    format!(
+                        "run() missing {} required positional argument(s)",
+                        expected - given
+                    )
+                } else {
+                    format!("run() takes {expected} positional arguments but {given} were given")
+                }));
+            }
+            for (index, value) in args.iter().enumerate() {
+                locals[index] = value.clone();
+            }
+            Ok(())
+        }
+        other => Err(CoreError::TypeError(format!(
+            "unsupported language semantics `{other}`"
+        ))),
     }
 }
 

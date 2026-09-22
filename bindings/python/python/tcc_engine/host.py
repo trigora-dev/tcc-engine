@@ -11,6 +11,7 @@ from tcc_engine.store import Store
 FakeEffects = dict[str, Any]
 EffectRunner = Callable[[str], Any]
 CrashHook = Callable[[str, Optional[str]], None]
+_UNSET = object()
 
 
 def map_effects(effects: FakeEffects) -> EffectRunner:
@@ -40,6 +41,7 @@ def start_execution(
     db_path: str,
     artifact_json: str,
     execution_id: str = "first",
+    program_args: Any = _UNSET,
     run_effect: EffectRunner | None = None,
     effects: FakeEffects | None = None,
     event_payload: Any = None,
@@ -86,6 +88,7 @@ def start_execution(
             cancel=cancel,
             crash=crash,
             db_path=db_path,
+            program_args=program_args,
         )
     finally:
         store.close()
@@ -110,6 +113,7 @@ def run_on_store(
     cancel: bool = False,
     crash: CrashHook | None = None,
     db_path: str = "",
+    program_args: Any = _UNSET,
 ) -> dict[str, Any]:
     if store.is_grouping():
         raise RuntimeError("run_on_store cannot acknowledge checkpoints inside an open group; use run_batch_on_store")
@@ -131,6 +135,7 @@ def run_on_store(
         cancel=cancel,
         crash=crash,
         db_path=db_path,
+        program_args=program_args,
     )
     return drive(store, engine, options)
 
@@ -147,7 +152,12 @@ def _prepare_on_store(store: Store, **options: Any) -> tuple[EngineBinding, dict
     store.put_artifact(hash_, artifact_json)
     if store.get_execution(execution_id) is None:
         store.create_execution(execution_id, hash_, owner_token, int(time.time() * 1000) + lease_ms)
-    engine = EngineBinding(artifact_json, execution_id)
+    args_json = _program_args_json(options)
+    engine = (
+        EngineBinding(artifact_json, execution_id)
+        if args_json is None
+        else EngineBinding(artifact_json, execution_id, args_json)
+    )
     return engine, {**options, "execution_id": execution_id, "owner_token": owner_token, "fail_counts": dict(options.get("fail_counts") or {})}
 
 
@@ -197,11 +207,19 @@ def run_batch_on_store(
             artifact_json = (parent or {}).get("child_artifacts", {}).get(created["flow_name"]) if parent else None
             if not artifact_json:
                 raise RuntimeError(f"no child artifact for `{created['flow_name']}`")
+            child_options = {
+                key: value
+                for key, value in parent.items()
+                if key not in {"program_args", "program_args_json"}
+            }
+            row = store.get_child_by_execution_id(child_id)
+            if row is not None and row["args_json"] is not None:
+                child_options["program_args_json"] = row["args_json"]
             sessions.append(
                 _prepare_on_store(
                     store,
                     **{
-                        **parent,
+                        **child_options,
                         "execution_id": child_id,
                         "artifact_json": artifact_json,
                         "cancel": False,
@@ -360,6 +378,37 @@ def handle_outcome(
     raise RuntimeError("unknown engine outcome")
 
 
+def _program_args_json(options: dict[str, Any]) -> str | None:
+    stored = options.get("program_args_json")
+    if stored is not None:
+        return None if stored == "[]" else stored
+    if options.get("program_args", _UNSET) is _UNSET:
+        return None
+    args = options["program_args"]
+    if not isinstance(args, list):
+        raise TypeError("program_args must be a list")
+    if len(args) == 0:
+        return None
+    return json.dumps([encode_value(item) for item in args], separators=(",", ":"))
+
+
+def _child_args_json(request: dict[str, Any]) -> str | None:
+    if "args" not in request:
+        return None
+    args = request["args"]
+    if not isinstance(args, list):
+        raise RuntimeError("create_child args must be an array")
+    if len(args) == 0:
+        return None
+    return json.dumps(args, separators=(",", ":"))
+
+
+def _engine_for_child(artifact_json: str, execution_id: str, args_json: str | None) -> EngineBinding:
+    if args_json is None:
+        return EngineBinding(artifact_json, execution_id)
+    return EngineBinding(artifact_json, execution_id, args_json)
+
+
 def enqueue_child(
     store: Store,
     engine: EngineBinding,
@@ -391,6 +440,7 @@ def enqueue_child(
             "artifact_hash": artifact_hash,
             "owner_token": options["owner_token"],
             "lease_until": int(time.time() * 1000) + (options.get("lease_ms") or 60_000),
+            "args_json": _child_args_json(request),
         }
     )
     crash("after_create_child", None)
@@ -606,13 +656,13 @@ def deliver_child(
             options["owner_token"],
             int(time.time() * 1000) + (options.get("lease_ms") or 60_000),
         )
-        child_engine = EngineBinding(artifact_json, child["child_execution_id"])
+        child_engine = _engine_for_child(artifact_json, child["child_execution_id"], child["args_json"])
     else:
         saved = store.get_continuation(child["child_execution_id"])
         child_engine = (
             EngineBinding.resume(artifact_json, saved["json"])
             if saved is not None
-            else EngineBinding(artifact_json, child["child_execution_id"])
+            else _engine_for_child(artifact_json, child["child_execution_id"], child["args_json"])
         )
     child_result = drive(
         store,

@@ -27,7 +27,7 @@ const INPUT_PATH = "/__tcc/input.ts";
 const DURABLE_SOURCE = `export declare function effect<T>(key: string, fn: () => T | Promise<T>): Promise<T>;
 export declare function waitForEvent(name: string): Promise<unknown>;
 export declare function sleep(ms: number): Promise<void>;
-export declare function invoke(name: string): Promise<unknown>;
+export declare function invoke(name: string, ...args: unknown[]): Promise<unknown>;
 `;
 
 type DurableName = "effect" | "waitForEvent" | "sleep" | "invoke";
@@ -207,13 +207,30 @@ function findDefaultExport(sourceFile: ts.SourceFile, filename: string): ts.Func
   if (!hasModifier(entry, ts.SyntaxKind.AsyncKeyword)) {
     fail(filename, sourceFile, entry, "default export must be an async function", WHY_SUBSET);
   }
-  if (entry.parameters.length > 0) {
-    fail(filename, sourceFile, entry, "entry function must not take parameters", WHY_SUBSET);
-  }
   if (!entry.body) {
     fail(filename, sourceFile, entry, "entry function is missing a body", WHY_SUBSET);
   }
   return entry;
+}
+
+function bindEntryParams(
+  entry: ts.FunctionDeclaration,
+  lower: Lowerer,
+  sourceFile: ts.SourceFile,
+  filename: string,
+): number {
+  for (const param of entry.parameters) {
+    if (
+      param.dotDotDotToken ||
+      param.initializer ||
+      param.questionToken ||
+      !ts.isIdentifier(param.name)
+    ) {
+      fail(filename, sourceFile, param, "entry parameter must be a plain identifier", WHY_SUBSET);
+    }
+    lower.declare(param.name.text, "let");
+  }
+  return entry.parameters.length;
 }
 
 function lowerFunction(
@@ -224,6 +241,7 @@ function lowerFunction(
 ): FunctionDecl {
   const lower = new Lowerer(sourceFile, checker, filename);
   lower.pushScope();
+  const paramCount = bindEntryParams(entry, lower, sourceFile, filename);
   for (const statement of entry.body!.statements) {
     lower.statement(statement);
   }
@@ -232,7 +250,7 @@ function lowerFunction(
   return {
     id: 0,
     name: entry.name?.text ?? "default",
-    param_count: 0,
+    param_count: paramCount,
     local_count: lower.maxSlots,
     instructions: lower.instructions,
     spans: lower.spans,
@@ -786,12 +804,19 @@ class Lowerer {
       return;
     }
     if (durable === "invoke") {
-      if (call.arguments.length !== 1) {
-        throw new CompileError("`invoke` takes a flow name");
+      if (call.arguments.some((argument) => ts.isSpreadElement(argument))) {
+        throw new CompileError("`invoke` does not take spread");
+      }
+      if (call.arguments.length < 1) {
+        throw new CompileError("`invoke` takes a flow name and optional arguments");
+      }
+      for (const argument of call.arguments.slice(1)) {
+        this.expression(argument);
       }
       const name = stringLiteral(call.arguments[0]!, "invoke name");
       this.emit({ op: "LoadConst", value: { t: "string", v: name } }, node);
-      this.emit({ op: "Invoke" }, node);
+      const argCount = call.arguments.length - 1;
+      this.emit(argCount === 0 ? { op: "Invoke" } : { op: "Invoke", arg_count: argCount }, node);
       return;
     }
     throw new CompileError("call is not a resolved durable operation");

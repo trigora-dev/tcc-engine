@@ -243,8 +243,11 @@ fn instruction_to_json(instruction: &Instruction) -> Json {
         Instruction::WaitForEvent => {
             map.insert("op".to_string(), Json::String("WaitForEvent".to_string()));
         }
-        Instruction::Invoke => {
+        Instruction::Invoke { arg_count } => {
             map.insert("op".to_string(), Json::String("Invoke".to_string()));
+            if *arg_count != 0 {
+                map.insert("arg_count".to_string(), Json::Number(*arg_count as f64));
+            }
         }
         Instruction::Fork { count, join_pc } => {
             map.insert("op".to_string(), Json::String("Fork".to_string()));
@@ -444,7 +447,14 @@ fn json_to_instruction(json: &Json) -> Result<Instruction, IrError> {
         "Effect" => Ok(Instruction::Effect),
         "Sleep" => Ok(Instruction::Sleep),
         "WaitForEvent" => Ok(Instruction::WaitForEvent),
-        "Invoke" => Ok(Instruction::Invoke),
+        "Invoke" => Ok(Instruction::Invoke {
+            arg_count: match map.get("arg_count") {
+                None => 0,
+                Some(value) => value.as_u32().map_err(|_| {
+                    IrError::InvalidEncoding("Invoke arg_count must be an integer".to_string())
+                })?,
+            },
+        }),
         "Fork" => Ok(Instruction::Fork {
             count: Json::get(map, "count")?.as_u32()?,
             join_pc: Pc(Json::get(map, "join_pc")?.as_u32()?),
@@ -517,6 +527,32 @@ mod tests {
             result.unwrap(),
             Err(IrError::InvalidEncoding(message)) if message.contains("Nope")
         ));
+    }
+
+    #[test]
+    fn zero_argument_invoke_omits_arg_count() {
+        let mut artifact = Artifact::minimal_return("invoke-plain");
+        artifact.program.functions[0].instructions = vec![Instruction::Invoke { arg_count: 0 }];
+        artifact.program.functions[0].spans = vec![None];
+        let text = encode_artifact(&artifact).unwrap();
+        assert!(text.contains("\"op\":\"Invoke\""));
+        assert!(!text.contains("arg_count"));
+        let decoded = decode_artifact(&text).unwrap();
+        assert_eq!(
+            decoded.program.functions[0].instructions[0],
+            Instruction::Invoke { arg_count: 0 }
+        );
+        assert_eq!(encode_artifact(&decoded).unwrap(), text);
+    }
+
+    #[test]
+    fn invoke_arg_count_round_trips() {
+        let mut artifact = Artifact::minimal_return("invoke-args");
+        artifact.program.functions[0].instructions = vec![Instruction::Invoke { arg_count: 2 }];
+        artifact.program.functions[0].spans = vec![None];
+        let text = encode_artifact(&artifact).unwrap();
+        assert!(text.contains("\"arg_count\":2"));
+        assert_eq!(decode_artifact(&text).unwrap(), artifact);
     }
 
     #[test]

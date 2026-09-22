@@ -31,7 +31,7 @@ pub struct ChildSpec {
     pub invoke_id: String,
     pub child_execution_id: String,
     pub program_name: String,
-    pub input: Option<Value>,
+    pub args: Vec<Value>,
 }
 
 /// Coarse host participation. Not issued per instruction.

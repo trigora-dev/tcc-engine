@@ -59,6 +59,8 @@ export type CreateChildOp = {
   artifactHash: string;
   ownerToken: string;
   leaseUntil: number;
+  /** SQL NULL for `[]`. Otherwise a JSON array of tagged values. */
+  argsJson: string | null;
 };
 
 export type CompleteChildOp = {
@@ -78,6 +80,7 @@ export type ChildRow = {
   flow_name: string;
   status: string;
   result_json: string | null;
+  args_json: string | null;
 };
 
 export type EffectRow = {
@@ -241,7 +244,8 @@ export class Store {
         child_execution_id TEXT NOT NULL,
         flow_name TEXT NOT NULL,
         status TEXT NOT NULL,
-        result_json TEXT
+        result_json TEXT,
+        args_json TEXT
       );
     `);
   }
@@ -873,11 +877,23 @@ export class Store {
   }
 
   private applyCreateChild(op: CreateChildOp): void {
+    const argsJson = canonicalArgsJson(op.argsJson);
+    const existing = this.getChild(op.invokeId);
+    if (existing) {
+      if (existing.args_json !== argsJson) {
+        throw new Error(`child ${op.invokeId} argument vector mismatch`);
+      }
+      return;
+    }
     this.statement(
-      `INSERT INTO children(invoke_id, parent_execution_id, child_execution_id, flow_name, status, result_json)
-       VALUES (?, ?, ?, ?, 'pending', NULL)
+      `INSERT INTO children(invoke_id, parent_execution_id, child_execution_id, flow_name, status, result_json, args_json)
+       VALUES (?, ?, ?, ?, 'pending', NULL, ?)
        ON CONFLICT(invoke_id) DO NOTHING`,
-    ).run(op.invokeId, op.parentExecutionId, op.childExecutionId, op.flowName);
+    ).run(op.invokeId, op.parentExecutionId, op.childExecutionId, op.flowName, argsJson);
+    const stored = this.getChild(op.invokeId);
+    if (stored?.args_json !== argsJson) {
+      throw new Error(`child ${op.invokeId} argument vector mismatch`);
+    }
     this.statement(
       `INSERT OR IGNORE INTO executions(id, artifact_hash, revision, status, owner_token, lease_until)
        VALUES (?, ?, 0, 'runnable', ?, ?)`,
@@ -913,6 +929,7 @@ export class Store {
       artifactHash: "",
       ownerToken: "",
       leaseUntil: 0,
+      argsJson: null,
     });
     this.flushIfUngrouped();
   }
@@ -931,4 +948,9 @@ export class Store {
     this.enqueueCompleteChild({ invokeId, resultJson });
     this.flushIfUngrouped();
   }
+}
+
+function canonicalArgsJson(text: string | null): string | null {
+  if (text == null || text === "[]") return null;
+  return text;
 }

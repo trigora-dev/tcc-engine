@@ -52,7 +52,7 @@ export type Instruction =
   | { op: "Effect" }
   | { op: "Sleep" }
   | { op: "WaitForEvent" }
-  | { op: "Invoke" }
+  | { op: "Invoke"; arg_count?: number }
   | { op: "Fork"; count: number; join_pc: number }
   | { op: "JoinAll" }
   | { op: "JoinAny" }

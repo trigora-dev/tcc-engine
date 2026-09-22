@@ -263,7 +263,7 @@ fn sleep_and_invoke_wake() {
             Instruction::LoadConst {
                 value: ConstValue::String("child".into()),
             },
-            Instruction::Invoke,
+            Instruction::Invoke { arg_count: 0 },
             Instruction::StoreLocal { local: LocalId(0) },
             Instruction::LoadLocal { local: LocalId(0) },
             Instruction::Return,

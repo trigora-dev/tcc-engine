@@ -139,6 +139,108 @@ test("duplicate event after completion is a no-op", async () => {
   assert.deepEqual(again.result, completed);
 });
 
+const INPUT = `
+export default async function run(input) {
+  return input;
+}
+`;
+
+const TAIL = `
+export default async function run(a, b) {
+  return b;
+}
+`;
+
+const NO_PARAM = `
+export default async function run() {
+  return 1;
+}
+`;
+
+test("start pads a short vector and ignores extras", async () => {
+  const tail = canonicalStringify(compile(TAIL, { filename: "tail.ts" }));
+  const missing = await startExecution({
+    dbPath: dbFile(),
+    wasmPath,
+    artifactJson: tail,
+    args: ["hi"],
+  });
+  assert.equal(missing.status, "completed");
+  assert.deepEqual(missing.result, { t: "undefined" });
+
+  const explicit = await startExecution({
+    dbPath: dbFile(),
+    wasmPath,
+    artifactJson: canonicalStringify(compile(INPUT, { filename: "input.ts" })),
+    args: [null],
+  });
+  assert.deepEqual(explicit.result, { t: "null" });
+
+  const ignored = await startExecution({
+    dbPath: dbFile(),
+    wasmPath,
+    artifactJson: canonicalStringify(compile(NO_PARAM, { filename: "none.ts" })),
+    args: [null],
+  });
+  assert.equal(ignored.status, "completed");
+  assert.deepEqual(ignored.result, { t: "number", v: 1 });
+});
+
+test("first committed child args stay authoritative", () => {
+  const store = new Store(dbFile());
+  store.putArtifact("h", "{}");
+  const base = {
+    parentExecutionId: "parent",
+    flowName: "analyze",
+    artifactHash: "h",
+    ownerToken: "o",
+    leaseUntil: 1,
+  };
+  const first = '[{"t":"string","v":"first"}]';
+  store.enqueueCreateChild({
+    ...base,
+    invokeId: "same",
+    childExecutionId: "child",
+    argsJson: first,
+  });
+  store.flushIfUngrouped();
+  store.enqueueCreateChild({
+    ...base,
+    invokeId: "same",
+    childExecutionId: "child",
+    argsJson: first,
+  });
+  store.flushIfUngrouped();
+  assert.equal(store.getChild("same")?.args_json, first);
+  assert.throws(() => {
+    store.enqueueCreateChild({
+      ...base,
+      invokeId: "same",
+      childExecutionId: "child",
+      argsJson: '[{"t":"string","v":"second"}]',
+    });
+    store.flushIfUngrouped();
+  }, /argument vector mismatch/);
+  assert.equal(store.getChild("same")?.args_json, first);
+  store.enqueueCreateChild({
+    ...base,
+    invokeId: "absent",
+    childExecutionId: "child-absent",
+    argsJson: "[]",
+  });
+  store.flushIfUngrouped();
+  assert.equal(store.getChild("absent")?.args_json, null);
+  store.enqueueCreateChild({
+    ...base,
+    invokeId: "explicit-null",
+    childExecutionId: "child-null",
+    argsJson: '[{"t":"null"}]',
+  });
+  store.flushIfUngrouped();
+  assert.equal(store.getChild("explicit-null")?.args_json, '[{"t":"null"}]');
+  store.close();
+});
+
 test("a second worker cannot take a live lease", async () => {
   const dbPath = dbFile();
   await startExecution({

@@ -5,7 +5,7 @@
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use tcc_core::{decode_response, encode_outcome, Engine};
+use tcc_core::{decode_args_array, decode_response, encode_outcome, Engine};
 use tcc_ir::{decode_artifact, EngineCaps};
 use tcc_state::{decode_continuation, encode_continuation};
 
@@ -17,10 +17,15 @@ struct EngineBinding {
 #[pymethods]
 impl EngineBinding {
     #[new]
-    fn new(artifact_json: &str, execution_id: &str) -> PyResult<Self> {
+    #[pyo3(signature = (artifact_json, execution_id, args_json=None))]
+    fn new(artifact_json: &str, execution_id: &str, args_json: Option<&str>) -> PyResult<Self> {
         let artifact = decode_artifact(artifact_json).map_err(py_err)?;
-        let inner =
-            Engine::start(artifact, execution_id, &EngineCaps::current()).map_err(py_err)?;
+        let args = match args_json {
+            None => Vec::new(),
+            Some(text) => decode_args_array(text).map_err(py_err)?,
+        };
+        let inner = Engine::start_with_args(artifact, execution_id, &EngineCaps::current(), &args)
+            .map_err(py_err)?;
         Ok(Self { inner })
     }
 

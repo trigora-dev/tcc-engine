@@ -31,6 +31,10 @@ export type RunOptions = {
   effectLogPath?: string;
   failCounts?: Record<string, number>;
   childArtifacts?: Record<string, string>;
+  /** Ordered program arguments. Absent or `[]` means no arguments. */
+  args?: unknown[];
+  /** Already-encoded argument-array JSON for a child row. Takes precedence over `args`. */
+  programArgsJson?: string;
   cancel?: boolean;
   persist?: PersistMode;
   packing?: PersistPacking;
@@ -107,6 +111,22 @@ export function runOnStore(
   return drive(store, prepared.engine, prepared.options);
 }
 
+function startArgsJson(options: RunOptions): string | undefined {
+  if (options.programArgsJson !== undefined) {
+    return options.programArgsJson === "[]" ? undefined : options.programArgsJson;
+  }
+  if (!Object.prototype.hasOwnProperty.call(options, "args")) {
+    return undefined;
+  }
+  if (!Array.isArray(options.args)) {
+    throw new Error("program args must be an array");
+  }
+  if (options.args.length === 0) {
+    return undefined;
+  }
+  return JSON.stringify(options.args.map((item) => encodeValue(item)));
+}
+
 function prepareOnStore(store: Store, options: RunOptions & { artifactJson: string }) {
   const executionId = options.executionId ?? "first";
   const ownerToken = options.ownerToken ?? "owner-1";
@@ -116,7 +136,12 @@ function prepareOnStore(store: Store, options: RunOptions & { artifactJson: stri
   if (!store.getExecution(executionId)) {
     store.createExecution(executionId, hash, ownerToken, Date.now() + (options.leaseMs ?? 60_000));
   }
-  const engine = new EngineBinding(options.artifactJson, executionId, options.isolatedEngine === true);
+  const engine = new EngineBinding(
+    options.artifactJson,
+    executionId,
+    options.isolatedEngine === true,
+    startArgsJson(options),
+  );
   return {
     engine,
     options: {
@@ -171,13 +196,16 @@ export function runBatchOnStore(
       if (!artifactJson) {
         throw new Error(`no child artifact for \`${created.flowName}\``);
       }
+      const { args: _parentArgs, programArgsJson: _parentArgsJson, ...rest } = parent!.options;
+      const row = store.getChildByExecutionId(created.childExecutionId);
       sessions.push(
         prepareOnStore(store, {
-          ...parent!.options,
+          ...rest,
           executionId: created.childExecutionId,
           artifactJson,
           isolatedEngine: true,
           cancel: false,
+          ...(row?.args_json != null ? { programArgsJson: row.args_json } : {}),
         }),
       );
       results.push(undefined);
@@ -350,6 +378,7 @@ function enqueueChild(
     artifactHash,
     ownerToken: options.ownerToken,
     leaseUntil: Date.now() + (options.leaseMs ?? 60_000),
+    argsJson: childArgsJson(request),
   });
   maybeCrash("after_create_child");
   engine.applyHostResponse({ type: "ack" });
@@ -566,6 +595,22 @@ function deliverJoin(
   return deliverEvent(store, state.engine, options, branch.branch_id);
 }
 
+function childArgsJson(request: Record<string, unknown>): string | null {
+  if (!Object.prototype.hasOwnProperty.call(request, "args")) return null;
+  if (!Array.isArray(request.args)) {
+    throw new Error("create_child args must be an array");
+  }
+  if (request.args.length === 0) return null;
+  return JSON.stringify(request.args);
+}
+
+function startChildEngine(artifactJson: string, executionId: string, argsJson: string | null): EngineBinding {
+  if (argsJson == null) {
+    return new EngineBinding(artifactJson, executionId);
+  }
+  return new EngineBinding(artifactJson, executionId, false, argsJson);
+}
+
 function deliverChild(
   store: Store,
   state: EngineState,
@@ -614,9 +659,9 @@ function deliverChild(
         const saved = store.getContinuation(child.child_execution_id);
         return saved
           ? EngineBinding.resume(artifactJson, saved.json)
-          : new EngineBinding(artifactJson, child.child_execution_id);
+          : startChildEngine(artifactJson, child.child_execution_id, child.args_json);
       })()
-    : new EngineBinding(artifactJson, child.child_execution_id);
+    : startChildEngine(artifactJson, child.child_execution_id, child.args_json);
   const childResult = drive(store, childEngine, {
     ...options,
     executionId: child.child_execution_id,

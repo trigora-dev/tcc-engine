@@ -25,7 +25,7 @@ def sleep(_ms: float) -> None:
     _not_runtime()
 
 
-def invoke(_name: str) -> Any:
+def invoke(_name: str, *_args: Any) -> Any:
     _not_runtime()
 
 

@@ -51,7 +51,37 @@ A committed wait must have a durable wakeup registration.
 
 A child is a separate execution: its own id, artifact, continuation, and journals.
 
-The parent records a child wait and suspends. A logical invoke id creates at most one child. The child's terminal result is delivered to the parent at most once.
+`invoke(name, ...args)` supplies an ordered argument vector. `invoke(name)` supplies `[]`. An explicit `null` / `None` is one element, not an empty vector. The caller supplies that vector. The invoked program's `language_semantics_version` determines how it binds to the declared parameters, into slots `0..param_count-1`. Binding runs on a fresh start only. Resume restores the continuation and does not bind arguments again. After binding, each slot is an ordinary local: a checkpoint keeps it only while a later instruction still needs it.
+
+```ts
+export default async function run(input) {
+  const analysis = await invoke("analyze", { sources: input.sources });
+  return analysis;
+}
+```
+
+```ts
+export default async function run(a, b) {
+  const analysis = await invoke("analyze", a, b);
+  return analysis;
+}
+```
+
+```python
+async def run(input):
+    analysis = await invoke("analyze", {"sources": input["sources"]})
+    return analysis
+```
+
+```python
+async def run(a, b):
+    analysis = await invoke("analyze", a, b)
+    return analysis
+```
+
+A TypeScript caller may pass a shorter vector than a TypeScript callee declares; the remaining parameters are `undefined`. The same short vector fails when the callee is Python. Arity follows the callee artifact, not the caller, including when the two programs use different languages.
+
+The parent records a child wait and suspends. A logical invoke id creates at most one child and permanently binds that id to the first committed argument vector. A later create with a different vector does not replace it and surfaces an invariant mismatch. The child's terminal result is delivered to the parent at most once.
 
 The engine assigns stable `invoke_id` and `child_execution_id` before the host writes. Those identities plus the parent wait checkpoint and child execution row are one logical transition: they must become durable together or not at all. Hosts may also group that unit with unrelated checkpoints in one commit. That coordination is optional host architecture; TCC correctness is still persist/confirm of a logical continuation.
 

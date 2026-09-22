@@ -59,7 +59,10 @@ pub enum Instruction {
     Effect,
     Sleep,
     WaitForEvent,
-    Invoke,
+    /// Pops `arg_count` values under the program name. Zero is omitted when encoded.
+    Invoke {
+        arg_count: u32,
+    },
     /// Open a concurrent group. `join_pc` is the `JoinAll` or `JoinAny` that settles it.
     Fork {
         count: u32,

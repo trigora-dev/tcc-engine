@@ -9,6 +9,14 @@ type WasmExports = {
   tcc_json_ptr: () => number;
   tcc_json_len: () => number;
   tcc_start: (aPtr: number, aLen: number, ePtr: number, eLen: number) => number;
+  tcc_start_with_args: (
+    aPtr: number,
+    aLen: number,
+    ePtr: number,
+    eLen: number,
+    argsPtr: number,
+    argsLen: number,
+  ) => number;
   tcc_resume: (aPtr: number, aLen: number, cPtr: number, cLen: number) => number;
   tcc_run_until_host: (budget: number) => number;
   tcc_apply_response: (ptr: number, len: number) => number;
@@ -79,14 +87,27 @@ export function engineFormatVersion(): number {
 export class EngineBinding {
   private exports: WasmExports;
 
-  constructor(artifactJson: string, executionId: string, isolated = false) {
+  constructor(artifactJson: string, executionId: string, isolated = false, argsJson?: string) {
     if (isolated && !wasmModule) throw new Error("isolated engine requires a loaded WASM module");
     this.exports = isolated ? new WebAssembly.Instance(wasmModule!, {}).exports as unknown as WasmExports : api();
     const artifact = writeString(this.exports, artifactJson);
     const exec = writeString(this.exports, executionId);
-    const code = this.exports.tcc_start(artifact.ptr, artifact.len, exec.ptr, exec.len);
+    const args = argsJson === undefined ? undefined : writeString(this.exports, argsJson);
+    const code = args
+      ? this.exports.tcc_start_with_args(
+          artifact.ptr,
+          artifact.len,
+          exec.ptr,
+          exec.len,
+          args.ptr,
+          args.len,
+        )
+      : this.exports.tcc_start(artifact.ptr, artifact.len, exec.ptr, exec.len);
     this.exports.tcc_free(artifact.ptr, artifact.len);
     this.exports.tcc_free(exec.ptr, exec.len);
+    if (args) {
+      this.exports.tcc_free(args.ptr, args.len);
+    }
     if (code !== 0) {
       throw new Error(readLast(this.exports));
     }

@@ -41,6 +41,62 @@ pub fn encode_request(request: &HostRequest) -> Result<String, CoreError> {
     Ok(request_to_json(request)?.stringify())
 }
 
+pub fn decode_request(text: &str) -> Result<HostRequest, CoreError> {
+    let json = Json::parse(text).map_err(core_state)?;
+    let map = json.as_object().map_err(core_state)?;
+    match Json::get(map, "type")
+        .map_err(core_state)?
+        .as_str()
+        .map_err(core_state)?
+    {
+        "create_child" => Ok(HostRequest::CreateChild {
+            child: crate::protocol::ChildSpec {
+                invoke_id: field_string(map, "invoke_id")?,
+                child_execution_id: field_string(map, "child_execution_id")?,
+                program_name: field_string(map, "program_name")?,
+                args: decode_args_field(map)?,
+            },
+        }),
+        other => Err(CoreError::TypeError(format!(
+            "unsupported host request `{other}`"
+        ))),
+    }
+}
+
+/// A JSON array of tagged values. Empty is a valid vector.
+pub fn decode_args_array(text: &str) -> Result<Vec<Value>, CoreError> {
+    let json = Json::parse(text).map_err(core_state)?;
+    match json {
+        Json::Array(items) => items.iter().map(json_value).collect(),
+        _ => Err(CoreError::TypeError(
+            "program args must be an array".to_string(),
+        )),
+    }
+}
+
+fn field_string(
+    map: &std::collections::BTreeMap<String, Json>,
+    key: &str,
+) -> Result<String, CoreError> {
+    Ok(Json::get(map, key)
+        .map_err(core_state)?
+        .as_str()
+        .map_err(core_state)?
+        .to_string())
+}
+
+fn decode_args_field(
+    map: &std::collections::BTreeMap<String, Json>,
+) -> Result<Vec<Value>, CoreError> {
+    match map.get("args") {
+        None => Ok(Vec::new()),
+        Some(Json::Array(items)) => items.iter().map(json_value).collect(),
+        Some(_) => Err(CoreError::TypeError(
+            "create_child args must be an array".to_string(),
+        )),
+    }
+}
+
 pub fn decode_response(text: &str) -> Result<HostResponse, CoreError> {
     let json = Json::parse(text).map_err(core_state)?;
     json_to_response(&json)
@@ -165,13 +221,13 @@ fn request_to_json(request: &HostRequest) -> Result<Json, CoreError> {
                 "program_name".into(),
                 Json::String(child.program_name.clone()),
             );
-            map.insert(
-                "input".into(),
-                match &child.input {
-                    Some(value) => value_json(value)?,
-                    None => Json::Null,
-                },
-            );
+            if !child.args.is_empty() {
+                let mut items = Vec::with_capacity(child.args.len());
+                for value in &child.args {
+                    items.push(value_json(value)?);
+                }
+                map.insert("args".into(), Json::Array(items));
+            }
         }
         HostRequest::FetchArtifact { hash } => {
             map.insert("type".into(), Json::String("fetch_artifact".into()));
@@ -318,6 +374,47 @@ mod tests {
             decode_response(&stamped).unwrap_err(),
             CoreError::UnsupportedHostProtocol { got: 2, .. }
         ));
+    }
+
+    #[test]
+    fn create_child_args_are_canonical() {
+        let base = r#"{"child_execution_id":"c","invoke_id":"i","program_name":"p","type":"create_child"}"#;
+        let missing = decode_request(base).unwrap();
+        match &missing {
+            HostRequest::CreateChild { child } => assert!(child.args.is_empty()),
+            other => panic!("unexpected {other:?}"),
+        }
+        let encoded = encode_request(&missing).unwrap();
+        assert!(!encoded.contains("args"));
+
+        let empty = decode_request(
+            r#"{"args":[],"child_execution_id":"c","invoke_id":"i","program_name":"p","type":"create_child"}"#,
+        )
+        .unwrap();
+        assert_eq!(empty, missing);
+
+        let one = decode_request(
+            r#"{"args":[{"t":"null"}],"child_execution_id":"c","invoke_id":"i","program_name":"p","type":"create_child"}"#,
+        )
+        .unwrap();
+        match one {
+            HostRequest::CreateChild { child } => assert_eq!(child.args, vec![Value::Null]),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn create_child_rejects_malformed_args() {
+        for args in ["null", "{}", "\"foo\""] {
+            let text = format!(
+                r#"{{"args":{args},"child_execution_id":"c","invoke_id":"i","program_name":"p","type":"create_child"}}"#
+            );
+            let err = decode_request(&text).unwrap_err();
+            assert!(
+                matches!(err, CoreError::TypeError(ref message) if message.contains("array")),
+                "{args}: {err}"
+            );
+        }
     }
 
     #[test]

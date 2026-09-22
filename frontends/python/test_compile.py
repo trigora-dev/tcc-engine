@@ -376,3 +376,79 @@ async def run():
 """,
             filename="wide.py",
         )
+
+
+def test_run_parameters_occupy_slots_and_invoke_args_match_typescript(tmp_path):
+    source = """
+async def run(a, b, c):
+    return a
+"""
+    artifact = compile(source, filename="param.py")
+    function = artifact["program"]["functions"][0]
+    assert function["param_count"] == 3
+    assert function["local_count"] == 3
+    assert function["instructions"][0] == {"op": "LoadLocal", "local": 0}
+    assert function["instructions"][1] == {"op": "Return"}
+    invoked = """
+from tcc_engine.primitives import invoke
+
+async def run(sources):
+    return await invoke("analyze", {"sources": sources})
+"""
+    python_artifact = compile(invoked, filename="invoke.py")
+    python_invoke = next(
+        instruction
+        for instruction in python_artifact["program"]["functions"][0]["instructions"]
+        if instruction["op"] == "Invoke"
+    )
+    assert python_invoke["arg_count"] == 1
+    ts_path = tmp_path / "invoke.ts"
+    ts_path.write_text(
+        """
+import { invoke } from "@tcc-engine/primitives";
+export default async function run(sources) {
+  return await invoke("analyze", { sources });
+}
+""",
+        encoding="utf-8",
+    )
+    root = Path(__file__).resolve().parents[2]
+    completed = subprocess.run(
+        ["node", "--experimental-strip-types", str(root / "conformance" / "compile-ts.ts"), str(ts_path)],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    typescript_artifact = json.loads(completed.stdout)
+    typescript_invoke = next(
+        instruction
+        for instruction in typescript_artifact["program"]["functions"][0]["instructions"]
+        if instruction["op"] == "Invoke"
+    )
+    assert typescript_invoke["arg_count"] == 1
+    assert [instruction["op"] for instruction in python_artifact["program"]["functions"][0]["instructions"]] == [
+        instruction["op"] for instruction in typescript_artifact["program"]["functions"][0]["instructions"]
+    ]
+    plain = compile(
+        """
+from trigora import invoke
+
+async def run():
+    return await invoke("analyze")
+""",
+        filename="plain.py",
+    )
+    plain_invoke = next(
+        instruction
+        for instruction in plain["program"]["functions"][0]["instructions"]
+        if instruction["op"] == "Invoke"
+    )
+    assert "arg_count" not in plain_invoke
+    for source in (
+        "async def run(input=None):\n    return input\n",
+        "async def run(*items):\n    return 1\n",
+        "async def run(a, /, b):\n    return a\n",
+    ):
+        with pytest.raises(CompileError):
+            compile(source, filename="bad.py")
