@@ -17,6 +17,9 @@ function write(value: unknown): string {
     if (!Number.isFinite(value)) {
       return "null";
     }
+    if (Object.is(value, -0)) {
+      return "-0";
+    }
     return String(value);
   }
   if (typeof value === "string") {

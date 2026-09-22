@@ -52,9 +52,23 @@ def compile(source: str, filename: str = "input.py") -> dict[str, Any]:
     except SyntaxError as err:
         raise CompileError(f"{filename}: {err.msg}", filename=filename, span=_syntax_span(filename, err)) from err
     aliases = collect_imports(tree, filename)
-    entry = find_entry(tree, filename)
-    function = lower_function(entry, aliases, filename)
-    engine, host = required_from(function["instructions"])
+    entry, helpers = collect_functions(tree, filename)
+    functions: dict[str, tuple[int, int, int]] = {}
+    for index, helper in enumerate(helpers):
+        count, required = param_shape(helper, filename)
+        functions[helper.name] = (index + 1, count, required)
+    lowered = [
+        lower_function(entry, aliases, filename, 0, True, functions),
+        *[
+            lower_function(helper, aliases, filename, index + 1, False, functions)
+            for index, helper in enumerate(helpers)
+        ],
+    ]
+    instructions = [item for function in lowered for item in function["instructions"]]
+    engine, host = required_from(instructions)
+    if any(function.get("param_defaults") for function in lowered):
+        if "lang.compute" not in engine:
+            engine.append("lang.compute")
     artifact = {
         "envelope": {
             "artifact_hash": "",
@@ -66,7 +80,7 @@ def compile(source: str, filename: str = "input.py") -> dict[str, Any]:
             "required_host_capabilities": host,
             "runtime_modules": [],
         },
-        "program": {"entry": 0, "functions": [function]},
+        "program": {"entry": 0, "functions": lowered},
     }
     artifact["envelope"]["artifact_hash"] = hash_artifact(artifact)
     return artifact
@@ -122,27 +136,47 @@ def collect_imports(tree: ast.Module, filename: str) -> dict[str, str]:
     return aliases
 
 
-def entry_param_count(entry: ast.AsyncFunctionDef, filename: str) -> int:
+def param_shape(entry: ast.FunctionDef | ast.AsyncFunctionDef, filename: str) -> tuple[int, int]:
     args = entry.args
     if args.posonlyargs or args.kwonlyargs or args.vararg or args.kwarg:
         raise CompileError(
-            "entry parameters must be plain identifiers",
+            "parameters must be plain identifiers",
             filename=filename,
             why=WHY_SUBSET,
             node=entry,
         )
-    if args.defaults:
-        raise CompileError(
-            "entry parameter defaults are not supported",
-            filename=filename,
-            why=WHY_SUBSET,
-            node=entry,
-        )
-    return len(args.args)
+    return len(args.args), len(args.args) - len(args.defaults)
 
 
-def find_entry(tree: ast.Module, filename: str) -> ast.AsyncFunctionDef:
+def param_default_values(
+    entry: ast.FunctionDef | ast.AsyncFunctionDef, filename: str
+) -> list[dict[str, Any] | None]:
+    count, _required = param_shape(entry, filename)
+    defaults: list[dict[str, Any] | None] = [None] * count
+    offset = count - len(entry.args.defaults)
+    for index, default in enumerate(entry.args.defaults):
+        value = const_value(default)
+        if (
+            value is None
+            or value["t"] not in {"null", "bool", "number", "string"}
+            or (value["t"] == "number" and not math.isfinite(value["v"]))
+        ):
+            raise CompileError(
+                "v0.1.0 Python defaults are compile-time constants: None, bool, finite number, or string",
+                filename=filename,
+                why=WHY_SUBSET,
+                alternative="compute the default in the function body",
+                node=default,
+            )
+        defaults[offset + index] = value
+    return defaults
+
+
+def collect_functions(
+    tree: ast.Module, filename: str
+) -> tuple[ast.AsyncFunctionDef, list[ast.FunctionDef]]:
     entry: ast.AsyncFunctionDef | None = None
+    helpers: list[ast.FunctionDef] = []
     for statement in tree.body:
         if isinstance(statement, ast.ImportFrom):
             continue
@@ -154,8 +188,16 @@ def find_entry(tree: ast.Module, filename: str) -> ast.AsyncFunctionDef:
                     why=WHY_SUBSET,
                     node=statement,
                 )
-            entry_param_count(statement, filename)
+            if statement.decorator_list:
+                raise CompileError("decorators are not supported", filename=filename, why=WHY_SUBSET, node=statement)
+            param_shape(statement, filename)
             entry = statement
+            continue
+        if isinstance(statement, ast.FunctionDef):
+            if statement.decorator_list:
+                raise CompileError("decorators are not supported", filename=filename, why=WHY_SUBSET, node=statement)
+            param_shape(statement, filename)
+            helpers.append(statement)
             continue
         raise CompileError(
             f"unsupported top-level statement: {type(statement).__name__}",
@@ -165,42 +207,63 @@ def find_entry(tree: ast.Module, filename: str) -> ast.AsyncFunctionDef:
         )
     if entry is None:
         raise CompileError("missing `async def run` entry point", filename=filename, why=WHY_SUBSET)
-    return entry
+    return entry, helpers
 
 
 def lower_function(
-    entry: ast.AsyncFunctionDef, aliases: dict[str, str], filename: str
+    entry: ast.FunctionDef | ast.AsyncFunctionDef,
+    aliases: dict[str, str],
+    filename: str,
+    function_id: int,
+    allow_durable: bool,
+    functions: dict[str, tuple[int, int, int]],
 ) -> dict[str, Any]:
-    lower = Lowerer(aliases, filename)
+    lower = Lowerer(aliases, filename, allow_durable, functions)
     lower.push_scope()
-    param_count = entry_param_count(entry, filename)
+    defaults = param_default_values(entry, filename)
     for parameter in entry.args.args:
         lower.declare(parameter.arg)
     for statement in entry.body:
         lower.statement(statement)
+    if lower.needs_implicit_return():
+        value = {"t": "null"}
+        lower.emit({"op": "LoadConst", "value": value}, entry)
+        lower.emit({"op": "Return"}, entry)
     lower.pop_scope()
     lower.seal()
-    return {
-        "id": 0,
+    function: dict[str, Any] = {
+        "id": function_id,
         "name": entry.name,
-        "param_count": param_count,
+        "param_count": len(entry.args.args),
         "local_count": lower.max_slots,
         "instructions": lower.instructions,
         "spans": lower.spans,
     }
+    if any(item is not None for item in defaults):
+        function["param_defaults"] = defaults
+    return function
 
 
 class Loop:
-    def __init__(self) -> None:
+    def __init__(self, unwatch: bool = False) -> None:
         self.breaks: list[int] = []
         self.continues: list[int] = []
         self.continue_target: int | None = None
+        self.unwatch = unwatch
 
 
 class Lowerer:
-    def __init__(self, aliases: dict[str, str], filename: str) -> None:
+    def __init__(
+        self,
+        aliases: dict[str, str],
+        filename: str,
+        allow_durable: bool = True,
+        functions: dict[str, tuple[int, int, int]] | None = None,
+    ) -> None:
         self.aliases = aliases
         self.filename = filename
+        self.allow_durable = allow_durable
+        self.functions = functions or {}
         self.instructions: list[dict[str, Any]] = []
         self.spans: list[dict[str, Any] | None] = []
         self.scopes: list[dict[str, int]] = []
@@ -286,8 +349,10 @@ class Lowerer:
         if isinstance(statement, ast.AnnAssign):
             raise CompileError("annotated assignment is not supported")
         if isinstance(statement, ast.AugAssign):
-            raise CompileError("augmented assignment is not supported")
+            self.aug_assign(statement)
+            return
         if isinstance(statement, ast.Return):
+            self.unwatch_all(statement)
             if statement.value is None:
                 self.emit({"op": "LoadConst", "value": {"t": "null"}}, statement)
             else:
@@ -303,7 +368,10 @@ class Lowerer:
         if isinstance(statement, ast.Break):
             if not self.loops:
                 raise CompileError("`break` outside a loop")
-            self.loops[-1].breaks.append(self.emit({"op": "Jump", "target": 0}, statement))
+            loop = self.loops[-1]
+            if loop.unwatch:
+                self.emit({"op": "UnwatchIter"}, statement)
+            loop.breaks.append(self.emit({"op": "Jump", "target": 0}, statement))
             return
         if isinstance(statement, ast.Continue):
             if not self.loops:
@@ -321,7 +389,8 @@ class Lowerer:
             self.try_statement(statement)
             return
         if isinstance(statement, ast.For):
-            self.fail(statement, "`for` is not supported; use `while`", WHY_SUBSET, "use `while`")
+            self.for_statement(statement)
+            return
         if isinstance(statement, ast.FunctionDef) or isinstance(statement, ast.AsyncFunctionDef):
             self.fail(statement, "nested functions are not supported", WHY_SUBSET)
         if isinstance(statement, ast.ClassDef):
@@ -329,12 +398,161 @@ class Lowerer:
         self.fail(statement, f"unsupported statement: {type(statement).__name__}", WHY_SUBSET)
 
     def assign(self, statement: ast.Assign) -> None:
-        if len(statement.targets) != 1 or not isinstance(statement.targets[0], ast.Name):
-            raise CompileError("assignment target must be a local")
-        name = statement.targets[0].id
-        slot = self.bind_or_assign(name)
-        self.expression(statement.value)
-        self.emit({"op": "StoreLocal", "local": slot}, statement)
+        if len(statement.targets) != 1:
+            raise CompileError("assignment target must be a local, property, index, or one-level unpack")
+        target = statement.targets[0]
+        if isinstance(target, ast.Name):
+            slot = self.bind_or_assign(target.id)
+            self.expression(statement.value)
+            self.emit({"op": "StoreLocal", "local": slot}, statement)
+            return
+        if isinstance(target, ast.Tuple):
+            self.unpack(target, statement.value, statement)
+            return
+        self.store_target(target, statement.value, statement, compound=None)
+
+    def aug_assign(self, statement: ast.AugAssign) -> None:
+        op = {
+            ast.Add: "Add",
+            ast.Sub: "Sub",
+            ast.Mult: "Mul",
+            ast.Div: "Div",
+            ast.Mod: "Rem",
+        }.get(type(statement.op))
+        if op is None:
+            raise CompileError("unsupported augmented assignment")
+        self.store_target(statement.target, statement.value, statement, compound=op)
+
+    def unpack(self, target: ast.Tuple, value: ast.expr, node: ast.AST) -> None:
+        names: list[str] = []
+        for element in target.elts:
+            if not isinstance(element, ast.Name):
+                raise CompileError("unpacking bindings must be simple names")
+            names.append(element.id)
+        slots = [self.bind_or_assign(name) for name in names]
+        self.expression(value)
+        for index, slot in enumerate(slots):
+            self.emit({"op": "ArrayIndex", "index": index}, node)
+            self.emit({"op": "StoreLocal", "local": slot}, node)
+        self.emit({"op": "Pop"}, node)
+
+    def store_target(self, target: ast.expr, value: ast.expr, node: ast.AST, compound: str | None) -> None:
+        if isinstance(target, ast.Name):
+            slot = self.lookup(target.id) if compound else self.bind_or_assign(target.id)
+            if compound:
+                self.emit({"op": "LoadLocal", "local": slot}, target)
+                self.expression(value)
+                self.emit({"op": compound}, node)
+            else:
+                self.expression(value)
+            self.emit({"op": "StoreLocal", "local": slot}, node)
+            return
+        if isinstance(target, ast.Attribute):
+            base = self.alloc()
+            self.expression(target.value)
+            self.emit({"op": "StoreLocal", "local": base}, target)
+            if compound:
+                self.emit({"op": "LoadLocal", "local": base}, target)
+                self.emit({"op": "GetProp", "key": target.attr}, target)
+                self.expression(value)
+                self.emit({"op": compound}, node)
+            else:
+                self.expression(value)
+            stored = self.alloc()
+            self.emit({"op": "StoreLocal", "local": stored}, node)
+            self.emit({"op": "LoadLocal", "local": base}, target)
+            self.emit({"op": "LoadLocal", "local": stored}, node)
+            self.emit({"op": "SetProp", "key": target.attr}, target)
+            self.emit({"op": "Pop"}, node)
+            return
+        if isinstance(target, ast.Subscript):
+            base = self.alloc()
+            self.expression(target.value)
+            self.emit({"op": "StoreLocal", "local": base}, target)
+            key = const_value(target.slice)
+            if key is not None and key["t"] == "string":
+                if compound:
+                    self.emit({"op": "LoadLocal", "local": base}, target)
+                    self.emit({"op": "GetProp", "key": key["v"]}, target)
+                    self.expression(value)
+                    self.emit({"op": compound}, node)
+                else:
+                    self.expression(value)
+                stored = self.alloc()
+                self.emit({"op": "StoreLocal", "local": stored}, node)
+                self.emit({"op": "LoadLocal", "local": base}, target)
+                self.emit({"op": "LoadLocal", "local": stored}, node)
+                self.emit({"op": "SetProp", "key": key["v"]}, target)
+                self.emit({"op": "Pop"}, node)
+                return
+            index = self.alloc()
+            self.expression(target.slice)
+            self.emit({"op": "StoreLocal", "local": index}, target)
+            if compound:
+                self.emit({"op": "LoadLocal", "local": base}, target)
+                self.emit({"op": "LoadLocal", "local": index}, target)
+                self.emit({"op": "GetIndex"}, target)
+                self.expression(value)
+                self.emit({"op": compound}, node)
+            else:
+                self.expression(value)
+            stored = self.alloc()
+            self.emit({"op": "StoreLocal", "local": stored}, node)
+            self.emit({"op": "LoadLocal", "local": base}, target)
+            self.emit({"op": "LoadLocal", "local": index}, target)
+            self.emit({"op": "LoadLocal", "local": stored}, node)
+            self.emit({"op": "SetIndex"}, target)
+            self.emit({"op": "Pop"}, node)
+            return
+        raise CompileError("assignment target must be a local, property, index, or one-level unpack")
+
+    def unwatch_all(self, node: ast.AST) -> None:
+        for loop in reversed(self.loops):
+            if loop.unwatch:
+                self.emit({"op": "UnwatchIter"}, node)
+
+    def for_statement(self, statement: ast.For) -> None:
+        if statement.orelse:
+            raise CompileError("`for/else` is not supported")
+        if not isinstance(statement.target, ast.Name):
+            raise CompileError("`for` binding must be a name")
+        element = self.bind_or_assign(statement.target.id)
+        index = self.alloc()
+        length = self.alloc()
+        self.expression(statement.iter)
+        self.emit({"op": "WatchIter"}, statement.iter)
+        self.emit({"op": "Length"}, statement.iter)
+        self.emit({"op": "StoreLocal", "local": length}, statement)
+        self.emit({"op": "LoadConst", "value": {"t": "number", "v": 0}}, statement)
+        self.emit({"op": "StoreLocal", "local": index}, statement)
+        loop = Loop(unwatch=True)
+        self.loops.append(loop)
+        cond = self.pc()
+        loop.continue_target = None
+        self.emit({"op": "LoadLocal", "local": index}, statement)
+        self.emit({"op": "LoadLocal", "local": length}, statement)
+        self.emit({"op": "Lt"}, statement)
+        jump_end = self.emit({"op": "JumpIfFalse", "target": 0}, statement)
+        self.expression(statement.iter)
+        self.emit({"op": "LoadLocal", "local": index}, statement)
+        self.emit({"op": "GetIndex"}, statement)
+        self.emit({"op": "StoreLocal", "local": element}, statement.target)
+        self.block(statement.body)
+        incr = self.pc()
+        loop.continue_target = incr
+        for site in loop.continues:
+            self.patch(site, incr)
+        self.emit({"op": "LoadLocal", "local": index}, statement)
+        self.emit({"op": "LoadConst", "value": {"t": "number", "v": 1}}, statement)
+        self.emit({"op": "Add"}, statement)
+        self.emit({"op": "StoreLocal", "local": index}, statement)
+        self.emit({"op": "Jump", "target": cond}, statement)
+        self.patch(jump_end, self.pc())
+        self.emit({"op": "UnwatchIter"}, statement)
+        end = self.pc()
+        for site in loop.breaks:
+            self.patch(site, end)
+        self.loops.pop()
 
     def if_statement(self, statement: ast.If) -> None:
         self.condition(statement.test)
@@ -459,11 +677,22 @@ class Lowerer:
             self.expression(node.operand)
             self.emit({"op": "Not"}, node)
             return
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub) and isinstance(
-            node.operand, ast.Constant
-        ) and isinstance(node.operand.value, (int, float)):
-            number = as_number(-node.operand.value)
-            self.emit({"op": "LoadConst", "value": {"t": "number", "v": number}}, node)
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+            if isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, (int, float)):
+                number = as_number(-node.operand.value)
+                self.emit({"op": "LoadConst", "value": {"t": "number", "v": number}}, node)
+                return
+            self.expression(node.operand)
+            self.emit({"op": "Neg"}, node)
+            return
+        if isinstance(node, ast.IfExp):
+            self.condition(node.test)
+            jump_else = self.emit({"op": "JumpIfFalse", "target": 0}, node.test)
+            self.expression(node.body)
+            jump_end = self.emit({"op": "Jump", "target": 0}, node)
+            self.patch(jump_else, self.pc())
+            self.expression(node.orelse)
+            self.patch(jump_end, self.pc())
             return
         if isinstance(node, ast.Compare):
             self.compare(node)
@@ -484,22 +713,19 @@ class Lowerer:
             self.emit({"op": "GetProp", "key": node.attr}, node)
             return
         if isinstance(node, ast.Subscript):
-            self.expression(node.value)
-            key = string_literal(node.slice, "property name")
-            self.emit({"op": "GetProp", "key": key}, node)
+            self.load_subscript(node)
             return
         if isinstance(node, ast.BoolOp):
-            self.fail(
-                node,
-                "logical `and`/`or` are not supported; use nested `if`",
-                WHY_SUBSET,
-                "use nested `if`",
-            )
+            self.bool_op(node)
+            return
         if isinstance(node, ast.BinOp):
-            self.fail(node, "arithmetic is not supported", WHY_SUBSET)
+            self.bin_op(node)
+            return
         if isinstance(node, ast.Lambda):
             self.fail(node, "lambdas are not compiled; pass them only as effect callbacks", WHY_SUBSET)
         if isinstance(node, ast.Call):
+            if self.lower_call(node):
+                return
             name = self.resolve_durable(node.func)
             if name in {"gather", "race"}:
                 raise CompileError(f"await `{name}` directly; do not store the call")
@@ -512,11 +738,11 @@ class Lowerer:
         op = node.ops[0]
         right = node.comparators[0]
         if isinstance(op, ast.Is) or isinstance(op, ast.IsNot):
-            if not is_none_constant(right) and not is_none_constant(node.left):
-                raise CompileError("`is` is only supported with `None`")
             self.expression(node.left)
             self.expression(right)
-            self.emit({"op": "StrictNeq" if isinstance(op, ast.IsNot) else "StrictEq"}, node)
+            self.emit({"op": "Same"}, node)
+            if isinstance(op, ast.IsNot):
+                self.emit({"op": "Not"}, node)
             return
         mapped = {
             ast.Eq: "StrictEq",
@@ -541,7 +767,82 @@ class Lowerer:
             self.expression(value_node)
             self.emit({"op": "SetProp", "key": key}, node)
 
+    def load_subscript(self, node: ast.Subscript) -> None:
+        self.expression(node.value)
+        key = const_value(node.slice)
+        if key is not None and key["t"] == "string":
+            self.emit({"op": "GetProp", "key": key["v"]}, node)
+            return
+        self.expression(node.slice)
+        self.emit({"op": "GetIndex"}, node)
+
+    def bool_op(self, node: ast.BoolOp) -> None:
+        and_op = isinstance(node.op, ast.And)
+        self.expression(node.values[0])
+        for value in node.values[1:]:
+            slot = self.alloc()
+            self.emit({"op": "StoreLocal", "local": slot}, node)
+            self.emit({"op": "LoadLocal", "local": slot}, node)
+            jump = self.emit(
+                {"op": "JumpIfFalse" if and_op else "JumpIfTrue", "target": 0},
+                node,
+            )
+            self.expression(value)
+            jump_end = self.emit({"op": "Jump", "target": 0}, node)
+            self.patch(jump, self.pc())
+            self.emit({"op": "LoadLocal", "local": slot}, node)
+            self.patch(jump_end, self.pc())
+
+    def bin_op(self, node: ast.BinOp) -> None:
+        mapped = {
+            ast.Add: "Add",
+            ast.Sub: "Sub",
+            ast.Mult: "Mul",
+            ast.Div: "Div",
+            ast.Mod: "Rem",
+        }.get(type(node.op))
+        if mapped is None:
+            raise CompileError(f"unsupported operator: {type(node.op).__name__}")
+        self.expression(node.left)
+        self.expression(node.right)
+        self.emit({"op": mapped}, node)
+
+    def lower_call(self, node: ast.Call) -> bool:
+        if node.keywords or any(isinstance(arg, ast.Starred) for arg in node.args):
+            return False
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == "len" and len(node.args) == 1:
+            self.expression(node.args[0])
+            self.emit({"op": "Length"}, node)
+            return True
+        if isinstance(func, ast.Name) and func.id in self.functions:
+            function_id, param_count, required = self.functions[func.id]
+            argc = len(node.args)
+            if argc < required or argc > param_count:
+                raise CompileError(f"`{func.id}` expects {required} to {param_count} arguments")
+            for argument in node.args:
+                self.expression(argument)
+            self.emit({"op": "Call", "func": function_id, "argc": argc}, node)
+            return True
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "append"
+            and len(node.args) == 1
+        ):
+            self.expression(func.value)
+            self.expression(node.args[0])
+            self.emit({"op": "ArrayPush"}, node)
+            return True
+        return False
+
     def durable(self, node: ast.Await) -> None:
+        if not self.allow_durable:
+            self.fail(
+                node,
+                "v0.1.0 helper calls are non-suspending. Durable boundaries are only allowed in the program entry",
+                WHY_SUBSET,
+                "move the durable operation into run",
+            )
         if not isinstance(node.value, ast.Call):
             raise CompileError("await a durable operation")
         call = node.value
@@ -623,6 +924,20 @@ class Lowerer:
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
             raise CompileError("import durable operations from `tcc_engine.primitives` or `trigora`")
         return None
+
+    def needs_implicit_return(self) -> bool:
+        end = self.pc()
+        last = self.instructions[-1] if self.instructions else None
+        if last is None or last.get("op") != "Return":
+            return True
+        for instruction in self.instructions:
+            if instruction.get("target") == end:
+                return True
+            if instruction.get("catch") == end or instruction.get("finally") == end:
+                return True
+            if instruction.get("join_pc") == end:
+                return True
+        return False
 
     def seal(self) -> None:
         length = len(self.instructions)
@@ -725,6 +1040,22 @@ def required_from(instructions: list[dict[str, Any]]) -> tuple[list[str], list[s
             add_engine("durable.concurrent_group")
         elif op in {"Throw", "PushTry", "PopTry"}:
             add_engine("ts.exceptions")
+        elif op in {
+            "Add",
+            "Sub",
+            "Mul",
+            "Div",
+            "Rem",
+            "Neg",
+            "GetIndex",
+            "SetIndex",
+            "Length",
+            "WatchIter",
+            "UnwatchIter",
+            "Same",
+            "Call",
+        }:
+            add_engine("lang.compute")
     return engine, host
 
 

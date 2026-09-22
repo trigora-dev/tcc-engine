@@ -56,12 +56,12 @@ test("repeat compile yields the same artifact hash", () => {
   assert.equal(first.envelope.artifact_hash, second.envelope.artifact_hash);
 });
 
-test("unsupported for-of includes span, why, alternative, and version fields", () => {
+test("unsupported for-in includes span, why, alternative, and version fields", () => {
   const source = `
 import { effect } from "@trigora/sdk";
 export default async function run() {
   const xs = await effect("xs", async () => 1);
-  for (const x of xs) {
+  for (const x in xs) {
     return x;
   }
   return 0;
@@ -76,7 +76,7 @@ export default async function run() {
     assert.equal(error.span?.file, "loop.ts");
     assert.ok((error.span?.start_line ?? 0) >= 1);
     assert.equal(error.why, "it cannot cross a durable checkpoint in the current TypeScript subset");
-    assert.equal(error.alternative, "use `while`");
+    assert.equal(error.alternative, "use for-of on an array");
     assert.equal(error.frontendId, FRONTEND_IDENTITY);
     assert.equal(error.frontendVersion, PACKAGE_VERSION);
     assert.equal(error.languageSemanticsVersion, LANGUAGE_SEMANTICS_VERSION);
@@ -533,13 +533,11 @@ export default async function run({ query }) {
 `),
     /plain identifier/,
   );
-  assert.throws(
-    () =>
-      compile(`
+  const defaults = compile(`
 export default async function run(input = null) {
   return input;
 }
-`),
-    /plain identifier/,
-  );
+`);
+  assert.equal(defaults.program.functions[0]?.param_count, 1);
+  assert.ok(defaults.program.functions[0]?.instructions.some((instruction) => instruction.op === "StrictEq"));
 });

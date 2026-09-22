@@ -6,7 +6,8 @@ Authoring uses resolved imports from `tcc_engine.primitives` (engine-native) or 
 
 ## Supported
 
-- A single top-level `async def run(a, b, ...)` with plain parameters. No default, `*args`, keyword-only, positional-only, or pattern. The argument vector must match the parameter count. Too few or too many arguments is a start error. Explicit `None` stays null. A missing argument is not filled with `undefined`
+- A single top-level `async def run(a, b=10, ...)` with plain parameters. Defaults are compile-time constants: `None`, bool, finite number, or string. An omitted argument uses that constant. Explicit `None` stays null. Extra arguments are a start error. A missing argument with no default is a start error. `*args`, keyword-only, positional-only, and mutable literal defaults (`b=[]`, `b={}`) stay unsupported
+- Top-level `def` helpers with the same parameter rules. They may call other helpers. They cannot await a durable operation. A helper frame is never live at a checkpoint
 - Imports from `tcc_engine.primitives` or `trigora`: `effect`, `wait_for_event`, `sleep`, `invoke`, `gather`, `race` (aliases included). `gather` and `race` are compiler intrinsics for [concurrency.md](concurrency.md), not runtime coroutine helpers.
 - Assignment to simple locals
 - `if` / `elif` / `else`
@@ -15,10 +16,14 @@ Authoring uses resolved imports from `tcc_engine.primitives` (engine-native) or 
 - Nested blocks; names map to function-level slots
 - `return` of a lowered expression
 - `raise Exception(...)`, `try` / `except` / `finally`
-- Literals: `None`, booleans, numbers that are exact IEEE-754 binary64 values, strings
-- Dicts with string keys and lists (no spread, no cycles, no identity)
-- Property read `obj.key` or `obj["key"]`
-- `==` / `!=`, `is None` / `is not None`, unary `not`, numeric `<` `<=` `>` `>=`
+- Literals: `None`, booleans, numbers that are exact IEEE-754 binary64 values, strings. This subset has no `float("inf")`
+- Dicts with string keys and lists as continuation-heap refs (no spread). Assignment copies the ref. Mutation is in place, including through a helper argument. Cycles are representable in the heap and cannot be inlined across a host boundary
+- Property read and write `obj.key` or `obj["key"]`, index read and write `xs[i]` (negative indexes count from the end), `len(xs)`, `xs.append(value)`
+- One-level unpacking `a, b = pair` for a list. No rest or nested patterns
+- `==` / `!=` (structural on lists and dicts; a cycle in that walk is a runtime error), `is` / `is not` (reference equality, including `is None`), unary `not` and unary `-`, numeric `<` `<=` `>` `>=`
+- `+` `-` `*` `/` `%` and augmented assignment, inside the operator domain below. `and` / `or` short-circuit and return the operand
+- `a if cond else b`
+- `for x in xs` over a list. Length is captured once. The index is a real local. Structural mutation of the iterated cell, including through an alias, is a runtime error. Mutating a distinct element is allowed. Not dict iteration, not `for`/`else`
 - Sequential and branched mixes of durable operations
 - `invoke(name, *args)`. Each argument after the name is a subset value. See [durable-operations.md](durable-operations.md)
 
@@ -30,13 +35,18 @@ Authoring uses resolved imports from `tcc_engine.primitives` (engine-native) or 
 - Wait: `{execution_id}:{name}:{correlation}:{pc}` (empty correlation is an empty field)
 - Child invoke: `{parent}:invoke:{pc}` outside a join. Inside `gather` or `race`, wait, timer, and child ids are the branch id from [concurrency.md](concurrency.md).
 
+`+` `-` `*` `/` `%` and unary `-` accept numbers, and bool as int (`True + 1 == 2`). `str + str` concatenates. A string/number mix is a type error. `/` is true division; divide-by-zero raises `ZeroDivisionError`. `%` is Python modulo (`(-7) % 3 == 2`). An out-of-range index raises `IndexError`.
+
+New arithmetic, indexing, and `Call` instructions require engine feature `lang.compute`. `engine_format_version` stays 1.
+
 ## Not supported
 
-- `ctx.effect` / `workflow()` (not the authoring model)
-- `for` / `for-in` / `for-else` / `while/else` / `try/else`
-- Closures, nested functions, classes
-- Arithmetic, `and` / `or` (use nested `if`)
+- `for` over a dict, `for`/`else`, `while/else`, `try/else`
+- Closures, nested functions, classes, decorators
+- `//`, `**`, `map` / `filter` / `reduce`
 - Collection truthiness (`if []:` / `if {}:`)
 - Integers that are not exact binary64 values
+- Mutable default literals and defaults that read another parameter
 - `asyncio.gather`, `asyncio.wait`, `asyncio.FIRST_COMPLETED`, stored `gather` / `race`, and pre-awaited branch arguments (see [concurrency.md](concurrency.md))
-- Entry-parameter defaults, rest, keyword-only, positional-only, or a binding pattern
+- `*args`, keyword-only, positional-only, or a nested binding pattern
+- Durable operations inside a helper (`effect`, `wait_for_event`, `sleep`, `invoke`, `gather`, `race`)

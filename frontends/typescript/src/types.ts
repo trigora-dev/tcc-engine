@@ -7,6 +7,7 @@ export type EngineFeature =
   | "durable.invoke"
   | "durable.concurrent_group"
   | "ts.exceptions"
+  | "lang.compute"
   | (string & {});
 
 export type HostCapability =
@@ -57,6 +58,18 @@ export type Instruction =
   | { op: "JoinAll" }
   | { op: "JoinAny" }
   | { op: "ArrayIndex"; index: number }
+  | { op: "Add" }
+  | { op: "Sub" }
+  | { op: "Mul" }
+  | { op: "Div" }
+  | { op: "Rem" }
+  | { op: "Neg" }
+  | { op: "GetIndex" }
+  | { op: "SetIndex" }
+  | { op: "Length" }
+  | { op: "WatchIter" }
+  | { op: "UnwatchIter" }
+  | { op: "Same" }
   | { op: "Throw" }
   | { op: "PushTry"; catch: number; finally: number | null }
   | { op: "PopTry" };

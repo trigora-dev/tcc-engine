@@ -38,7 +38,10 @@ type Loop = {
   breaks: number[];
   continues: number[];
   continueTarget?: number;
+  unwatch: boolean;
 };
+
+type FnInfo = { id: number; paramCount: number };
 
 export type DiagnosticSpan = {
   file: string;
@@ -84,9 +87,18 @@ export function compile(source: string, options: CompileOptions = {}): Artifact 
     throw new CompileError(info.message, filename, info.span);
   }
 
-  const entry = findDefaultExport(sourceFile, filename);
-  const functionDecl = lowerFunction(entry, sourceFile, checker, filename);
-  const { engine, host } = requiredFrom(functionDecl.instructions);
+  const { entry, helpers } = collectFunctions(sourceFile, filename);
+  const functions = new Map<string, FnInfo>();
+  helpers.forEach((helper, index) => {
+    functions.set(helper.name!.text, { id: index + 1, paramCount: helper.parameters.length });
+  });
+  const loweredHelpers = helpers.map((helper, index) =>
+    lowerFunction(helper, sourceFile, checker, filename, index + 1, false, functions),
+  );
+  const functionDecl = lowerFunction(entry, sourceFile, checker, filename, 0, true, functions);
+  const { engine, host } = requiredFrom(
+    [functionDecl, ...loweredHelpers].flatMap((item) => item.instructions),
+  );
   const artifact: Artifact = {
     envelope: {
       artifact_hash: "",
@@ -100,7 +112,7 @@ export function compile(source: string, options: CompileOptions = {}): Artifact 
     },
     program: {
       entry: 0,
-      functions: [functionDecl],
+      functions: [functionDecl, ...loweredHelpers],
     },
   };
   artifact.envelope.artifact_hash = hashArtifact(artifact);
@@ -168,8 +180,12 @@ function normalize(path: string): string {
   return path.replace(/\\/g, "/");
 }
 
-function findDefaultExport(sourceFile: ts.SourceFile, filename: string): ts.FunctionDeclaration {
+function collectFunctions(
+  sourceFile: ts.SourceFile,
+  filename: string,
+): { entry: ts.FunctionDeclaration; helpers: ts.FunctionDeclaration[] } {
   let entry: ts.FunctionDeclaration | undefined;
+  const helpers: ts.FunctionDeclaration[] = [];
   for (const statement of sourceFile.statements) {
     if (ts.isImportDeclaration(statement)) {
       const spec = importSpecifier(statement);
@@ -187,6 +203,16 @@ function findDefaultExport(sourceFile: ts.SourceFile, filename: string): ts.Func
         fail(filename, sourceFile, statement, "multiple default exports", WHY_SUBSET);
       }
       entry = statement;
+      continue;
+    }
+    if (ts.isFunctionDeclaration(statement) && statement.name && !hasModifier(statement, ts.SyntaxKind.ExportKeyword)) {
+      if (hasModifier(statement, ts.SyntaxKind.AsyncKeyword)) {
+        fail(filename, sourceFile, statement, "helper functions cannot be async", WHY_SUBSET, "keep durable operations in run");
+      }
+      if (!statement.body) {
+        fail(filename, sourceFile, statement, "helper function is missing a body", WHY_SUBSET);
+      }
+      helpers.push(statement);
       continue;
     }
     fail(
@@ -210,7 +236,7 @@ function findDefaultExport(sourceFile: ts.SourceFile, filename: string): ts.Func
   if (!entry.body) {
     fail(filename, sourceFile, entry, "entry function is missing a body", WHY_SUBSET);
   }
-  return entry;
+  return { entry, helpers };
 }
 
 function bindEntryParams(
@@ -219,18 +245,48 @@ function bindEntryParams(
   sourceFile: ts.SourceFile,
   filename: string,
 ): number {
+  const names: string[] = [];
   for (const param of entry.parameters) {
-    if (
-      param.dotDotDotToken ||
-      param.initializer ||
-      param.questionToken ||
-      !ts.isIdentifier(param.name)
-    ) {
-      fail(filename, sourceFile, param, "entry parameter must be a plain identifier", WHY_SUBSET);
+    if (param.dotDotDotToken || param.questionToken || !ts.isIdentifier(param.name)) {
+      fail(filename, sourceFile, param, "parameter must be a plain identifier", WHY_SUBSET, "use an earlier parameter or a literal");
     }
+    names.push(param.name.text);
     lower.declare(param.name.text, "let");
   }
+  entry.parameters.forEach((param, index) => {
+    if (!param.initializer || !ts.isIdentifier(param.name)) {
+      return;
+    }
+    const earlier = new Set(names.slice(0, index));
+    assertEarlierOnly(param.initializer, earlier, filename, sourceFile);
+    const slot = lower.lookup(param.name.text).slot;
+    lower.expression(param.name);
+    lower.emit({ op: "LoadConst", value: { t: "undefined" } }, param);
+    lower.emit({ op: "StrictEq" }, param);
+    const skip = lower.emit({ op: "JumpIfFalse", target: 0 }, param);
+    lower.expression(param.initializer);
+    lower.emit({ op: "StoreLocal", local: slot }, param);
+    lower.patch(skip, lower.pc());
+  });
   return entry.parameters.length;
+}
+
+function assertEarlierOnly(
+  node: ts.Node,
+  earlier: Set<string>,
+  filename: string,
+  sourceFile: ts.SourceFile,
+): void {
+  if (ts.isIdentifier(node) && node.text !== "undefined" && !earlier.has(node.text)) {
+    fail(
+      filename,
+      sourceFile,
+      node,
+      "a default may use only earlier parameters",
+      WHY_SUBSET,
+    );
+  }
+  ts.forEachChild(node, (child) => assertEarlierOnly(child, earlier, filename, sourceFile));
 }
 
 function lowerFunction(
@@ -238,17 +294,24 @@ function lowerFunction(
   sourceFile: ts.SourceFile,
   checker: ts.TypeChecker,
   filename: string,
+  id: number,
+  durable: boolean,
+  functions: Map<string, FnInfo>,
 ): FunctionDecl {
-  const lower = new Lowerer(sourceFile, checker, filename);
+  const lower = new Lowerer(sourceFile, checker, filename, durable, functions);
   lower.pushScope();
   const paramCount = bindEntryParams(entry, lower, sourceFile, filename);
   for (const statement of entry.body!.statements) {
     lower.statement(statement);
   }
+  if (lower.needsImplicitReturn()) {
+    lower.emit({ op: "LoadConst", value: { t: "undefined" } }, entry);
+    lower.emit({ op: "Return" }, entry);
+  }
   lower.popScope();
   lower.seal();
   return {
-    id: 0,
+    id,
     name: entry.name?.text ?? "default",
     param_count: paramCount,
     local_count: lower.maxSlots,
@@ -265,13 +328,23 @@ class Lowerer {
   readonly sourceFile: ts.SourceFile;
   readonly checker: ts.TypeChecker;
   readonly filename: string;
+  readonly allowDurable: boolean;
+  readonly functions: Map<string, FnInfo>;
   nextSlot = 0;
   maxSlots = 0;
 
-  constructor(sourceFile: ts.SourceFile, checker: ts.TypeChecker, filename: string) {
+  constructor(
+    sourceFile: ts.SourceFile,
+    checker: ts.TypeChecker,
+    filename: string,
+    durable: boolean,
+    functions: Map<string, FnInfo>,
+  ) {
     this.sourceFile = sourceFile;
     this.checker = checker;
     this.filename = filename;
+    this.allowDurable = durable;
+    this.functions = functions;
   }
 
   fail(node: ts.Node, message: string, why?: string, alternative?: string): never {
@@ -358,6 +431,7 @@ class Lowerer {
       return;
     }
     if (ts.isReturnStatement(statement)) {
+      this.unwatchAll();
       if (!statement.expression) {
         this.emit({ op: "LoadConst", value: { t: "undefined" } }, statement);
       } else {
@@ -386,6 +460,9 @@ class Lowerer {
       if (!loop) {
         throw new CompileError("`break` outside a loop");
       }
+      if (loop.unwatch) {
+        this.emit({ op: "UnwatchIter" }, statement);
+      }
       loop.breaks.push(this.emit({ op: "Jump", target: 0 }, statement));
       return;
     }
@@ -413,8 +490,12 @@ class Lowerer {
       this.tryStatement(statement);
       return;
     }
-    if (ts.isForInStatement(statement) || ts.isForOfStatement(statement)) {
-      this.fail(statement, "for-in and for-of are not supported", WHY_SUBSET, "use `while`");
+    if (ts.isForInStatement(statement)) {
+      this.fail(statement, "for-in is not supported", WHY_SUBSET, "use for-of on an array");
+    }
+    if (ts.isForOfStatement(statement)) {
+      this.forOfStatement(statement);
+      return;
     }
     if (ts.isLabeledStatement(statement)) {
       this.fail(statement, "labeled statements are not supported", WHY_SUBSET);
@@ -432,7 +513,15 @@ class Lowerer {
     }
     const declaration = list.declarations[0]!;
     if (ts.isArrayBindingPattern(declaration.name)) {
-      this.destructurePromiseAll(list, declaration);
+      if (declaration.initializer && isAwaitPromiseAll(declaration.initializer)) {
+        this.destructurePromiseAll(list, declaration);
+      } else {
+        this.destructureArray(list, declaration);
+      }
+      return;
+    }
+    if (ts.isObjectBindingPattern(declaration.name)) {
+      this.destructureObject(list, declaration);
       return;
     }
     if (!ts.isIdentifier(declaration.name)) {
@@ -448,18 +537,6 @@ class Lowerer {
   }
 
   expressionStatement(expression: ts.Expression): void {
-    if (ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-      if (!ts.isIdentifier(expression.left)) {
-        throw new CompileError("assignment target must be a local");
-      }
-      const binding = this.lookup(expression.left.text);
-      if (binding.kind === "const") {
-        throw new CompileError(`cannot assign to const \`${expression.left.text}\``);
-      }
-      this.expression(expression.right);
-      this.emit({ op: "StoreLocal", local: binding.slot }, expression);
-      return;
-    }
     this.expression(expression);
     this.emit({ op: "Pop" }, expression);
   }
@@ -480,7 +557,7 @@ class Lowerer {
 
   whileStatement(statement: ts.WhileStatement): void {
     const start = this.pc();
-    const loop: Loop = { breaks: [], continues: [], continueTarget: start };
+    const loop: Loop = { breaks: [], continues: [], continueTarget: start, unwatch: false };
     this.loops.push(loop);
     this.expression(statement.expression);
     const jumpFalse = this.emit({ op: "JumpIfFalse", target: 0 }, statement.expression);
@@ -504,7 +581,7 @@ class Lowerer {
       }
     }
     const condPc = this.pc();
-    const loop: Loop = { breaks: [], continues: [] };
+    const loop: Loop = { breaks: [], continues: [], unwatch: false };
     this.loops.push(loop);
     if (statement.condition) {
       this.expression(statement.condition);
@@ -595,15 +672,32 @@ class Lowerer {
       this.emit({ op: "Not" }, expression);
       return;
     }
-    if (
-      ts.isPrefixUnaryExpression(expression) &&
-      expression.operator === ts.SyntaxKind.MinusToken &&
-      ts.isNumericLiteral(expression.operand)
-    ) {
-      this.emit(
-        { op: "LoadConst", value: { t: "number", v: -Number(expression.operand.text) } },
-        expression,
-      );
+    if (ts.isPrefixUnaryExpression(expression) && expression.operator === ts.SyntaxKind.MinusToken) {
+      if (ts.isNumericLiteral(expression.operand)) {
+        this.emit(
+          { op: "LoadConst", value: { t: "number", v: -Number(expression.operand.text) } },
+          expression,
+        );
+        return;
+      }
+      this.expression(expression.operand);
+      this.emit({ op: "Neg" }, expression);
+      return;
+    }
+    if (ts.isConditionalExpression(expression)) {
+      this.expression(expression.condition);
+      const jumpElse = this.emit({ op: "JumpIfFalse", target: 0 }, expression);
+      this.expression(expression.whenTrue);
+      const jumpEnd = this.emit({ op: "Jump", target: 0 }, expression);
+      this.patch(jumpElse, this.pc());
+      this.expression(expression.whenFalse);
+      this.patch(jumpEnd, this.pc());
+      return;
+    }
+    if (ts.isElementAccessExpression(expression)) {
+      this.expression(expression.expression);
+      this.expression(expression.argumentExpression);
+      this.emit({ op: "GetIndex" }, expression);
       return;
     }
     if (ts.isBinaryExpression(expression)) {
@@ -626,6 +720,9 @@ class Lowerer {
       return;
     }
     if (ts.isCallExpression(expression)) {
+      if (this.lowerHelperOrMethod(expression)) {
+        return;
+      }
       const method = promiseMethod(expression);
       if (method === "all") {
         throw new CompileError("await Promise.all directly; do not store the promise");
@@ -638,6 +735,11 @@ class Lowerer {
       }
     }
     if (ts.isPropertyAccessExpression(expression)) {
+      if (ts.isIdentifier(expression.name) && expression.name.text === "length") {
+        this.expression(expression.expression);
+        this.emit({ op: "Length" }, expression);
+        return;
+      }
       this.expression(expression.expression);
       if (!ts.isIdentifier(expression.name)) {
         throw new CompileError("property names must be identifiers");
@@ -650,6 +752,21 @@ class Lowerer {
 
   binary(expression: ts.BinaryExpression): void {
     const op = expression.operatorToken.kind;
+    if (
+      op === ts.SyntaxKind.EqualsToken ||
+      op === ts.SyntaxKind.PlusEqualsToken ||
+      op === ts.SyntaxKind.MinusEqualsToken ||
+      op === ts.SyntaxKind.AsteriskEqualsToken ||
+      op === ts.SyntaxKind.SlashEqualsToken ||
+      op === ts.SyntaxKind.PercentEqualsToken
+    ) {
+      this.assign(expression);
+      return;
+    }
+    if (op === ts.SyntaxKind.AmpersandAmpersandToken || op === ts.SyntaxKind.BarBarToken) {
+      this.shortCircuit(expression, op === ts.SyntaxKind.AmpersandAmpersandToken);
+      return;
+    }
     const map: Partial<Record<ts.SyntaxKind, Instruction["op"]>> = {
       [ts.SyntaxKind.EqualsEqualsEqualsToken]: "StrictEq",
       [ts.SyntaxKind.ExclamationEqualsEqualsToken]: "StrictNeq",
@@ -657,6 +774,11 @@ class Lowerer {
       [ts.SyntaxKind.LessThanEqualsToken]: "Le",
       [ts.SyntaxKind.GreaterThanToken]: "Gt",
       [ts.SyntaxKind.GreaterThanEqualsToken]: "Ge",
+      [ts.SyntaxKind.PlusToken]: "Add",
+      [ts.SyntaxKind.MinusToken]: "Sub",
+      [ts.SyntaxKind.AsteriskToken]: "Mul",
+      [ts.SyntaxKind.SlashToken]: "Div",
+      [ts.SyntaxKind.PercentToken]: "Rem",
     };
     const instruction = map[op];
     if (!instruction) {
@@ -712,6 +834,14 @@ class Lowerer {
   }
 
   durable(expression: ts.AwaitExpression): void {
+    if (!this.allowDurable) {
+      this.fail(
+        expression,
+        "v0.1.0 helper calls are non-suspending. Durable boundaries are only allowed in the program entry",
+        WHY_SUBSET,
+        "move the durable operation into run",
+      );
+    }
     const inner = unwrap(expression.expression);
     if (ts.isCallExpression(inner)) {
       const method = promiseMethod(inner);
@@ -826,6 +956,257 @@ class Lowerer {
     return this.scopes.some((scope) => scope.has(name));
   }
 
+  unwatchAll(): void {
+    for (let index = this.loops.length - 1; index >= 0; index -= 1) {
+      if (this.loops[index]!.unwatch) {
+        this.emit({ op: "UnwatchIter" }, this.sourceFile);
+      }
+    }
+  }
+
+  forOfStatement(statement: ts.ForOfStatement): void {
+    if (statement.awaitModifier) {
+      this.fail(statement, "for await is not supported", WHY_SUBSET);
+    }
+    if (!ts.isVariableDeclarationList(statement.initializer) || statement.initializer.declarations.length !== 1) {
+      this.fail(statement, "for-of binding must be one variable", WHY_SUBSET);
+    }
+    const declaration = statement.initializer.declarations[0]!;
+    if (!ts.isIdentifier(declaration.name)) {
+      this.fail(statement, "for-of binding must be an identifier", WHY_SUBSET);
+    }
+    const kind = (statement.initializer.flags & ts.NodeFlags.Const) !== 0 ? "const" : "let";
+    const element = this.declare(declaration.name.text, kind);
+    const index = this.alloc();
+    const length = this.alloc();
+    this.expression(statement.expression);
+    this.emit({ op: "WatchIter" }, statement.expression);
+    this.emit({ op: "Length" }, statement.expression);
+    this.emit({ op: "StoreLocal", local: length }, statement);
+    this.emit({ op: "LoadConst", value: { t: "number", v: 0 } }, statement);
+    this.emit({ op: "StoreLocal", local: index }, statement);
+    const loop: Loop = { breaks: [], continues: [], unwatch: true };
+    this.loops.push(loop);
+    const cond = this.pc();
+    this.emit({ op: "LoadLocal", local: index }, statement);
+    this.emit({ op: "LoadLocal", local: length }, statement);
+    this.emit({ op: "Lt" }, statement);
+    const jumpEnd = this.emit({ op: "JumpIfFalse", target: 0 }, statement);
+    this.expression(statement.expression);
+    this.emit({ op: "LoadLocal", local: index }, statement);
+    this.emit({ op: "GetIndex" }, statement);
+    this.emit({ op: "StoreLocal", local: element }, declaration);
+    this.statement(statement.statement);
+    const incr = this.pc();
+    loop.continueTarget = incr;
+    for (const site of loop.continues) {
+      this.patch(site, incr);
+    }
+    this.emit({ op: "LoadLocal", local: index }, statement);
+    this.emit({ op: "LoadConst", value: { t: "number", v: 1 } }, statement);
+    this.emit({ op: "Add" }, statement);
+    this.emit({ op: "StoreLocal", local: index }, statement);
+    this.emit({ op: "Jump", target: cond }, statement);
+    this.patch(jumpEnd, this.pc());
+    this.emit({ op: "UnwatchIter" }, statement);
+    const end = this.pc();
+    for (const site of loop.breaks) {
+      this.patch(site, end);
+    }
+    this.loops.pop();
+  }
+
+  assign(expression: ts.BinaryExpression): void {
+    const op = expression.operatorToken.kind;
+    const arithmetic: Partial<Record<number, Instruction["op"]>> = {
+      [ts.SyntaxKind.PlusEqualsToken]: "Add",
+      [ts.SyntaxKind.MinusEqualsToken]: "Sub",
+      [ts.SyntaxKind.AsteriskEqualsToken]: "Mul",
+      [ts.SyntaxKind.SlashEqualsToken]: "Div",
+      [ts.SyntaxKind.PercentEqualsToken]: "Rem",
+    };
+    const arith = arithmetic[op];
+    if (ts.isIdentifier(expression.left)) {
+      const binding = this.lookup(expression.left.text);
+      if (binding.kind === "const") {
+        throw new CompileError(`cannot assign to const \`${expression.left.text}\``);
+      }
+      if (arith) {
+        this.emit({ op: "LoadLocal", local: binding.slot }, expression.left);
+        this.expression(expression.right);
+        this.emit({ op: arith } as Instruction, expression);
+      } else {
+        this.expression(expression.right);
+      }
+      this.emit({ op: "StoreLocal", local: binding.slot }, expression);
+      this.emit({ op: "LoadLocal", local: binding.slot }, expression);
+      return;
+    }
+    const valueSlot = this.alloc();
+    if (ts.isPropertyAccessExpression(expression.left) && ts.isIdentifier(expression.left.name)) {
+      const key = expression.left.name.text;
+      const base = this.alloc();
+      this.expression(expression.left.expression);
+      this.emit({ op: "StoreLocal", local: base }, expression.left);
+      if (arith) {
+        this.emit({ op: "LoadLocal", local: base }, expression.left);
+        this.emit({ op: "GetProp", key }, expression.left);
+        this.expression(expression.right);
+        this.emit({ op: arith } as Instruction, expression);
+      } else {
+        this.expression(expression.right);
+      }
+      this.emit({ op: "StoreLocal", local: valueSlot }, expression);
+      this.emit({ op: "LoadLocal", local: base }, expression);
+      this.emit({ op: "LoadLocal", local: valueSlot }, expression);
+      this.emit({ op: "SetProp", key }, expression);
+      this.emit({ op: "Pop" }, expression);
+      this.emit({ op: "LoadLocal", local: valueSlot }, expression);
+      return;
+    }
+    if (ts.isElementAccessExpression(expression.left)) {
+      const base = this.alloc();
+      const index = this.alloc();
+      this.expression(expression.left.expression);
+      this.emit({ op: "StoreLocal", local: base }, expression.left);
+      this.expression(expression.left.argumentExpression);
+      this.emit({ op: "StoreLocal", local: index }, expression.left);
+      if (arith) {
+        this.emit({ op: "LoadLocal", local: base }, expression.left);
+        this.emit({ op: "LoadLocal", local: index }, expression.left);
+        this.emit({ op: "GetIndex" }, expression.left);
+        this.expression(expression.right);
+        this.emit({ op: arith } as Instruction, expression);
+      } else {
+        this.expression(expression.right);
+      }
+      this.emit({ op: "StoreLocal", local: valueSlot }, expression);
+      this.emit({ op: "LoadLocal", local: base }, expression);
+      this.emit({ op: "LoadLocal", local: index }, expression);
+      this.emit({ op: "LoadLocal", local: valueSlot }, expression);
+      this.emit({ op: "SetIndex" }, expression);
+      this.emit({ op: "Pop" }, expression);
+      this.emit({ op: "LoadLocal", local: valueSlot }, expression);
+      return;
+    }
+    throw new CompileError("assignment target must be a local, property, or index");
+  }
+
+  shortCircuit(expression: ts.BinaryExpression, and: boolean): void {
+    const slot = this.alloc();
+    this.expression(expression.left);
+    this.emit({ op: "StoreLocal", local: slot }, expression.left);
+    this.emit({ op: "LoadLocal", local: slot }, expression.left);
+    const jump = this.emit(
+      { op: and ? "JumpIfFalse" : "JumpIfTrue", target: 0 },
+      expression,
+    );
+    this.expression(expression.right);
+    const jumpEnd = this.emit({ op: "Jump", target: 0 }, expression);
+    this.patch(jump, this.pc());
+    this.emit({ op: "LoadLocal", local: slot }, expression.left);
+    this.patch(jumpEnd, this.pc());
+  }
+
+  destructureArray(list: ts.VariableDeclarationList, declaration: ts.VariableDeclaration): void {
+    if (!declaration.initializer || !ts.isArrayBindingPattern(declaration.name)) {
+      throw new CompileError("array destructuring needs an initializer");
+    }
+    const kind = (list.flags & ts.NodeFlags.Const) !== 0 ? "const" : "let";
+    const slots: number[] = [];
+    for (const element of declaration.name.elements) {
+      if (!ts.isBindingElement(element) || element.dotDotDotToken || element.initializer || !ts.isIdentifier(element.name)) {
+        throw new CompileError("array destructuring bindings must be simple identifiers");
+      }
+      slots.push(this.declare(element.name.text, kind));
+    }
+    this.expression(declaration.initializer);
+    slots.forEach((slot, index) => {
+      this.emit({ op: "ArrayIndex", index }, declaration);
+      this.emit({ op: "StoreLocal", local: slot }, declaration);
+    });
+    this.emit({ op: "Pop" }, declaration);
+  }
+
+  destructureObject(list: ts.VariableDeclarationList, declaration: ts.VariableDeclaration): void {
+    if (!declaration.initializer || !ts.isObjectBindingPattern(declaration.name)) {
+      throw new CompileError("object destructuring needs an initializer");
+    }
+    const kind = (list.flags & ts.NodeFlags.Const) !== 0 ? "const" : "let";
+    const fields: Array<{ key: string; slot: number }> = [];
+    for (const element of declaration.name.elements) {
+      if (!ts.isBindingElement(element) || element.dotDotDotToken || element.initializer || !ts.isIdentifier(element.name)) {
+        throw new CompileError("object destructuring bindings must be simple identifiers");
+      }
+      const key = element.propertyName && ts.isIdentifier(element.propertyName)
+        ? element.propertyName.text
+        : element.name.text;
+      fields.push({ key, slot: this.declare(element.name.text, kind) });
+    }
+    const base = this.alloc();
+    this.expression(declaration.initializer);
+    this.emit({ op: "StoreLocal", local: base }, declaration);
+    for (const field of fields) {
+      this.emit({ op: "LoadLocal", local: base }, declaration);
+      this.emit({ op: "GetProp", key: field.key }, declaration);
+      this.emit({ op: "StoreLocal", local: field.slot }, declaration);
+    }
+  }
+
+  lowerHelperOrMethod(expression: ts.CallExpression): boolean {
+    const target = unwrap(expression.expression);
+    if (ts.isIdentifier(target)) {
+      const info = this.functions.get(target.text);
+      if (!info) {
+        return false;
+      }
+      if (expression.arguments.length > info.paramCount) {
+        throw new CompileError(`\`${target.text}\` expects at most ${info.paramCount} arguments`);
+      }
+      for (const argument of expression.arguments) {
+        if (ts.isSpreadElement(argument)) {
+          throw new CompileError("spread is not supported");
+        }
+        this.expression(argument);
+      }
+      this.emit({ op: "Call", func: info.id, argc: expression.arguments.length }, expression);
+      return true;
+    }
+    if (
+      ts.isPropertyAccessExpression(target) &&
+      ts.isIdentifier(target.name) &&
+      target.name.text === "push" &&
+      expression.arguments.length === 1 &&
+      !ts.isSpreadElement(expression.arguments[0]!)
+    ) {
+      this.expression(target.expression);
+      this.expression(expression.arguments[0]!);
+      this.emit({ op: "ArrayPush" }, expression);
+      return true;
+    }
+    return false;
+  }
+
+  needsImplicitReturn(): boolean {
+    const end = this.pc();
+    const last = this.instructions[end - 1];
+    if (!last || last.op !== "Return") {
+      return true;
+    }
+    return this.instructions.some((instruction) => {
+      if ("target" in instruction && instruction.target === end) {
+        return true;
+      }
+      if (instruction.op === "PushTry" && (instruction.catch === end || instruction.finally === end)) {
+        return true;
+      }
+      if (instruction.op === "Fork" && instruction.join_pc === end) {
+        return true;
+      }
+      return false;
+    });
+  }
+
   seal(): void {
     const len = this.instructions.length;
     const needsNop = this.instructions.some((instruction) => {
@@ -914,6 +1295,21 @@ function requiredFrom(instructions: Instruction[]): {
       case "PushTry":
       case "PopTry":
         addEngine("ts.exceptions");
+        break;
+      case "Add":
+      case "Sub":
+      case "Mul":
+      case "Div":
+      case "Rem":
+      case "Neg":
+      case "GetIndex":
+      case "SetIndex":
+      case "Length":
+      case "WatchIter":
+      case "UnwatchIter":
+      case "Same":
+      case "Call":
+        addEngine("lang.compute");
         break;
       default:
         break;
