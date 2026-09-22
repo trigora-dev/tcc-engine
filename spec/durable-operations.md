@@ -2,9 +2,9 @@
 
 Durable operations are explicit instructions. Ordinary computation is not journaled.
 
-A library call is not a durable operation unless a frontend lowers it to one of the operations below, or the host exposes it as a capability. `await Promise.all([...])` and `await Promise.race([...])` of those operations are structured concurrency in [concurrency.md](concurrency.md), not extra host operations.
+A library call is not a durable operation unless a frontend lowers it to one of the operations below, or the host exposes it as a capability. `await Promise.all([...])` / `await Promise.race([...])` and `await gather(...)` / `await race(...)` of those operations are structured concurrency in [concurrency.md](concurrency.md), not extra host operations.
 
-For the TypeScript frontend, durable operations are **resolved imports** of `@tcc-engine/primitives` or `@trigora/sdk` exports `effect`, `waitForEvent`, `sleep`, and `invoke`. For the Python frontend, they are **resolved imports** of `tcc_engine.primitives` or `trigora` exports `effect`, `wait_for_event`, `sleep`, and `invoke`. Both spellings lower to the same instructions. Neither package is required at compile time: the frontend injects declarations. Aliased imports are durable. A function that is merely named `effect` is not. Durable operations are imports, not a context object or a `workflow()` wrapper.
+For the TypeScript frontend, durable operations are **resolved imports** of `@tcc-engine/primitives` or `@trigora/sdk` exports `effect`, `waitForEvent`, `sleep`, and `invoke`. For the Python frontend, they are **resolved imports** of `tcc_engine.primitives` or `trigora` exports `effect`, `wait_for_event`, `sleep`, `invoke`, `gather`, and `race`. `gather` and `race` are compiler intrinsics: `gather` lowers to `JoinAll` and `race` lowers to `JoinAny`. Both spellings lower to the same instructions. Neither package is required at compile time: the frontend injects declarations. Aliased imports are durable. A function that is merely named `effect`, `gather`, or `race` is not. Durable operations are imports, not a context object or a `workflow()` wrapper.
 
 The effect callback is not compiled into the artifact. The host performs the work identified by the string-literal key.
 

@@ -19,7 +19,7 @@ LANGUAGE_SEMANTICS_VERSION = "py.subset.v1"
 SDK_MODULE = "trigora"
 PRIMITIVES_MODULE = "tcc_engine.primitives"
 DURABLE_MODULES = {SDK_MODULE, PRIMITIVES_MODULE}
-DURABLE = {"effect", "wait_for_event", "sleep", "invoke"}
+DURABLE = {"effect", "wait_for_event", "sleep", "invoke", "gather", "race"}
 
 
 class CompileError(Exception):
@@ -491,6 +491,9 @@ class Lowerer:
         if isinstance(node, ast.Lambda):
             self.fail(node, "lambdas are not compiled; pass them only as effect callbacks", WHY_SUBSET)
         if isinstance(node, ast.Call):
+            name = self.resolve_durable(node.func)
+            if name in {"gather", "race"}:
+                raise CompileError(f"await `{name}` directly; do not store the call")
             self.fail(node, "call is not a resolved durable operation", WHY_SUBSET)
         self.fail(node, f"unsupported expression: {type(node).__name__}", WHY_SUBSET)
 
@@ -534,6 +537,16 @@ class Lowerer:
             raise CompileError("await a durable operation")
         call = node.value
         durable = self.resolve_durable(call.func)
+        if durable == "gather":
+            self.join_call(call, "JoinAll")
+            return
+        if durable == "race":
+            self.join_call(call, "JoinAny")
+            return
+        self.emit_durable_call(call)
+
+    def emit_durable_call(self, call: ast.Call) -> None:
+        durable = self.resolve_durable(call.func)
         if durable == "effect":
             if len(call.args) != 2:
                 raise CompileError("`effect` takes a key and a callback")
@@ -562,6 +575,31 @@ class Lowerer:
             self.emit({"op": "Invoke"}, call)
             return
         raise CompileError("call is not a resolved durable operation")
+
+    def join_call(self, call: ast.Call, join_op: str) -> None:
+        label = "gather" if join_op == "JoinAll" else "race"
+        if call.keywords:
+            raise CompileError(f"`{label}` does not take keyword arguments")
+        if len(call.args) == 0 or len(call.args) > 32:
+            raise CompileError(f"`{label}` supports 1 to 32 branches")
+        fork = self.emit({"op": "Fork", "count": len(call.args), "join_pc": 0}, call)
+        for arg in call.args:
+            if isinstance(arg, ast.Starred):
+                raise CompileError(f"spread is not supported in `{label}`")
+            if isinstance(arg, ast.Await):
+                raise CompileError(f"`{label}` arguments must be direct durable calls")
+            if not isinstance(arg, ast.Call):
+                raise CompileError(f"`{label}` arguments must be direct durable calls")
+            branch = self.resolve_durable(arg.func)
+            if branch in {"gather", "race"}:
+                raise CompileError(f"nested `{branch}` is not supported")
+            if branch not in {"effect", "wait_for_event", "sleep", "invoke"}:
+                raise CompileError(
+                    f"`{label}` arguments must be effect, wait_for_event, sleep, or invoke"
+                )
+            self.emit_durable_call(arg)
+        self.instructions[fork]["join_pc"] = self.pc()
+        self.emit({"op": join_op}, call)
 
     def resolve_durable(self, node: ast.expr) -> str | None:
         if isinstance(node, ast.Name):
@@ -667,6 +705,8 @@ def required_from(instructions: list[dict[str, Any]]) -> tuple[list[str], list[s
         elif op == "Invoke":
             add_engine("durable.invoke")
             add_host("host.child")
+        elif op in {"Fork", "JoinAll", "JoinAny"}:
+            add_engine("durable.concurrent_group")
         elif op in {"Throw", "PushTry", "PopTry"}:
             add_engine("ts.exceptions")
     return engine, host

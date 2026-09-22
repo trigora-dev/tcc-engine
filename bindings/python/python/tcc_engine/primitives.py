@@ -27,3 +27,11 @@ def sleep(_ms: float) -> None:
 
 def invoke(_name: str) -> Any:
     _not_runtime()
+
+
+def gather(*_branches: Any) -> Any:
+    _not_runtime()
+
+
+def race(*_branches: Any) -> Any:
+    _not_runtime()

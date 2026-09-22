@@ -126,7 +126,7 @@ The repository is under development. Present:
 - Host protocol v1 and host-conformance-v1
 - Stepper, objects, arrays, control flow, exceptions, timers, cancellation, and child invoke
 - TypeScript frontend: `@tcc-engine/primitives` and `@trigora/sdk` (`effect`, `waitForEvent`, `sleep`, `invoke`)
-- Python frontend: `tcc_engine.primitives` and `trigora` (`effect`, `wait_for_event`, `sleep`, `invoke`)
+- Python frontend: `tcc_engine.primitives` and `trigora` (`effect`, `wait_for_event`, `sleep`, `invoke`, `gather`, `race`)
 - WASM C ABI, JavaScript binding, and an in-memory Node host
 - Native PyO3 binding and SQLite Node/Python reference hosts
 - Local `0.1.0-rc.1` npm packs and a Python wheel (not published to a registry)

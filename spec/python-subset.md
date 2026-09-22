@@ -7,7 +7,7 @@ Authoring uses resolved imports from `tcc_engine.primitives` (engine-native) or 
 ## Supported
 
 - A single top-level `async def run()` with no parameters
-- Imports from `tcc_engine.primitives` or `trigora`: `effect`, `wait_for_event`, `sleep`, `invoke` (aliases included)
+- Imports from `tcc_engine.primitives` or `trigora`: `effect`, `wait_for_event`, `sleep`, `invoke`, `gather`, `race` (aliases included). `gather` and `race` are compiler intrinsics for [concurrency.md](concurrency.md), not runtime coroutine helpers.
 - Assignment to simple locals
 - `if` / `elif` / `else`
 - `while`
@@ -27,7 +27,7 @@ Authoring uses resolved imports from `tcc_engine.primitives` (engine-native) or 
 
 - Effect: `{execution_id}:{key}`. Re-executing the same instruction with the same key skips a completed journal entry.
 - Wait: `{execution_id}:{name}:{correlation}:{pc}` (empty correlation is an empty field)
-- Child invoke: `{parent}:invoke:{pc}`
+- Child invoke: `{parent}:invoke:{pc}` outside a join. Inside `gather` or `race`, wait, timer, and child ids are the branch id from [concurrency.md](concurrency.md).
 
 ## Not supported
 
@@ -37,5 +37,5 @@ Authoring uses resolved imports from `tcc_engine.primitives` (engine-native) or 
 - Arithmetic, `and` / `or` (use nested `if`)
 - Collection truthiness (`if []:` / `if {}:`)
 - Integers that are not exact binary64 values
-- `asyncio.gather` / `Promise.all` / `Promise.race` fan-out (the instructions exist; this frontend does not lower them — see [concurrency.md](concurrency.md))
+- `asyncio.gather`, `asyncio.wait`, `asyncio.FIRST_COMPLETED`, stored `gather` / `race`, and pre-awaited branch arguments (see [concurrency.md](concurrency.md))
 - Parameters on the entry function

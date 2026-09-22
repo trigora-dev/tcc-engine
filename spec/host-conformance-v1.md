@@ -90,7 +90,7 @@ Resume must load the blob stored under `artifact.hash`. Passing a different comp
 - an invoke winner whose sibling child was already created and is not cancelled
 - loop re-entry does not alias `branch_id`
 
-The TypeScript compiler produces the artifact. The Python frontend does not lower `gather` or `Promise.race`. The Python SQLite adapter still runs the compiled artifact. Drivers accept `completionOrder: "source" | "reverse"` so one event is delivered to one wait in that order.
+The TypeScript compiler produces the artifact for these cases. The Python frontend lowers `gather` and `race` to the same joins. The Python SQLite adapter still runs the compiled artifact. Drivers accept `completionOrder: "source" | "reverse"` so one event is delivered to one wait in that order.
 
 ## Out of scope for this kit version
 

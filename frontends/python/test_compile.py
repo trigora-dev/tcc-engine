@@ -1,3 +1,7 @@
+import json
+import subprocess
+from pathlib import Path
+
 import pytest
 
 from tcc_engine.compile import (
@@ -196,7 +200,179 @@ async def run():
 
 
 def test_primitives_are_not_runtime_callable():
-    from tcc_engine.primitives import effect
+    from tcc_engine.primitives import effect, gather, race
 
     with pytest.raises(RuntimeError, match="compiler intrins"):
         effect("generate", lambda: 1)
+    with pytest.raises(RuntimeError, match="compiler intrins"):
+        gather(1)
+    with pytest.raises(RuntimeError, match="compiler intrins"):
+        race(1)
+
+
+def _ops(artifact):
+    return [instruction["op"] for instruction in artifact["program"]["functions"][0]["instructions"]]
+
+
+def _join_shape(artifact):
+    return [
+        {key: instruction[key] for key in ("op", "count", "join_pc") if key in instruction}
+        for instruction in artifact["program"]["functions"][0]["instructions"]
+    ]
+
+
+GATHER = """
+from tcc_engine.primitives import effect, gather
+
+async def run():
+    return await gather(effect("a", lambda: 1), effect("b", lambda: 2))
+"""
+
+
+def test_gather_matches_promise_all_join_shape(tmp_path):
+    python_artifact = compile(GATHER, filename="gather.py")
+    source = tmp_path / "all.ts"
+    source.write_text(
+        """
+import { effect } from "@tcc-engine/primitives";
+export default async function run() {
+  return await Promise.all([
+    effect("a", async () => 1),
+    effect("b", async () => 2),
+  ]);
+}
+""",
+        encoding="utf-8",
+    )
+    root = Path(__file__).resolve().parents[2]
+    completed = subprocess.run(
+        [
+            "node",
+            "--experimental-strip-types",
+            str(root / "conformance" / "compile-ts.ts"),
+            str(source),
+        ],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    typescript_artifact = json.loads(completed.stdout)
+    assert _join_shape(python_artifact) == _join_shape(typescript_artifact)
+    assert "durable.concurrent_group" in python_artifact["envelope"]["required_engine_features"]
+    assert "durable.concurrent_group" in typescript_artifact["envelope"]["required_engine_features"]
+    assert python_artifact["envelope"]["artifact_hash"] != typescript_artifact["envelope"]["artifact_hash"]
+
+
+def test_race_lowers_to_join_any():
+    source = """
+from trigora import effect, race
+
+async def run():
+    return await race(effect("a", lambda: 1), effect("b", lambda: 2))
+"""
+    artifact = compile(source, filename="race.py")
+    ops = _ops(artifact)
+    assert "Fork" in ops
+    assert "JoinAny" in ops
+    assert "JoinAll" not in ops
+    assert "durable.concurrent_group" in artifact["envelope"]["required_engine_features"]
+
+
+def test_gather_alias_lowers_and_a_local_name_does_not():
+    aliased = """
+from trigora import gather as g, effect
+
+async def run():
+    return await g(effect("a", lambda: 1), effect("b", lambda: 2))
+"""
+    artifact = compile(aliased, filename="alias.py")
+    assert "JoinAll" in _ops(artifact)
+    local = """
+from tcc_engine.primitives import effect
+
+async def run():
+    return await gather(effect("a", lambda: 1), effect("b", lambda: 2))
+"""
+    with pytest.raises(CompileError, match="not a resolved durable operation"):
+        compile(local, filename="local.py")
+
+
+def test_primitives_and_trigora_gather_produce_the_same_hash():
+    trigora = """
+from trigora import effect, gather
+
+async def run():
+    return await gather(effect("a", lambda: 1), effect("b", lambda: 2))
+"""
+    assert compile(GATHER, filename="gather.py")["envelope"]["artifact_hash"] == compile(
+        trigora, filename="gather.py"
+    )["envelope"]["artifact_hash"]
+
+
+def test_rejects_gather_and_race_shapes_outside_direct_await():
+    cases = {
+        "return gather": """
+from tcc_engine.primitives import effect, gather
+
+async def run():
+    return gather(effect("a", lambda: 1), effect("b", lambda: 2))
+""",
+        "assign": """
+from tcc_engine.primitives import effect, gather
+
+async def run():
+    pending = gather(effect("a", lambda: 1), effect("b", lambda: 2))
+    return await pending
+""",
+        "call": """
+from tcc_engine.primitives import effect, gather
+
+async def run():
+    return foo(gather(effect("a", lambda: 1), effect("b", lambda: 2)))
+""",
+        "preawait": """
+from tcc_engine.primitives import effect, gather
+
+async def run():
+    return await gather(await effect("a", lambda: 1), effect("b", lambda: 2))
+""",
+        "spread": """
+from tcc_engine.primitives import effect, gather
+
+async def run():
+    return await gather(*items)
+""",
+        "list": """
+from tcc_engine.primitives import effect, gather
+
+async def run():
+    return await gather([effect("a", lambda: 1)])
+""",
+        "nested": """
+from tcc_engine.primitives import effect, gather
+
+async def run():
+    return await gather(gather(effect("a", lambda: 1)), effect("b", lambda: 2))
+""",
+        "empty": """
+from tcc_engine.primitives import gather
+
+async def run():
+    return await gather()
+""",
+    }
+    for name, source in cases.items():
+        with pytest.raises(CompileError):
+            compile(source, filename=f"{name}.py")
+    branches = ", ".join(f'effect("k{index}", lambda: 1)' for index in range(33))
+    with pytest.raises(CompileError, match="1 to 32"):
+        compile(
+            f"""
+from tcc_engine.primitives import effect, gather
+
+async def run():
+    return await gather({branches})
+""",
+            filename="wide.py",
+        )

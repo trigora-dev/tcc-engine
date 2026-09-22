@@ -2,7 +2,15 @@
 
 `Promise.all` and `Promise.race` are durable control-flow constructs, not syntax sugar over JavaScript promises. The continuation stores a `JoinState`. It does not store host `Promise` objects.
 
-Python `asyncio.gather` is not lowered in this slice. A later frontend would target the same `Fork` / `JoinAll` instructions. `Promise.any` and `Promise.allSettled` are not specified as executable operations.
+Python uses the same joins through compiler intrinsics, not through `asyncio`:
+
+```text
+TypeScript Promise.all / Promise.race
+Python    gather / race
+Both      Fork + JoinAll / JoinAny, feature durable.concurrent_group
+```
+
+`gather` and `race` are not runtime coroutine helpers. They cannot be passed around as ordinary functions. `asyncio.gather`, `asyncio.wait`, and `asyncio.FIRST_COMPLETED` are not lowered. `Promise.any` and `Promise.allSettled` are not specified as executable operations.
 
 ## Grammar
 
@@ -20,7 +28,21 @@ Out: a stored promise (`const p = Promise.all([...]); await p`, and the same for
 
 Branch expressions are `effect`, `waitForEvent`, `sleep`, and `invoke`.
 
-At most **32** branches. The TypeScript compiler and artifact validation both reject a larger group. A hand-built artifact cannot bypass the cap.
+Python, imported from `tcc_engine.primitives` or `trigora` (aliases included):
+
+```text
+Await(
+  Call(gather | race, positional direct durable calls)
+)
+```
+
+```python
+from tcc_engine.primitives import effect, wait_for_event, sleep, invoke, gather, race
+```
+
+`return await gather(...)` is in. Out: `return gather(...)`, `x = gather(...)`, `foo(gather(...))`, and `pending = gather(...); await pending`. Each argument is a direct call to `effect`, `wait_for_event`, `sleep`, or `invoke`. `gather(await effect(...), ...)` is rejected, because that call would finish before `Fork`. Nested `gather` / `race` is rejected. A locally defined function named `gather` is not durable. No `*args`, keywords, or list wrapper. 1–32 arguments.
+
+At most **32** branches. The TypeScript compiler, the Python compiler, and artifact validation all reject a larger group. A hand-built artifact cannot bypass the cap.
 
 ## Instructions
 

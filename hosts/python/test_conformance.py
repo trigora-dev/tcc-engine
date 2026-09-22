@@ -279,6 +279,63 @@ def test_cancel_at_durable_boundary():
     assert recovered["effectLog"] == ["a"]
 
 
+GATHER = """
+from tcc_engine.primitives import effect, gather
+
+async def run():
+    return await gather(effect("a", lambda: 1), effect("b", lambda: 2))
+"""
+
+RACE = """
+from tcc_engine.primitives import effect, race
+
+async def run():
+    return await race(effect("a", lambda: 1), effect("b", lambda: 2))
+"""
+
+RACE_FAIL = """
+from tcc_engine.primitives import effect, race
+
+async def run():
+    try:
+        return await race(effect("bad", lambda: 1), effect("sibling", lambda: 2))
+    except Exception:
+        return "caught"
+"""
+
+
+def test_gather_returns_input_order_across_resume():
+    assert_conformance(
+        GATHER,
+        effects={"a": 1, "b": 2},
+        expected_result={
+            "t": "array",
+            "v": [{"t": "number", "v": 1}, {"t": "number", "v": 2}],
+        },
+        expected_effect_log=["a", "b"],
+        crash_ats=["after_persist_effect:a", "after_persist_effect:b"],
+    )
+
+
+def test_race_lowest_index_wins_across_resume():
+    assert_conformance(
+        RACE,
+        effects={"a": 1, "b": 2},
+        expected_result={"t": "number", "v": 1},
+        expected_effect_log=["a", "b"],
+        crash_ats=["after_persist_effect:a", "after_persist_effect:b"],
+    )
+
+
+def test_rejecting_race_is_caught_once_across_resume():
+    assert_conformance(
+        RACE_FAIL,
+        effects={"bad": "__fail__", "sibling": 2},
+        expected_result={"t": "string", "v": "caught"},
+        crash_ats=["after_persist_effect", "after_persist_checkpoint:2"],
+    )
+
+
 def test_child_invoke_recovers():
     child_json = artifact_json(compile(CHILD, filename="child.py"))
     assert_conformance(
