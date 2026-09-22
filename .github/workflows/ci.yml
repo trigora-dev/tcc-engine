@@ -55,6 +55,35 @@ jobs:
       - run: node --experimental-strip-types --test bindings/javascript/src/index.test.ts hosts/node-memory/src/host.test.ts
       - run: pnpm --filter @tcc-engine/host-node test
 
+  ordinary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: cargo build -p tcc-wasm --target wasm32-unknown-unknown --release
+      - run: cargo build -p tcc-core --bin tcc-drive --release
+      - run: python -m venv .venv
+      - run: .venv/bin/pip install maturin
+      - run: ${{ github.workspace }}/.venv/bin/maturin develop
+        working-directory: bindings/python
+      - name: score ordinary corpus
+        working-directory: ${{ github.workspace }}
+        env:
+          PATH: ${{ github.workspace }}/.venv/bin:${{ env.PATH }}
+        run: node --experimental-strip-types conformance/ordinary/score.ts
+
   python:
     runs-on: ubuntu-latest
     steps:

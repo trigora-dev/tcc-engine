@@ -1,0 +1,246 @@
+{
+  "frozen": "2026-09-22",
+  "programs": [
+    {
+      "id": "alias-object",
+      "shared": true,
+      "typescript": "shared/alias-object.ts",
+      "python": "shared/alias-object.py",
+      "args": [],
+      "expected": { "t": "number", "v": 2 }
+    },
+    {
+      "id": "helper-mutate",
+      "shared": true,
+      "typescript": "shared/helper-mutate.ts",
+      "python": "shared/helper-mutate.py",
+      "args": [],
+      "expected": { "t": "number", "v": 1 }
+    },
+    {
+      "id": "price-total",
+      "shared": true,
+      "typescript": "shared/price-total.ts",
+      "python": "shared/price-total.py",
+      "args": [],
+      "expected": { "t": "number", "v": 32 }
+    },
+    {
+      "id": "list-total",
+      "shared": true,
+      "typescript": "shared/list-total.ts",
+      "python": "shared/list-total.py",
+      "args": [],
+      "expected": { "t": "number", "v": 32 }
+    },
+    {
+      "id": "retry-counter",
+      "shared": true,
+      "typescript": "shared/retry-counter.ts",
+      "python": "shared/retry-counter.py",
+      "args": [],
+      "effects": { "try-send": { "t": "string", "v": "ok" } },
+      "expected": { "t": "number", "v": 1 }
+    },
+    {
+      "id": "approval-flow",
+      "shared": true,
+      "typescript": "shared/approval-flow.ts",
+      "python": "shared/approval-flow.py",
+      "args": [],
+      "events": { "approval": { "t": "string", "v": "yes" } },
+      "expected": { "t": "string", "v": "approved" }
+    },
+    {
+      "id": "nested-score",
+      "shared": true,
+      "typescript": "shared/nested-score.ts",
+      "python": "shared/nested-score.py",
+      "args": [],
+      "expected": { "t": "number", "v": 16 }
+    },
+    {
+      "id": "early-return",
+      "shared": true,
+      "typescript": "shared/early-return.ts",
+      "python": "shared/early-return.py",
+      "args": [],
+      "expected": { "t": "string", "v": "neg" }
+    },
+    {
+      "id": "destructure-sum",
+      "shared": true,
+      "typescript": "shared/destructure-sum.ts",
+      "python": "shared/destructure-sum.py",
+      "args": [],
+      "expected": { "t": "number", "v": 9 }
+    },
+    {
+      "id": "loop-review",
+      "shared": true,
+      "typescript": "shared/loop-review.ts",
+      "python": "shared/loop-review.py",
+      "args": [],
+      "events": { "review": { "t": "string", "v": "stop" } },
+      "expected": { "t": "number", "v": 14 }
+    },
+    {
+      "id": "ts-nonfinite",
+      "typescript": "typescript/nonfinite.ts",
+      "args": [],
+      "expected": {
+        "t": "object",
+        "v": {
+          "inf": { "t": "number", "v": "Infinity" },
+          "nan": { "t": "number", "v": "NaN" },
+          "sum": { "t": "number", "v": "Infinity" },
+          "neg": { "t": "number", "v": "-Infinity" }
+        }
+      }
+    },
+    {
+      "id": "ts-ref-equality",
+      "typescript": "typescript/ref-equality.ts",
+      "args": [],
+      "expected": {
+        "t": "object",
+        "v": {
+          "same": { "t": "bool", "v": true },
+          "other": { "t": "bool", "v": false },
+          "negZero": { "t": "bool", "v": true },
+          "nan": { "t": "bool", "v": false }
+        }
+      }
+    },
+    {
+      "id": "ts-param-defaults",
+      "typescript": "typescript/param-defaults.ts",
+      "args": [],
+      "expected": { "t": "number", "v": 4 }
+    },
+    {
+      "id": "ts-ternary",
+      "typescript": "typescript/ternary.ts",
+      "args": [],
+      "expected": { "t": "string", "v": "neg" }
+    },
+    {
+      "id": "ts-compound-assign",
+      "typescript": "typescript/compound-assign.ts",
+      "args": [],
+      "expected": { "t": "number", "v": 3 }
+    },
+    {
+      "id": "ts-string-plus",
+      "typescript": "typescript/string-plus.ts",
+      "args": [],
+      "expected": { "t": "string", "v": "id:ada3" }
+    },
+    {
+      "id": "ts-logical",
+      "typescript": "typescript/logical.ts",
+      "args": [],
+      "expected": {
+        "t": "object",
+        "v": {
+          "label": { "t": "string", "v": "ada" },
+          "fallback": { "t": "string", "v": "guest" }
+        }
+      }
+    },
+    {
+      "id": "ts-array-index",
+      "typescript": "typescript/array-index.ts",
+      "args": [],
+      "expected": {
+        "t": "object",
+        "v": {
+          "len": { "t": "number", "v": 4 },
+          "second": { "t": "number", "v": 15 },
+          "missing": { "t": "undefined" },
+          "last": { "t": "number", "v": 40 }
+        }
+      }
+    },
+    {
+      "id": "ts-object-destructure",
+      "typescript": "typescript/object-destructure.ts",
+      "args": [],
+      "expected": { "t": "number", "v": 25 }
+    },
+    {
+      "id": "ts-helper-product",
+      "typescript": "typescript/helper-product.ts",
+      "args": [],
+      "events": { "continue": { "t": "null" } },
+      "expected": { "t": "number", "v": 42 }
+    },
+    {
+      "id": "py-bool-arith",
+      "python": "python/bool-arith.py",
+      "args": [],
+      "expected": { "t": "number", "v": 2 }
+    },
+    {
+      "id": "py-const-defaults",
+      "python": "python/const-defaults.py",
+      "args": [{ "t": "number", "v": 5 }],
+      "expected": { "t": "number", "v": 15 }
+    },
+    {
+      "id": "py-is-vs-eq",
+      "python": "python/is-vs-eq.py",
+      "args": [],
+      "expected": {
+        "t": "object",
+        "v": {
+          "same": { "t": "bool", "v": true },
+          "other": { "t": "bool", "v": false },
+          "structural": { "t": "bool", "v": true }
+        }
+      }
+    },
+    {
+      "id": "py-negative-index",
+      "python": "python/negative-index.py",
+      "args": [],
+      "expected": { "t": "number", "v": 40 }
+    },
+    {
+      "id": "py-modulo",
+      "python": "python/modulo.py",
+      "args": [],
+      "expected": { "t": "number", "v": 2 }
+    },
+    {
+      "id": "py-dict-update",
+      "python": "python/dict-update.py",
+      "args": [],
+      "expected": { "t": "number", "v": 15 }
+    },
+    {
+      "id": "py-list-append",
+      "python": "python/list-append.py",
+      "args": [],
+      "expected": { "t": "number", "v": 3 }
+    },
+    {
+      "id": "py-conditional-expr",
+      "python": "python/conditional-expr.py",
+      "args": [],
+      "expected": { "t": "string", "v": "neg" }
+    },
+    {
+      "id": "py-helper-chain",
+      "python": "python/helper-chain.py",
+      "args": [],
+      "expected": { "t": "number", "v": 36 }
+    },
+    {
+      "id": "py-none-vs-default",
+      "python": "python/none-vs-default.py",
+      "args": [],
+      "expected": { "t": "number", "v": 7 }
+    }
+  ]
+}

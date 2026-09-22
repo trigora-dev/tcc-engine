@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "strict": false,
+    "noCheck": true,
+    "allowJs": false
+  },
+  "include": ["shared/**/*.ts", "typescript/**/*.ts"]
+}
