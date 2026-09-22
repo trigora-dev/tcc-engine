@@ -21,6 +21,15 @@ pub enum Value {
 pub enum HeapCell {
     Object(BTreeMap<String, Value>),
     Array(Vec<Value>),
+    /// One captured binding. The defining activation and every closure share this cell.
+    Cell(Value),
+    /// Refs to [`HeapCell::Cell`] values, not copies of those values.
+    Env(Vec<u32>),
+    /// A function plus the environment it closes over.
+    Closure {
+        func: u32,
+        env: u32,
+    },
     /// Unreachable id kept stable so later deltas name the same survivors.
     Hole,
 }

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import ts from "typescript";
 
 import { canonicalStringify } from "./canonical.ts";
+import { analyzeCaptures, type FnRec } from "./closures.ts";
 import {
   ENGINE_FORMAT_VERSION,
   FRONTEND_ID,
@@ -32,7 +33,7 @@ export declare function invoke(name: string, ...args: unknown[]): Promise<unknow
 
 type DurableName = "effect" | "waitForEvent" | "sleep" | "invoke";
 
-type Binding = { slot: number; kind: "const" | "let" };
+type Binding = { slot: number; kind: "const" | "let"; cell: boolean; outerIndex?: number };
 
 type Loop = {
   breaks: number[];
@@ -41,7 +42,7 @@ type Loop = {
   unwatch: boolean;
 };
 
-type FnInfo = { id: number; paramCount: number };
+type FnInfo = { id: number; paramCount: number; closure: boolean };
 
 export type DiagnosticSpan = {
   file: string;
@@ -88,17 +89,25 @@ export function compile(source: string, options: CompileOptions = {}): Artifact 
   }
 
   const { entry, helpers } = collectFunctions(sourceFile, filename);
+  const analysis = analyzeCaptures(sourceFile, entry, helpers);
   const functions = new Map<string, FnInfo>();
-  helpers.forEach((helper, index) => {
-    functions.set(helper.name!.text, { id: index + 1, paramCount: helper.parameters.length });
+  helpers.forEach((helper) => {
+    const rec = analysis.recs.get(helper)!;
+    functions.set(helper.name!.text, {
+      id: rec.id,
+      paramCount: rec.paramCount,
+      closure: rec.closure,
+    });
   });
-  const loweredHelpers = helpers.map((helper, index) =>
-    lowerFunction(helper, sourceFile, checker, filename, index + 1, false, functions),
+  const lowered = [entry, ...helpers].map((fn) =>
+    lowerFunction(fn, sourceFile, checker, filename, analysis.recs.get(fn)!, functions, analysis.recs),
   );
-  const functionDecl = lowerFunction(entry, sourceFile, checker, filename, 0, true, functions);
-  const { engine, host } = requiredFrom(
-    [functionDecl, ...loweredHelpers].flatMap((item) => item.instructions),
+  const arrows = [...analysis.recs.values()].filter((rec) => ts.isArrowFunction(rec.node));
+  const loweredArrows = arrows.map((rec) =>
+    lowerFunction(rec.node, sourceFile, checker, filename, rec, functions, analysis.recs),
   );
+  const all = [...lowered, ...loweredArrows].sort((left, right) => left.id - right.id);
+  const { engine, host } = requiredFrom(all.flatMap((item) => item.instructions));
   const artifact: Artifact = {
     envelope: {
       artifact_hash: "",
@@ -112,7 +121,7 @@ export function compile(source: string, options: CompileOptions = {}): Artifact 
     },
     program: {
       entry: 0,
-      functions: [functionDecl, ...loweredHelpers],
+      functions: all,
     },
   };
   artifact.envelope.artifact_hash = hashArtifact(artifact);
@@ -240,7 +249,7 @@ function collectFunctions(
 }
 
 function bindEntryParams(
-  entry: ts.FunctionDeclaration,
+  entry: ts.FunctionDeclaration | ts.ArrowFunction,
   lower: Lowerer,
   sourceFile: ts.SourceFile,
   filename: string,
@@ -290,19 +299,34 @@ function assertEarlierOnly(
 }
 
 function lowerFunction(
-  entry: ts.FunctionDeclaration,
+  entry: ts.FunctionDeclaration | ts.ArrowFunction,
   sourceFile: ts.SourceFile,
   checker: ts.TypeChecker,
   filename: string,
-  id: number,
-  durable: boolean,
+  rec: FnRec,
   functions: Map<string, FnInfo>,
+  recs: Map<ts.Node, FnRec>,
 ): FunctionDecl {
-  const lower = new Lowerer(sourceFile, checker, filename, durable, functions);
+  const lower = new Lowerer(sourceFile, checker, filename, rec.node === entry && rec.id === 0, functions, rec, recs);
   lower.pushScope();
+  if (rec.closure) {
+    lower.alloc();
+  }
+  rec.captured.forEach((captured, index) => lower.installOuter(captured.name, captured.kind, index));
   const paramCount = bindEntryParams(entry, lower, sourceFile, filename);
-  for (const statement of entry.body!.statements) {
-    lower.statement(statement);
+  for (const param of entry.parameters) {
+    if (ts.isIdentifier(param.name) && rec.capturedLocals.has(param.name)) {
+      lower.boxExisting(param.name.text, param);
+    }
+  }
+  const body = entry.body;
+  if (body && ts.isBlock(body)) {
+    for (const statement of body.statements) {
+      lower.statement(statement);
+    }
+  } else if (body) {
+    lower.expression(body);
+    lower.emit({ op: "Return" }, entry);
   }
   if (lower.needsImplicitReturn()) {
     lower.emit({ op: "LoadConst", value: { t: "undefined" } }, entry);
@@ -311,8 +335,8 @@ function lowerFunction(
   lower.popScope();
   lower.seal();
   return {
-    id,
-    name: entry.name?.text ?? "default",
+    id: rec.id,
+    name: rec.name,
     param_count: paramCount,
     local_count: lower.maxSlots,
     instructions: lower.instructions,
@@ -330,6 +354,8 @@ class Lowerer {
   readonly filename: string;
   readonly allowDurable: boolean;
   readonly functions: Map<string, FnInfo>;
+  readonly fn: FnRec;
+  readonly recs: Map<ts.Node, FnRec>;
   nextSlot = 0;
   maxSlots = 0;
 
@@ -339,12 +365,16 @@ class Lowerer {
     filename: string,
     durable: boolean,
     functions: Map<string, FnInfo>,
+    fn: FnRec,
+    recs: Map<ts.Node, FnRec>,
   ) {
     this.sourceFile = sourceFile;
     this.checker = checker;
     this.filename = filename;
     this.allowDurable = durable;
     this.functions = functions;
+    this.fn = fn;
+    this.recs = recs;
   }
 
   fail(node: ts.Node, message: string, why?: string, alternative?: string): never {
@@ -396,7 +426,7 @@ class Lowerer {
       throw new CompileError(`duplicate binding \`${name}\``);
     }
     const slot = this.alloc();
-    scope.set(name, { slot, kind });
+    scope.set(name, { slot, kind, cell: false });
     return slot;
   }
 
@@ -531,9 +561,9 @@ class Lowerer {
       throw new CompileError(`local \`${declaration.name.text}\` needs an initializer`);
     }
     const kind = (list.flags & ts.NodeFlags.Const) !== 0 ? "const" : "let";
-    const slot = this.declare(declaration.name.text, kind);
+    this.declare(declaration.name.text, kind);
     this.expression(declaration.initializer);
-    this.emit({ op: "StoreLocal", local: slot }, declaration);
+    this.initLocal(declaration.name, declaration);
   }
 
   expressionStatement(expression: ts.Expression): void {
@@ -628,8 +658,8 @@ class Lowerer {
         if (!ts.isIdentifier(variable.name)) {
           throw new CompileError("catch binding must be a simple identifier");
         }
-        const slot = this.declare(variable.name.text, "let");
-        this.emit({ op: "StoreLocal", local: slot }, variable);
+        this.declare(variable.name.text, "let");
+        this.initLocal(variable.name, variable);
       } else {
         this.emit({ op: "Pop" }, statement.catchClause);
       }
@@ -655,7 +685,19 @@ class Lowerer {
         this.emit({ op: "LoadConst", value: { t: "undefined" } }, expression);
         return;
       }
-      this.emit({ op: "LoadLocal", local: this.lookup(expression.text).slot }, expression);
+      if (this.hasBinding(expression.text)) {
+        this.loadName(expression.text, expression);
+        return;
+      }
+      const helper = this.functions.get(expression.text);
+      if (helper?.closure) {
+        this.emit({ op: "LoadFunc", func: helper.id }, expression);
+        return;
+      }
+      this.fail(expression, `unknown local \`${expression.text}\``, WHY_SUBSET);
+    }
+    if (ts.isArrowFunction(expression)) {
+      this.arrowExpression(expression);
       return;
     }
     const literal = constValue(expression);
@@ -720,7 +762,7 @@ class Lowerer {
       return;
     }
     if (ts.isCallExpression(expression)) {
-      if (this.lowerHelperOrMethod(expression)) {
+      if (this.lowerHelperOrMethod(expression) || this.lowerArrayMethod(expression)) {
         return;
       }
       const method = promiseMethod(expression);
@@ -733,6 +775,8 @@ class Lowerer {
       if (method) {
         throw new CompileError(`Promise.${method} is not supported`);
       }
+      this.callValue(expression);
+      return;
     }
     if (ts.isPropertyAccessExpression(expression)) {
       if (ts.isIdentifier(expression.name) && expression.name.text === "length") {
@@ -758,7 +802,8 @@ class Lowerer {
       op === ts.SyntaxKind.MinusEqualsToken ||
       op === ts.SyntaxKind.AsteriskEqualsToken ||
       op === ts.SyntaxKind.SlashEqualsToken ||
-      op === ts.SyntaxKind.PercentEqualsToken
+      op === ts.SyntaxKind.PercentEqualsToken ||
+      op === ts.SyntaxKind.AsteriskAsteriskEqualsToken
     ) {
       this.assign(expression);
       return;
@@ -779,6 +824,7 @@ class Lowerer {
       [ts.SyntaxKind.AsteriskToken]: "Mul",
       [ts.SyntaxKind.SlashToken]: "Div",
       [ts.SyntaxKind.PercentToken]: "Rem",
+      [ts.SyntaxKind.AsteriskAsteriskToken]: "Pow",
     };
     const instruction = map[op];
     if (!instruction) {
@@ -814,7 +860,6 @@ class Lowerer {
       throw new CompileError("array destructuring is only supported for await Promise.all");
     }
     const kind = (list.flags & ts.NodeFlags.Const) !== 0 ? "const" : "let";
-    const slots: number[] = [];
     for (const element of declaration.name.elements) {
       if (
         !ts.isBindingElement(element) ||
@@ -823,12 +868,15 @@ class Lowerer {
       ) {
         throw new CompileError("Promise.all bindings must be simple identifiers");
       }
-      slots.push(this.declare(element.name.text, kind));
+      this.declare(element.name.text, kind);
     }
     this.expression(declaration.initializer);
-    slots.forEach((slot, index) => {
+    declaration.name.elements.forEach((element, index) => {
+      if (!ts.isBindingElement(element) || !ts.isIdentifier(element.name)) {
+        return;
+      }
       this.emit({ op: "ArrayIndex", index }, declaration);
-      this.emit({ op: "StoreLocal", local: slot }, declaration);
+      this.initLocal(element.name, declaration);
     });
     this.emit({ op: "Pop" }, declaration);
   }
@@ -976,7 +1024,7 @@ class Lowerer {
       this.fail(statement, "for-of binding must be an identifier", WHY_SUBSET);
     }
     const kind = (statement.initializer.flags & ts.NodeFlags.Const) !== 0 ? "const" : "let";
-    const element = this.declare(declaration.name.text, kind);
+    this.declare(declaration.name.text, kind);
     const index = this.alloc();
     const length = this.alloc();
     this.expression(statement.expression);
@@ -995,7 +1043,7 @@ class Lowerer {
     this.expression(statement.expression);
     this.emit({ op: "LoadLocal", local: index }, statement);
     this.emit({ op: "GetIndex" }, statement);
-    this.emit({ op: "StoreLocal", local: element }, declaration);
+    this.initLocal(declaration.name, declaration);
     this.statement(statement.statement);
     const incr = this.pc();
     loop.continueTarget = incr;
@@ -1024,6 +1072,7 @@ class Lowerer {
       [ts.SyntaxKind.AsteriskEqualsToken]: "Mul",
       [ts.SyntaxKind.SlashEqualsToken]: "Div",
       [ts.SyntaxKind.PercentEqualsToken]: "Rem",
+      [ts.SyntaxKind.AsteriskAsteriskEqualsToken]: "Pow",
     };
     const arith = arithmetic[op];
     if (ts.isIdentifier(expression.left)) {
@@ -1032,14 +1081,13 @@ class Lowerer {
         throw new CompileError(`cannot assign to const \`${expression.left.text}\``);
       }
       if (arith) {
-        this.emit({ op: "LoadLocal", local: binding.slot }, expression.left);
+        this.loadName(expression.left.text, expression.left);
         this.expression(expression.right);
         this.emit({ op: arith } as Instruction, expression);
       } else {
         this.expression(expression.right);
       }
-      this.emit({ op: "StoreLocal", local: binding.slot }, expression);
-      this.emit({ op: "LoadLocal", local: binding.slot }, expression);
+      this.storeName(expression.left.text, expression);
       return;
     }
     const valueSlot = this.alloc();
@@ -1113,17 +1161,19 @@ class Lowerer {
       throw new CompileError("array destructuring needs an initializer");
     }
     const kind = (list.flags & ts.NodeFlags.Const) !== 0 ? "const" : "let";
-    const slots: number[] = [];
     for (const element of declaration.name.elements) {
       if (!ts.isBindingElement(element) || element.dotDotDotToken || element.initializer || !ts.isIdentifier(element.name)) {
         throw new CompileError("array destructuring bindings must be simple identifiers");
       }
-      slots.push(this.declare(element.name.text, kind));
+      this.declare(element.name.text, kind);
     }
     this.expression(declaration.initializer);
-    slots.forEach((slot, index) => {
+    declaration.name.elements.forEach((element, index) => {
+      if (!ts.isBindingElement(element) || !ts.isIdentifier(element.name)) {
+        return;
+      }
       this.emit({ op: "ArrayIndex", index }, declaration);
-      this.emit({ op: "StoreLocal", local: slot }, declaration);
+      this.initLocal(element.name, declaration);
     });
     this.emit({ op: "Pop" }, declaration);
   }
@@ -1133,7 +1183,7 @@ class Lowerer {
       throw new CompileError("object destructuring needs an initializer");
     }
     const kind = (list.flags & ts.NodeFlags.Const) !== 0 ? "const" : "let";
-    const fields: Array<{ key: string; slot: number }> = [];
+    const fields: Array<{ key: string; name: ts.Identifier }> = [];
     for (const element of declaration.name.elements) {
       if (!ts.isBindingElement(element) || element.dotDotDotToken || element.initializer || !ts.isIdentifier(element.name)) {
         throw new CompileError("object destructuring bindings must be simple identifiers");
@@ -1141,7 +1191,8 @@ class Lowerer {
       const key = element.propertyName && ts.isIdentifier(element.propertyName)
         ? element.propertyName.text
         : element.name.text;
-      fields.push({ key, slot: this.declare(element.name.text, kind) });
+      this.declare(element.name.text, kind);
+      fields.push({ key, name: element.name });
     }
     const base = this.alloc();
     this.expression(declaration.initializer);
@@ -1149,8 +1200,276 @@ class Lowerer {
     for (const field of fields) {
       this.emit({ op: "LoadLocal", local: base }, declaration);
       this.emit({ op: "GetProp", key: field.key }, declaration);
-      this.emit({ op: "StoreLocal", local: field.slot }, declaration);
+      this.initLocal(field.name, declaration);
     }
+  }
+
+  installOuter(name: string, kind: "const" | "let", index: number): void {
+    const scope = this.scopes[this.scopes.length - 1];
+    if (!scope) {
+      throw new CompileError("internal: no scope");
+    }
+    scope.set(name, { slot: 0, kind, cell: false, outerIndex: index });
+  }
+
+  boxExisting(name: string, node: ts.Node): void {
+    const binding = this.lookup(name);
+    const box = this.alloc();
+    this.emit({ op: "LoadLocal", local: binding.slot }, node);
+    this.emit({ op: "NewCell" }, node);
+    this.emit({ op: "NewEnv", count: 1 }, node);
+    this.emit({ op: "StoreLocal", local: box }, node);
+    binding.slot = box;
+    binding.cell = true;
+  }
+
+  initLocal(name: ts.Identifier, node: ts.Node): void {
+    const binding = this.lookup(name.text);
+    if (this.fn.capturedLocals.has(name)) {
+      binding.cell = true;
+      this.emit({ op: "NewCell" }, node);
+      this.emit({ op: "NewEnv", count: 1 }, node);
+    }
+    this.emit({ op: "StoreLocal", local: binding.slot }, node);
+  }
+
+  loadName(name: string, node: ts.Node): void {
+    const binding = this.lookup(name);
+    if (binding.outerIndex !== undefined) {
+      this.emit({ op: "LoadLocal", local: 0 }, node);
+      this.emit({ op: "EnvGet", index: binding.outerIndex }, node);
+      return;
+    }
+    this.emit({ op: "LoadLocal", local: binding.slot }, node);
+    if (binding.cell) {
+      this.emit({ op: "EnvGet", index: 0 }, node);
+    }
+  }
+
+  storeName(name: string, node: ts.Node): void {
+    const binding = this.lookup(name);
+    if (binding.kind === "const") {
+      throw new CompileError(`cannot assign to const \`${name}\``);
+    }
+    if (binding.outerIndex === undefined && !binding.cell) {
+      this.emit({ op: "StoreLocal", local: binding.slot }, node);
+      this.emit({ op: "LoadLocal", local: binding.slot }, node);
+      return;
+    }
+    const temp = this.alloc();
+    this.emit({ op: "StoreLocal", local: temp }, node);
+    if (binding.outerIndex !== undefined) {
+      this.emit({ op: "LoadLocal", local: 0 }, node);
+      this.emit({ op: "LoadLocal", local: temp }, node);
+      this.emit({ op: "EnvSet", index: binding.outerIndex }, node);
+    } else {
+      this.emit({ op: "LoadLocal", local: binding.slot }, node);
+      this.emit({ op: "LoadLocal", local: temp }, node);
+      this.emit({ op: "EnvSet", index: 0 }, node);
+    }
+    this.emit({ op: "LoadLocal", local: temp }, node);
+  }
+
+  emitCellRef(name: string, node: ts.Node): void {
+    const binding = this.lookup(name);
+    if (binding.outerIndex !== undefined) {
+      this.emit({ op: "LoadLocal", local: 0 }, node);
+      this.emit({ op: "EnvSlot", index: binding.outerIndex }, node);
+      return;
+    }
+    this.emit({ op: "LoadLocal", local: binding.slot }, node);
+    this.emit({ op: "EnvSlot", index: 0 }, node);
+  }
+
+  arrowExpression(expression: ts.ArrowFunction): void {
+    if (ts.getModifiers(expression)?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword)) {
+      this.fail(expression, "async arrows are not supported", WHY_SUBSET, "keep durable operations in run");
+    }
+    for (const param of expression.parameters) {
+      if (param.initializer || param.questionToken || param.dotDotDotToken || !ts.isIdentifier(param.name)) {
+        this.fail(expression, "arrow parameters must be plain identifiers", WHY_SUBSET);
+      }
+    }
+    const rec = this.recs.get(expression);
+    if (!rec) {
+      this.fail(expression, "unsupported arrow", WHY_SUBSET);
+    }
+    for (const captured of rec.captured) {
+      this.emitCellRef(captured.name, expression);
+    }
+    this.emit({ op: "NewEnv", count: rec.captured.length }, expression);
+    this.emit({ op: "NewClosure", func: rec.id }, expression);
+  }
+
+  callValue(expression: ts.CallExpression): void {
+    if (expression.arguments.some((argument) => ts.isSpreadElement(argument))) {
+      throw new CompileError("spread is not supported");
+    }
+    this.expression(unwrap(expression.expression));
+    for (const argument of expression.arguments) {
+      this.expression(argument);
+    }
+    this.emit({ op: "CallClosure", argc: expression.arguments.length }, expression);
+  }
+
+  lowerArrayMethod(expression: ts.CallExpression): boolean {
+    const target = unwrap(expression.expression);
+    if (!ts.isPropertyAccessExpression(target) || !ts.isIdentifier(target.name)) {
+      return false;
+    }
+    const name = target.name.text;
+    if (name !== "map" && name !== "filter" && name !== "reduce") {
+      return false;
+    }
+    if (expression.arguments.some((argument) => ts.isSpreadElement(argument))) {
+      throw new CompileError("spread is not supported");
+    }
+    const callbackCount = name === "reduce" ? [1, 2] : [1];
+    if (!callbackCount.includes(expression.arguments.length)) {
+      this.fail(
+        expression,
+        `\`${name}\` does not take a thisArg`,
+        WHY_SUBSET,
+        "pass the callback only",
+      );
+    }
+    const array = this.alloc();
+    const index = this.alloc();
+    const length = this.alloc();
+    const callback = this.alloc();
+    this.expression(target.expression);
+    this.emit({ op: "StoreLocal", local: array }, expression);
+    this.expression(expression.arguments[0]!);
+    this.emit({ op: "StoreLocal", local: callback }, expression);
+    this.emit({ op: "LoadLocal", local: array }, expression);
+    this.emit({ op: "WatchIter" }, expression);
+    this.emit({ op: "LoadLocal", local: array }, expression);
+    this.emit({ op: "Length" }, expression);
+    this.emit({ op: "StoreLocal", local: length }, expression);
+    const loop: Loop = { breaks: [], continues: [], unwatch: true };
+    this.loops.push(loop);
+    if (name === "reduce") {
+      this.lowerReduce(expression, array, index, length, callback, loop);
+    } else {
+      this.lowerMapOrFilter(expression, name, array, index, length, callback, loop);
+    }
+    this.loops.pop();
+    return true;
+  }
+
+  lowerMapOrFilter(
+    expression: ts.CallExpression,
+    name: "map" | "filter",
+    array: number,
+    index: number,
+    length: number,
+    callback: number,
+    loop: Loop,
+  ): void {
+    const result = this.alloc();
+    const element = this.alloc();
+    this.emit({ op: "NewArray" }, expression);
+    this.emit({ op: "StoreLocal", local: result }, expression);
+    this.emit({ op: "LoadConst", value: { t: "number", v: 0 } }, expression);
+    this.emit({ op: "StoreLocal", local: index }, expression);
+    const cond = this.pc();
+    this.emit({ op: "LoadLocal", local: index }, expression);
+    this.emit({ op: "LoadLocal", local: length }, expression);
+    this.emit({ op: "Lt" }, expression);
+    const jumpEnd = this.emit({ op: "JumpIfFalse", target: 0 }, expression);
+    this.emit({ op: "LoadLocal", local: array }, expression);
+    this.emit({ op: "LoadLocal", local: index }, expression);
+    this.emit({ op: "GetIndex" }, expression);
+    this.emit({ op: "StoreLocal", local: element }, expression);
+    this.emit({ op: "LoadLocal", local: callback }, expression);
+    this.emit({ op: "LoadLocal", local: element }, expression);
+    this.emit({ op: "LoadLocal", local: index }, expression);
+    this.emit({ op: "LoadLocal", local: array }, expression);
+    this.emit({ op: "CallClosure", argc: 3 }, expression);
+    if (name === "filter") {
+      const skip = this.emit({ op: "JumpIfFalse", target: 0 }, expression);
+      this.emit({ op: "LoadLocal", local: result }, expression);
+      this.emit({ op: "LoadLocal", local: element }, expression);
+      this.emit({ op: "ArrayPush" }, expression);
+      this.emit({ op: "Pop" }, expression);
+      this.patch(skip, this.pc());
+    } else {
+      const mapped = this.alloc();
+      this.emit({ op: "StoreLocal", local: mapped }, expression);
+      this.emit({ op: "LoadLocal", local: result }, expression);
+      this.emit({ op: "LoadLocal", local: mapped }, expression);
+      this.emit({ op: "ArrayPush" }, expression);
+      this.emit({ op: "Pop" }, expression);
+    }
+    const incr = this.pc();
+    loop.continueTarget = incr;
+    this.emit({ op: "LoadLocal", local: index }, expression);
+    this.emit({ op: "LoadConst", value: { t: "number", v: 1 } }, expression);
+    this.emit({ op: "Add" }, expression);
+    this.emit({ op: "StoreLocal", local: index }, expression);
+    this.emit({ op: "Jump", target: cond }, expression);
+    const end = this.pc();
+    this.patch(jumpEnd, end);
+    this.emit({ op: "UnwatchIter" }, expression);
+    this.emit({ op: "LoadLocal", local: result }, expression);
+  }
+
+  lowerReduce(
+    expression: ts.CallExpression,
+    array: number,
+    index: number,
+    length: number,
+    callback: number,
+    loop: Loop,
+  ): void {
+    const accumulator = this.alloc();
+    const hasInit = expression.arguments.length === 2;
+    if (!hasInit) {
+      this.emit({ op: "LoadLocal", local: length }, expression);
+      this.emit({ op: "LoadConst", value: { t: "number", v: 0 } }, expression);
+      this.emit({ op: "StrictEq" }, expression);
+      const nonempty = this.emit({ op: "JumpIfFalse", target: 0 }, expression);
+      this.emit({ op: "UnwatchIter" }, expression);
+      this.emit({ op: "LoadConst", value: { t: "string", v: "TypeError" } }, expression);
+      this.emit({ op: "Throw" }, expression);
+      this.patch(nonempty, this.pc());
+      this.emit({ op: "LoadLocal", local: array }, expression);
+      this.emit({ op: "LoadConst", value: { t: "number", v: 0 } }, expression);
+      this.emit({ op: "GetIndex" }, expression);
+      this.emit({ op: "StoreLocal", local: accumulator }, expression);
+      this.emit({ op: "LoadConst", value: { t: "number", v: 1 } }, expression);
+      this.emit({ op: "StoreLocal", local: index }, expression);
+    } else {
+      this.expression(expression.arguments[1]!);
+      this.emit({ op: "StoreLocal", local: accumulator }, expression);
+      this.emit({ op: "LoadConst", value: { t: "number", v: 0 } }, expression);
+      this.emit({ op: "StoreLocal", local: index }, expression);
+    }
+    const cond = this.pc();
+    this.emit({ op: "LoadLocal", local: index }, expression);
+    this.emit({ op: "LoadLocal", local: length }, expression);
+    this.emit({ op: "Lt" }, expression);
+    const jumpEnd = this.emit({ op: "JumpIfFalse", target: 0 }, expression);
+    this.emit({ op: "LoadLocal", local: callback }, expression);
+    this.emit({ op: "LoadLocal", local: accumulator }, expression);
+    this.emit({ op: "LoadLocal", local: array }, expression);
+    this.emit({ op: "LoadLocal", local: index }, expression);
+    this.emit({ op: "GetIndex" }, expression);
+    this.emit({ op: "LoadLocal", local: index }, expression);
+    this.emit({ op: "LoadLocal", local: array }, expression);
+    this.emit({ op: "CallClosure", argc: 4 }, expression);
+    this.emit({ op: "StoreLocal", local: accumulator }, expression);
+    const incr = this.pc();
+    loop.continueTarget = incr;
+    this.emit({ op: "LoadLocal", local: index }, expression);
+    this.emit({ op: "LoadConst", value: { t: "number", v: 1 } }, expression);
+    this.emit({ op: "Add" }, expression);
+    this.emit({ op: "StoreLocal", local: index }, expression);
+    this.emit({ op: "Jump", target: cond }, expression);
+    const end = this.pc();
+    this.patch(jumpEnd, end);
+    this.emit({ op: "UnwatchIter" }, expression);
+    this.emit({ op: "LoadLocal", local: accumulator }, expression);
   }
 
   lowerHelperOrMethod(expression: ts.CallExpression): boolean {
@@ -1163,13 +1482,20 @@ class Lowerer {
       if (expression.arguments.length > info.paramCount) {
         throw new CompileError(`\`${target.text}\` expects at most ${info.paramCount} arguments`);
       }
+      if (info.closure) {
+        this.emit({ op: "LoadFunc", func: info.id }, target);
+      }
       for (const argument of expression.arguments) {
         if (ts.isSpreadElement(argument)) {
           throw new CompileError("spread is not supported");
         }
         this.expression(argument);
       }
-      this.emit({ op: "Call", func: info.id, argc: expression.arguments.length }, expression);
+      if (info.closure) {
+        this.emit({ op: "CallClosure", argc: expression.arguments.length }, expression);
+      } else {
+        this.emit({ op: "Call", func: info.id, argc: expression.arguments.length }, expression);
+      }
       return true;
     }
     if (
@@ -1309,6 +1635,15 @@ function requiredFrom(instructions: Instruction[]): {
       case "UnwatchIter":
       case "Same":
       case "Call":
+      case "Pow":
+      case "NewCell":
+      case "NewEnv":
+      case "NewClosure":
+      case "EnvGet":
+      case "EnvSet":
+      case "EnvSlot":
+      case "CallClosure":
+      case "LoadFunc":
         addEngine("lang.compute");
         break;
       default:

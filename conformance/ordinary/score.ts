@@ -1,7 +1,7 @@
 /**
- * Permanent compatibility run for the frozen ordinary baseline.
+ * Permanent compatibility run for the frozen ordinary baseline and the growing suite.
  *
- * Every program must pass on the native engine, WASM, and the Python binding.
+ * Both lists must pass on the native engine, WASM, and the Python binding.
  * Where a durable boundary exists, resume must return the same result with one frame.
  */
 import { readFileSync } from "node:fs";
@@ -163,18 +163,17 @@ function wasmResume(artifact: string, continuation: string): Driver {
   };
 }
 
-async function main(): Promise<void> {
-  const wasm = path.resolve(root, "../../target/wasm32-unknown-unknown/release/tcc_wasm.wasm");
-  await loadEngine(wasm);
-  const manifest = JSON.parse(readFileSync(path.join(root, "manifest.json"), "utf8")) as {
-    programs: Program[];
-  };
-  let lines = 0;
-  let unchanged = 0;
-  let programs = 0;
-  let passed = 0;
-  const failures: string[] = [];
-  for (const program of manifest.programs) {
+type LayerResult = {
+  lines: number;
+  unchanged: number;
+  programs: number;
+  passed: number;
+  failures: string[];
+};
+
+async function scoreLayer(programs: Program[]): Promise<LayerResult> {
+  const result: LayerResult = { lines: 0, unchanged: 0, programs: 0, passed: 0, failures: [] };
+  for (const program of programs) {
     const files: Array<{ language: "ts" | "py"; file: string }> = [];
     if (program.typescript) {
       files.push({ language: "ts", file: program.typescript });
@@ -183,10 +182,10 @@ async function main(): Promise<void> {
       files.push({ language: "py", file: program.python });
     }
     for (const file of files) {
-      programs += 1;
+      result.programs += 1;
       const source = readFileSync(path.join(root, file.file), "utf8");
       const weight = nonIoLines(source, file.language);
-      lines += weight;
+      result.lines += weight;
       try {
         const json =
           file.language === "ts"
@@ -200,7 +199,7 @@ async function main(): Promise<void> {
           !valuesEqual(python, program.expected) ||
           !valuesEqual(native, program.expected)
         ) {
-          failures.push(
+          result.failures.push(
             `${program.id} ${file.file}: wasm ${canonicalStringify(wasm)} native ${canonicalStringify(native)} python ${canonicalStringify(python)}`,
           );
           continue;
@@ -208,21 +207,47 @@ async function main(): Promise<void> {
         if (program.events || program.effects) {
           await assertSingleFrameResume(json, program);
         }
-        unchanged += weight;
-        passed += 1;
+        result.unchanged += weight;
+        result.passed += 1;
       } catch (error) {
-        failures.push(`${program.id} ${file.file}: ${error instanceof Error ? error.message : error}`);
+        result.failures.push(`${program.id} ${file.file}: ${error instanceof Error ? error.message : error}`);
       }
     }
   }
-  const lineRate = unchanged / lines;
-  const programRate = passed / programs;
-  console.log(`non-I/O lines ${unchanged}/${lines} (${(lineRate * 100).toFixed(1)}%)`);
-  console.log(`programs ${passed}/${programs} (${(programRate * 100).toFixed(1)}%)`);
-  for (const failure of failures) {
+  return result;
+}
+
+function reportLayer(name: string, result: LayerResult): void {
+  const lineRate = result.lines === 0 ? 1 : result.unchanged / result.lines;
+  const programRate = result.programs === 0 ? 1 : result.passed / result.programs;
+  console.log(
+    `${name} non-I/O lines ${result.unchanged}/${result.lines} (${(lineRate * 100).toFixed(1)}%)`,
+  );
+  console.log(`${name} programs ${result.passed}/${result.programs} (${(programRate * 100).toFixed(1)}%)`);
+}
+
+async function main(): Promise<void> {
+  const wasm = path.resolve(root, "../../target/wasm32-unknown-unknown/release/tcc_wasm.wasm");
+  await loadEngine(wasm);
+  const manifest = JSON.parse(readFileSync(path.join(root, "manifest.json"), "utf8")) as {
+    baseline: { frozen: string; programs: Program[] };
+    suite: { programs: Program[] };
+  };
+  const ids = new Set<string>();
+  for (const program of [...manifest.baseline.programs, ...manifest.suite.programs]) {
+    if (ids.has(program.id)) {
+      throw new Error(`duplicate program id ${program.id}`);
+    }
+    ids.add(program.id);
+  }
+  const baseline = await scoreLayer(manifest.baseline.programs);
+  const suite = await scoreLayer(manifest.suite.programs);
+  reportLayer("baseline", baseline);
+  reportLayer("suite", suite);
+  for (const failure of [...baseline.failures, ...suite.failures]) {
     console.log(`FAIL ${failure}`);
   }
-  if (passed !== programs) {
+  if (baseline.passed !== baseline.programs || suite.passed !== suite.programs) {
     process.exitCode = 1;
   }
 }

@@ -86,6 +86,9 @@ fn absorb_cell(heap: &mut Vec<HeapCell>, index: usize) {
                 .map(|item| absorb_value(heap, item))
                 .collect(),
         ),
+        HeapCell::Cell(value) => HeapCell::Cell(absorb_value(heap, value)),
+        HeapCell::Env(cells) => HeapCell::Env(cells),
+        HeapCell::Closure { func, env } => HeapCell::Closure { func, env },
         HeapCell::Hole => HeapCell::Hole,
     };
     heap[index] = cell;
@@ -120,6 +123,16 @@ fn export_seen(heap: &[HeapCell], value: &Value, seen: &mut Vec<u32>) -> Result<
                         mapped.push(export_seen(heap, item, seen)?);
                     }
                     Value::Array(mapped)
+                }
+                Some(HeapCell::Closure { .. }) => {
+                    return Err(StateError::InvalidEncoding(
+                        "a closure cannot cross a host boundary".to_string(),
+                    ));
+                }
+                Some(HeapCell::Cell(_) | HeapCell::Env(_)) => {
+                    return Err(StateError::InvalidEncoding(
+                        "a captured binding cannot cross a host boundary".to_string(),
+                    ));
                 }
                 _ => {
                     return Err(StateError::InvalidEncoding(format!(
@@ -177,6 +190,9 @@ pub fn gc_heap(continuation: &mut Continuation) {
             *slot = true;
         }
     }
+    for id in continuation.func_refs.iter().flatten() {
+        mark(&continuation.heap, &Value::Ref(*id), &mut seen);
+    }
     for (index, live) in seen.iter().enumerate() {
         if !live {
             continuation.heap[index] = HeapCell::Hole;
@@ -207,6 +223,13 @@ fn mark(heap: &[HeapCell], value: &Value, seen: &mut [bool]) {
                 mark(heap, child, seen);
             }
         }
+        Some(HeapCell::Cell(value)) => mark(heap, value, seen),
+        Some(HeapCell::Env(cells)) => {
+            for id in cells {
+                mark(heap, &Value::Ref(*id), seen);
+            }
+        }
+        Some(HeapCell::Closure { env, .. }) => mark(heap, &Value::Ref(*env), seen),
         _ => {}
     }
 }

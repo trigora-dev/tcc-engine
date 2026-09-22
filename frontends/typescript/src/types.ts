@@ -63,6 +63,7 @@ export type Instruction =
   | { op: "Mul" }
   | { op: "Div" }
   | { op: "Rem" }
+  | { op: "Pow" }
   | { op: "Neg" }
   | { op: "GetIndex" }
   | { op: "SetIndex" }
@@ -70,6 +71,14 @@ export type Instruction =
   | { op: "WatchIter" }
   | { op: "UnwatchIter" }
   | { op: "Same" }
+  | { op: "NewCell" }
+  | { op: "NewEnv"; count: number }
+  | { op: "NewClosure"; func: number }
+  | { op: "EnvGet"; index: number }
+  | { op: "EnvSet"; index: number }
+  | { op: "EnvSlot"; index: number }
+  | { op: "CallClosure"; argc: number }
+  | { op: "LoadFunc"; func: number }
   | { op: "Throw" }
   | { op: "PushTry"; catch: number; finally: number | null }
   | { op: "PopTry" };

@@ -41,19 +41,19 @@
           "result": { "t": "number", "v": 42 }
         }
       },
-      "typescript": { "file": "cases/first.ts" },
-      "python": { "file": "cases/first.py" }
+      "typescript": { "file": "cases/typescript/first.ts" },
+      "python": { "file": "cases/python/first.py" }
     },
     {
       "id": "artifact-pinning",
       "kind": "artifact-pinning",
       "typescript": {
-        "stored": { "file": "cases/first.ts" },
-        "other": { "file": "cases/other.ts" }
+        "stored": { "file": "cases/typescript/first.ts" },
+        "other": { "file": "cases/typescript/other.ts" }
       },
       "python": {
-        "stored": { "file": "cases/first.py" },
-        "other": { "file": "cases/other.py" }
+        "stored": { "file": "cases/python/first.py" },
+        "other": { "file": "cases/python/other.py" }
       }
     },
     {
@@ -67,7 +67,7 @@
         "v": [{ "t": "number", "v": 1 }, { "t": "number", "v": 2 }]
       },
       "expected_effect_log": ["a", "b"],
-      "typescript": { "file": "cases/promise-all.ts" }
+      "typescript": { "file": "cases/typescript/promise-all.ts" }
     },
     {
       "id": "concurrent-group-waits",
@@ -78,7 +78,7 @@
         "t": "array",
         "v": [{ "t": "string", "v": "ok" }, { "t": "string", "v": "ok" }]
       },
-      "typescript": { "file": "cases/promise-waits.ts" }
+      "typescript": { "file": "cases/typescript/promise-waits.ts" }
     },
     {
       "id": "concurrent-group-waits-reverse",
@@ -90,7 +90,7 @@
         "t": "array",
         "v": [{ "t": "string", "v": "ok" }, { "t": "string", "v": "ok" }]
       },
-      "typescript": { "file": "cases/promise-waits.ts" }
+      "typescript": { "file": "cases/typescript/promise-waits.ts" }
     },
     {
       "id": "concurrent-group-fail-fast",
@@ -99,21 +99,21 @@
       "effects": { "bad": "__fail__", "sibling": 2 },
       "expected_result": { "t": "string", "v": "caught" },
       "crash_ats": ["after_persist_checkpoint:1"],
-      "typescript": { "file": "cases/promise-fail.ts" }
+      "typescript": { "file": "cases/typescript/promise-fail.ts" }
     },
     {
       "id": "concurrent-group-children",
       "kind": "crash-resume",
       "compiler": "typescript",
       "effects": { "child_work": 7 },
-      "children": { "child": { "file": "cases/promise-child.ts" } },
+      "children": { "child": { "file": "cases/typescript/promise-child.ts" } },
       "crash_ats": ["after_create_child"],
       "expected_result": {
         "t": "array",
         "v": [{ "t": "number", "v": 7 }, { "t": "number", "v": 7 }]
       },
       "expected_effect_log": ["child_work", "child_work"],
-      "typescript": { "file": "cases/promise-children.ts" }
+      "typescript": { "file": "cases/typescript/promise-children.ts" }
     },
     {
       "id": "concurrent-group-reentry",
@@ -123,7 +123,7 @@
       "crash_ats": ["after_persist_effect"],
       "expected_result": { "t": "number", "v": 7 },
       "expected_effect_log": ["tick"],
-      "typescript": { "file": "cases/promise-loop.ts" }
+      "typescript": { "file": "cases/typescript/promise-loop.ts" }
     },
     {
       "id": "concurrent-group-race-wait",
@@ -131,7 +131,7 @@
       "compiler": "typescript",
       "crash_ats": ["after_wait_checkpoint", "after_persist_checkpoint:3"],
       "expected_result": { "t": "string", "v": "ok" },
-      "typescript": { "file": "cases/promise-race-wait.ts" }
+      "typescript": { "file": "cases/typescript/promise-race-wait.ts" }
     },
     {
       "id": "concurrent-group-race-timer",
@@ -140,7 +140,7 @@
       "completion_order": "reverse",
       "crash_ats": ["after_wait_checkpoint"],
       "expected_result": { "t": "undefined" },
-      "typescript": { "file": "cases/promise-race-wait.ts" }
+      "typescript": { "file": "cases/typescript/promise-race-wait.ts" }
     },
     {
       "id": "concurrent-group-race-same-name",
@@ -148,7 +148,7 @@
       "compiler": "typescript",
       "crash_ats": ["after_register_wait", "after_persist_checkpoint:3"],
       "expected_result": { "t": "string", "v": "ok" },
-      "typescript": { "file": "cases/promise-race-waits.ts" }
+      "typescript": { "file": "cases/typescript/promise-race-waits.ts" }
     },
     {
       "id": "concurrent-group-race-fail",
@@ -157,18 +157,18 @@
       "effects": { "bad": "__fail__", "sibling": 2 },
       "expected_result": { "t": "string", "v": "caught" },
       "crash_ats": ["after_persist_effect", "after_persist_checkpoint:2"],
-      "typescript": { "file": "cases/promise-race-fail.ts" }
+      "typescript": { "file": "cases/typescript/promise-race-fail.ts" }
     },
     {
       "id": "concurrent-group-race-children",
       "kind": "crash-resume",
       "compiler": "typescript",
       "effects": { "child_work": 7 },
-      "children": { "child": { "file": "cases/promise-child.ts" } },
+      "children": { "child": { "file": "cases/typescript/promise-child.ts" } },
       "crash_ats": ["after_create_child"],
       "expected_result": { "t": "number", "v": 7 },
       "expected_effect_log": ["child_work"],
-      "typescript": { "file": "cases/promise-race-children.ts" }
+      "typescript": { "file": "cases/typescript/promise-race-children.ts" }
     },
     {
       "id": "concurrent-group-race-reentry",
@@ -178,15 +178,15 @@
       "crash_ats": ["after_persist_effect"],
       "expected_result": { "t": "number", "v": 7 },
       "expected_effect_log": ["tick"],
-      "typescript": { "file": "cases/promise-race-loop.ts" }
+      "typescript": { "file": "cases/typescript/promise-race-loop.ts" }
     },
     {
       "id": "generated-branch",
       "kind": "crash-resume",
       "crash_ats": ["after_persist_checkpoint:1", "after_wait_checkpoint"],
       "expected_result": { "t": "string", "v": "ok" },
-      "typescript": { "file": "cases/branch.ts" },
-      "python": { "file": "cases/branch.py" }
+      "typescript": { "file": "cases/typescript/branch.ts" },
+      "python": { "file": "cases/python/branch.py" }
     }
   ]
 }

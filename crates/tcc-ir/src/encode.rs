@@ -178,12 +178,22 @@ fn instruction_name(instruction: &Instruction) -> &'static str {
         Instruction::Div => "Div",
         Instruction::Rem => "Rem",
         Instruction::Neg => "Neg",
+        Instruction::Pow => "Pow",
+        Instruction::FloorDiv => "FloorDiv",
         Instruction::GetIndex => "GetIndex",
         Instruction::SetIndex => "SetIndex",
         Instruction::Length => "Length",
         Instruction::WatchIter => "WatchIter",
         Instruction::UnwatchIter => "UnwatchIter",
         Instruction::Same => "Same",
+        Instruction::NewCell => "NewCell",
+        Instruction::NewEnv { .. } => "NewEnv",
+        Instruction::NewClosure { .. } => "NewClosure",
+        Instruction::EnvGet { .. } => "EnvGet",
+        Instruction::EnvSet { .. } => "EnvSet",
+        Instruction::EnvSlot { .. } => "EnvSlot",
+        Instruction::CallClosure { .. } => "CallClosure",
+        Instruction::LoadFunc { .. } => "LoadFunc",
         _ => "Nop",
     }
 }
@@ -314,18 +324,49 @@ fn instruction_to_json(instruction: &Instruction) -> Json {
         Instruction::PopTry => {
             map.insert("op".to_string(), Json::String("PopTry".to_string()));
         }
+        Instruction::NewEnv { count } => {
+            map.insert("op".to_string(), Json::String("NewEnv".to_string()));
+            map.insert("count".to_string(), Json::Number(*count as f64));
+        }
+        Instruction::NewClosure { func } => {
+            map.insert("op".to_string(), Json::String("NewClosure".to_string()));
+            map.insert("func".to_string(), Json::Number(func.0 as f64));
+        }
+        Instruction::EnvGet { index } => {
+            map.insert("op".to_string(), Json::String("EnvGet".to_string()));
+            map.insert("index".to_string(), Json::Number(*index as f64));
+        }
+        Instruction::EnvSet { index } => {
+            map.insert("op".to_string(), Json::String("EnvSet".to_string()));
+            map.insert("index".to_string(), Json::Number(*index as f64));
+        }
+        Instruction::EnvSlot { index } => {
+            map.insert("op".to_string(), Json::String("EnvSlot".to_string()));
+            map.insert("index".to_string(), Json::Number(*index as f64));
+        }
+        Instruction::CallClosure { argc } => {
+            map.insert("op".to_string(), Json::String("CallClosure".to_string()));
+            map.insert("argc".to_string(), Json::Number(*argc as f64));
+        }
+        Instruction::LoadFunc { func } => {
+            map.insert("op".to_string(), Json::String("LoadFunc".to_string()));
+            map.insert("func".to_string(), Json::Number(func.0 as f64));
+        }
         Instruction::Add
         | Instruction::Sub
         | Instruction::Mul
         | Instruction::Div
         | Instruction::Rem
         | Instruction::Neg
+        | Instruction::Pow
+        | Instruction::FloorDiv
         | Instruction::GetIndex
         | Instruction::SetIndex
         | Instruction::Length
         | Instruction::WatchIter
         | Instruction::UnwatchIter
-        | Instruction::Same => {
+        | Instruction::Same
+        | Instruction::NewCell => {
             map.insert(
                 "op".to_string(),
                 Json::String(instruction_name(instruction).into()),
@@ -570,12 +611,36 @@ fn json_to_instruction(json: &Json) -> Result<Instruction, IrError> {
         "Div" => Ok(Instruction::Div),
         "Rem" => Ok(Instruction::Rem),
         "Neg" => Ok(Instruction::Neg),
+        "Pow" => Ok(Instruction::Pow),
+        "FloorDiv" => Ok(Instruction::FloorDiv),
         "GetIndex" => Ok(Instruction::GetIndex),
         "SetIndex" => Ok(Instruction::SetIndex),
         "Length" => Ok(Instruction::Length),
         "WatchIter" => Ok(Instruction::WatchIter),
         "UnwatchIter" => Ok(Instruction::UnwatchIter),
         "Same" => Ok(Instruction::Same),
+        "NewCell" => Ok(Instruction::NewCell),
+        "NewEnv" => Ok(Instruction::NewEnv {
+            count: Json::get(map, "count")?.as_u32()?,
+        }),
+        "NewClosure" => Ok(Instruction::NewClosure {
+            func: FuncId(Json::get(map, "func")?.as_u32()?),
+        }),
+        "EnvGet" => Ok(Instruction::EnvGet {
+            index: Json::get(map, "index")?.as_u32()?,
+        }),
+        "EnvSet" => Ok(Instruction::EnvSet {
+            index: Json::get(map, "index")?.as_u32()?,
+        }),
+        "EnvSlot" => Ok(Instruction::EnvSlot {
+            index: Json::get(map, "index")?.as_u32()?,
+        }),
+        "CallClosure" => Ok(Instruction::CallClosure {
+            argc: Json::get(map, "argc")?.as_u32()?,
+        }),
+        "LoadFunc" => Ok(Instruction::LoadFunc {
+            func: FuncId(Json::get(map, "func")?.as_u32()?),
+        }),
         other => Err(IrError::InvalidEncoding(format!(
             "unknown instruction `{other}`"
         ))),

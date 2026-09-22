@@ -276,3 +276,105 @@ fn structural_mutation_of_the_iterated_cell_is_a_runtime_error() {
     .unwrap_err();
     assert!(err.contains("being iterated"), "{err}");
 }
+
+fn pow(language: &str, base: f64, exp: f64) -> Result<Value, String> {
+    run(
+        language,
+        vec![num(base), num(exp), Instruction::Pow, Instruction::Return],
+    )
+}
+
+#[test]
+fn javascript_exponent_matches_the_golden_table() {
+    let cases = [
+        (0.0, 0.0, 1.0),
+        (0.0, -1.0, f64::INFINITY),
+        (-0.0, -1.0, f64::NEG_INFINITY),
+        (-0.0, 3.0, -0.0),
+        (f64::INFINITY, 0.0, 1.0),
+        (f64::NAN, 0.0, 1.0),
+        (-2.0, 0.5, f64::NAN),
+    ];
+    for (base, exp, expected) in cases {
+        let value = pow(LANGUAGE_SEMANTICS_TS, base, exp).unwrap();
+        let Value::Number(number) = value else {
+            panic!("{base} ** {exp} => {value:?}");
+        };
+        assert_eq!(
+            number.to_bits(),
+            expected.to_bits(),
+            "{base} ** {exp} => {number}"
+        );
+    }
+}
+
+#[test]
+fn python_floor_division_and_power_follow_cpython() {
+    let div = run(
+        LANGUAGE_SEMANTICS_PY,
+        vec![
+            num(-7.0),
+            num(3.0),
+            Instruction::FloorDiv,
+            Instruction::Return,
+        ],
+    )
+    .unwrap();
+    assert_eq!(div, Value::Number(-3.0));
+    let half = run(
+        LANGUAGE_SEMANTICS_PY,
+        vec![
+            num(7.5),
+            num(2.0),
+            Instruction::FloorDiv,
+            Instruction::Return,
+        ],
+    )
+    .unwrap();
+    assert_eq!(half, Value::Number(3.0));
+    let neg_inf = run(
+        LANGUAGE_SEMANTICS_PY,
+        vec![
+            num(1.0),
+            num(f64::NEG_INFINITY),
+            Instruction::FloorDiv,
+            Instruction::Return,
+        ],
+    )
+    .unwrap();
+    assert_eq!(neg_inf, Value::Number(-1.0));
+    let nan = run(
+        LANGUAGE_SEMANTICS_PY,
+        vec![
+            num(f64::INFINITY),
+            num(2.0),
+            Instruction::FloorDiv,
+            Instruction::Return,
+        ],
+    )
+    .unwrap();
+    assert!(matches!(nan, Value::Number(number) if number.is_nan()));
+    let zero = run(
+        LANGUAGE_SEMANTICS_PY,
+        vec![
+            num(1.0),
+            num(0.0),
+            Instruction::FloorDiv,
+            Instruction::Return,
+        ],
+    )
+    .unwrap_err();
+    assert!(zero.contains("ZeroDivisionError"), "{zero}");
+    assert_eq!(
+        pow(LANGUAGE_SEMANTICS_PY, 0.0, 0.0).unwrap(),
+        Value::Number(1.0)
+    );
+    assert_eq!(
+        pow(LANGUAGE_SEMANTICS_PY, -2.0, 3.0).unwrap(),
+        Value::Number(-8.0)
+    );
+    let divide = pow(LANGUAGE_SEMANTICS_PY, 0.0, -1.0).unwrap_err();
+    assert!(divide.contains("ZeroDivisionError"), "{divide}");
+    let complex = pow(LANGUAGE_SEMANTICS_PY, -2.0, 0.5).unwrap_err();
+    assert!(complex.contains("unsupported numeric result"), "{complex}");
+}

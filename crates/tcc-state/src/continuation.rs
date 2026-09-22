@@ -27,6 +27,8 @@ pub struct TryHandler {
     pub catch: u32,
     pub finally: Option<u32>,
     pub stack_len: u32,
+    /// Frame index that owns this handler. Missing on an old checkpoint means frame 0.
+    pub frame: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,6 +146,8 @@ pub struct Continuation {
     pub heap: Vec<HeapCell>,
     /// Heap ids whose structure must not change, outermost loop last.
     pub iterating: Vec<u32>,
+    /// Closure ref for each function id loaded as a value. Empty when none have been loaded.
+    pub func_refs: Vec<Option<u32>>,
 }
 
 impl Continuation {
@@ -177,6 +181,7 @@ impl Continuation {
             reentries: Vec::new(),
             heap: Vec::new(),
             iterating: Vec::new(),
+            func_refs: Vec::new(),
         }
     }
 }

@@ -53,16 +53,15 @@ def compile(source: str, filename: str = "input.py") -> dict[str, Any]:
         raise CompileError(f"{filename}: {err.msg}", filename=filename, span=_syntax_span(filename, err)) from err
     aliases = collect_imports(tree, filename)
     entry, helpers = collect_functions(tree, filename)
-    functions: dict[str, tuple[int, int, int]] = {}
-    for index, helper in enumerate(helpers):
+    recs = analyze_functions(entry, helpers, aliases, filename)
+    functions: dict[str, tuple[int, int, int, bool]] = {}
+    for helper in helpers:
+        rec = recs[id(helper)]
         count, required = param_shape(helper, filename)
-        functions[helper.name] = (index + 1, count, required)
+        functions[helper.name] = (rec["id"], count, required, rec["closure"])
     lowered = [
-        lower_function(entry, aliases, filename, 0, True, functions),
-        *[
-            lower_function(helper, aliases, filename, index + 1, False, functions)
-            for index, helper in enumerate(helpers)
-        ],
+        lower_function(rec["node"], aliases, filename, rec, rec["id"] == 0, functions, recs)
+        for rec in sorted(recs.values(), key=lambda item: item["id"])
     ]
     instructions = [item for function in lowered for item in function["instructions"]]
     engine, host = required_from(instructions)
@@ -172,6 +171,229 @@ def param_default_values(
     return defaults
 
 
+def analyze_functions(
+    entry: ast.AsyncFunctionDef,
+    helpers: list[ast.FunctionDef],
+    aliases: dict[str, str],
+    filename: str,
+) -> dict[int, dict[str, Any]]:
+    recs: dict[int, dict[str, Any]] = {}
+    helper_names = {helper.name for helper in helpers}
+    next_id = 1 + len(helpers)
+
+    def make(node: ast.AST, function_id: int, name: str, closure: bool) -> dict[str, Any]:
+        rec = {
+            "id": function_id,
+            "name": name,
+            "node": node,
+            "parent": None,
+            "closure": closure,
+            "assigned": set(),
+            "nonlocals": set(),
+            "captured": [],
+            "captured_locals": set(),
+        }
+        recs[id(node)] = rec
+        return rec
+
+    make(entry, 0, "run", False)
+    for index, helper in enumerate(helpers):
+        make(helper, index + 1, helper.name, False)
+
+    def scan(node: ast.AST) -> tuple[set[str], set[str], list[ast.AST]]:
+        assigned: set[str] = set()
+        nonlocals: set[str] = set()
+        nested: list[ast.AST] = []
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            assigned.update(arg.arg for arg in node.args.args)
+
+        def visit_stmt(statement: ast.stmt) -> None:
+            if isinstance(statement, ast.Global):
+                raise CompileError("`global` is not supported", filename=filename, why=WHY_SUBSET, node=statement)
+            if isinstance(statement, ast.Nonlocal):
+                nonlocals.update(statement.names)
+                return
+            if isinstance(statement, ast.FunctionDef):
+                assigned.add(statement.name)
+                nested.append(statement)
+                return
+            if isinstance(statement, ast.AsyncFunctionDef):
+                raise CompileError(
+                    "nested functions cannot be async",
+                    filename=filename,
+                    why=WHY_SUBSET,
+                    alternative="keep durable operations in run",
+                    node=statement,
+                )
+            if isinstance(statement, ast.Assign):
+                for target in statement.targets:
+                    collect_target(target)
+            elif isinstance(statement, ast.AugAssign):
+                collect_target(statement.target)
+            elif isinstance(statement, ast.For):
+                collect_target(statement.target)
+            for child in ast.iter_child_nodes(statement):
+                if isinstance(child, ast.stmt):
+                    visit_stmt(child)
+                elif isinstance(child, ast.expr):
+                    visit_expr(child)
+
+        def visit_expr(expr: ast.expr) -> None:
+            if isinstance(expr, ast.Call) and effect_callback(expr) is not None:
+                for argument in expr.args[:1]:
+                    visit_expr(argument)
+                return
+            if isinstance(expr, ast.Lambda):
+                nested.append(expr)
+                return
+            for child in ast.iter_child_nodes(expr):
+                if isinstance(child, ast.expr):
+                    visit_expr(child)
+                elif isinstance(child, ast.stmt):
+                    visit_stmt(child)
+
+        def collect_target(target: ast.expr) -> None:
+            if isinstance(target, ast.Name):
+                assigned.add(target.id)
+            elif isinstance(target, (ast.Tuple, ast.List)):
+                for element in target.elts:
+                    collect_target(element)
+
+        body = node.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) else [node.body]
+        if isinstance(node, ast.Lambda):
+            visit_expr(node.body)
+        else:
+            for statement in body:
+                visit_stmt(statement)
+        assigned.difference_update(nonlocals)
+        return assigned, nonlocals, nested
+
+    def effect_callback(call: ast.Call) -> ast.Lambda | None:
+        if len(call.args) < 2 or not isinstance(call.args[1], ast.Lambda):
+            return None
+        func = call.func
+        if isinstance(func, ast.Name) and aliases.get(func.id, func.id) == "effect":
+            return call.args[1]
+        return None
+
+    def loads(node: ast.AST) -> list[tuple[str, ast.AST]]:
+        found: list[tuple[str, ast.AST]] = []
+
+        def visit_stmt(statement: ast.stmt) -> None:
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Global, ast.Nonlocal)):
+                return
+            for child in ast.iter_child_nodes(statement):
+                if isinstance(child, ast.stmt):
+                    visit_stmt(child)
+                elif isinstance(child, ast.expr):
+                    visit_expr(child)
+
+        def visit_expr(expr: ast.expr) -> None:
+            if isinstance(expr, ast.Call) and effect_callback(expr) is not None:
+                for argument in expr.args[:1]:
+                    visit_expr(argument)
+                return
+            if isinstance(expr, ast.Lambda):
+                return
+            if isinstance(expr, ast.Name) and isinstance(expr.ctx, ast.Load):
+                found.append((expr.id, expr))
+            for child in ast.iter_child_nodes(expr):
+                if isinstance(child, ast.expr):
+                    visit_expr(child)
+
+        if isinstance(node, ast.Lambda):
+            visit_expr(node.body)
+        else:
+            for statement in node.body:
+                visit_stmt(statement)
+        return found
+
+    def note(fn: dict[str, Any], name: str, node: ast.AST) -> None:
+        owner = fn["parent"]
+        while owner is not None and name not in owner["assigned"]:
+            owner = owner["parent"]
+        if owner is None:
+            if name in helper_names and not isinstance(getattr(node, "parent_call", None), ast.Call):
+                pass
+            if name in helper_names:
+                parent = getattr(node, "_tcc_call", None)
+                if parent is None:
+                    for helper in helpers:
+                        if helper.name == name:
+                            recs[id(helper)]["closure"] = True
+                return
+            return
+        owner["captured_locals"].add(name)
+        mid = fn
+        while mid is not owner:
+            if name not in mid["captured"]:
+                mid["captured"].append(name)
+            mid = mid["parent"]
+
+    def walk(rec: dict[str, Any]) -> None:
+        assigned, nonlocals, nested = scan(rec["node"])
+        if nonlocals & set(arg.arg for arg in rec["node"].args.args):
+            raise CompileError("a parameter cannot be nonlocal", filename=filename, why=WHY_SUBSET, node=rec["node"])
+        rec["assigned"] = assigned
+        rec["nonlocals"] = nonlocals
+        nonlocal next_id
+        for child in nested:
+            if isinstance(child, ast.Lambda):
+                child_rec = make(child, next_id, f"lambda{next_id}", True)
+            else:
+                child_rec = make(child, next_id, child.name, True)
+            next_id += 1
+            child_rec["parent"] = rec
+            walk(child_rec)
+        for name in nonlocals:
+            owner = rec["parent"]
+            while owner is not None and name not in owner["assigned"]:
+                owner = owner["parent"]
+            if owner is None:
+                raise CompileError(
+                    f"nonlocal `{name}` is not an enclosing binding",
+                    filename=filename,
+                    why=WHY_SUBSET,
+                    node=rec["node"],
+                )
+            note(rec, name, rec["node"])
+        for name, expr in loads(rec["node"]):
+            if name in {"None", "True", "False"} or name in rec["assigned"]:
+                continue
+            if name in nonlocals:
+                continue
+            parent = expr.parent if hasattr(expr, "parent") else None
+            called = isinstance(parent, ast.Call) and parent.func is expr
+            if name in helper_names and rec["parent"] is None:
+                if not called:
+                    recs[id(next(helper for helper in helpers if helper.name == name))]["closure"] = True
+                continue
+            if name in helper_names and not any(
+                ancestor is not None and name in ancestor["assigned"]
+                for ancestor in _ancestors(rec)
+            ):
+                if not called:
+                    recs[id(next(helper for helper in helpers if helper.name == name))]["closure"] = True
+                if called:
+                    continue
+                continue
+            note(rec, name, expr)
+
+    for rec in list(recs.values()):
+        if rec["parent"] is None:
+            walk(rec)
+    return recs
+
+
+def _ancestors(rec: dict[str, Any]) -> list[dict[str, Any] | None]:
+    found = []
+    current = rec["parent"]
+    while current is not None:
+        found.append(current)
+        current = current["parent"]
+    return found
+
+
 def collect_functions(
     tree: ast.Module, filename: str
 ) -> tuple[ast.AsyncFunctionDef, list[ast.FunctionDef]]:
@@ -211,30 +433,55 @@ def collect_functions(
 
 
 def lower_function(
-    entry: ast.FunctionDef | ast.AsyncFunctionDef,
+    entry: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
     aliases: dict[str, str],
     filename: str,
-    function_id: int,
+    rec: dict[str, Any],
     allow_durable: bool,
-    functions: dict[str, tuple[int, int, int]],
+    functions: dict[str, tuple[int, int, int, bool]],
+    recs: dict[int, dict[str, Any]],
 ) -> dict[str, Any]:
-    lower = Lowerer(aliases, filename, allow_durable, functions)
+    lower = Lowerer(aliases, filename, allow_durable, functions, rec, recs)
     lower.push_scope()
-    defaults = param_default_values(entry, filename)
-    for parameter in entry.args.args:
-        lower.declare(parameter.arg)
-    for statement in entry.body:
-        lower.statement(statement)
-    if lower.needs_implicit_return():
-        value = {"t": "null"}
-        lower.emit({"op": "LoadConst", "value": value}, entry)
+    if rec["closure"]:
+        lower.alloc()
+    for index, name in enumerate(rec["captured"]):
+        lower.outers[name] = index
+    if isinstance(entry, ast.Lambda):
+        if entry.args.defaults or entry.args.vararg or entry.args.kwarg or entry.args.kwonlyargs:
+            raise CompileError("lambda parameters must be plain identifiers", filename=filename, why=WHY_SUBSET, node=entry)
+        defaults: list[dict[str, Any] | None] = []
+        for parameter in entry.args.args:
+            lower.declare(parameter.arg)
+        for parameter in entry.args.args:
+            if parameter.arg in rec["captured_locals"]:
+                lower.box_param(parameter.arg, entry)
+        lower.prepare_cells(entry)
+        lower.expression(entry.body)
         lower.emit({"op": "Return"}, entry)
+        name = rec["name"]
+        param_count = len(entry.args.args)
+    else:
+        defaults = param_default_values(entry, filename)
+        for parameter in entry.args.args:
+            lower.declare(parameter.arg)
+        for parameter in entry.args.args:
+            if parameter.arg in rec["captured_locals"]:
+                lower.box_param(parameter.arg, entry)
+        lower.prepare_cells(entry)
+        for statement in entry.body:
+            lower.statement(statement)
+        if lower.needs_implicit_return():
+            lower.emit({"op": "LoadConst", "value": {"t": "null"}}, entry)
+            lower.emit({"op": "Return"}, entry)
+        name = entry.name
+        param_count = len(entry.args.args)
     lower.pop_scope()
     lower.seal()
     function: dict[str, Any] = {
-        "id": function_id,
-        "name": entry.name,
-        "param_count": len(entry.args.args),
+        "id": rec["id"],
+        "name": name,
+        "param_count": param_count,
         "local_count": lower.max_slots,
         "instructions": lower.instructions,
         "spans": lower.spans,
@@ -258,16 +505,29 @@ class Lowerer:
         aliases: dict[str, str],
         filename: str,
         allow_durable: bool = True,
-        functions: dict[str, tuple[int, int, int]] | None = None,
+        functions: dict[str, tuple[int, int, int, bool]] | None = None,
+        rec: dict[str, Any] | None = None,
+        recs: dict[int, dict[str, Any]] | None = None,
     ) -> None:
         self.aliases = aliases
         self.filename = filename
         self.allow_durable = allow_durable
         self.functions = functions or {}
+        self.rec = rec or {
+            "id": 0,
+            "captured": [],
+            "captured_locals": set(),
+            "closure": False,
+            "assigned": set(),
+            "nonlocals": set(),
+        }
+        self.recs = recs or {}
         self.instructions: list[dict[str, Any]] = []
         self.spans: list[dict[str, Any] | None] = []
         self.scopes: list[dict[str, int]] = []
         self.slots: dict[str, int] = {}
+        self.outers: dict[str, int] = {}
+        self.cells: set[str] = set()
         self.loops: list[Loop] = []
         self.max_slots = 0
 
@@ -331,13 +591,85 @@ class Lowerer:
             raise CompileError(f"unknown local `{name}`")
         return self.slots[name]
 
+    def load_name(self, name: str, node: ast.AST) -> None:
+        if name in self.outers:
+            self.emit({"op": "LoadLocal", "local": 0}, node)
+            self.emit({"op": "EnvGet", "index": self.outers[name]}, node)
+            return
+        if name in self.cells:
+            self.emit({"op": "LoadLocal", "local": self.lookup(name)}, node)
+            self.emit({"op": "EnvGet", "index": 0}, node)
+            return
+        if name in self.slots:
+            self.emit({"op": "LoadLocal", "local": self.slots[name]}, node)
+            return
+        info = self.functions.get(name)
+        if info is not None and info[3]:
+            self.emit({"op": "LoadFunc", "func": info[0]}, node)
+            return
+        raise CompileError(f"unknown local `{name}`")
+
+    def store_name(self, name: str, node: ast.AST) -> None:
+        if name in self.outers or name in self.rec["nonlocals"]:
+            index = self.outers.get(name)
+            if index is None:
+                raise CompileError(f"nonlocal `{name}` is not an enclosing binding")
+            temp = self.alloc()
+            self.emit({"op": "StoreLocal", "local": temp}, node)
+            self.emit({"op": "LoadLocal", "local": 0}, node)
+            self.emit({"op": "LoadLocal", "local": temp}, node)
+            self.emit({"op": "EnvSet", "index": index}, node)
+            return
+        slot = self.bind_or_assign(name)
+        if name in self.rec["captured_locals"]:
+            temp = self.alloc()
+            self.emit({"op": "StoreLocal", "local": temp}, node)
+            self.emit({"op": "LoadLocal", "local": slot}, node)
+            self.emit({"op": "LoadLocal", "local": temp}, node)
+            self.emit({"op": "EnvSet", "index": 0}, node)
+            return
+        self.emit({"op": "StoreLocal", "local": slot}, node)
+
+    def prepare_cells(self, node: ast.AST) -> None:
+        for name in self.rec["captured_locals"]:
+            if name in self.cells or name in self.outers:
+                continue
+            slot = self.bind_or_assign(name)
+            self.emit({"op": "LoadConst", "value": {"t": "null"}}, node)
+            self.emit({"op": "NewCell"}, node)
+            self.emit({"op": "NewEnv", "count": 1}, node)
+            self.emit({"op": "StoreLocal", "local": slot}, node)
+            self.cells.add(name)
+
+    def box_param(self, name: str, node: ast.AST) -> None:
+        slot = self.lookup(name)
+        self.emit({"op": "LoadLocal", "local": slot}, node)
+        self.emit({"op": "NewCell"}, node)
+        self.emit({"op": "NewEnv", "count": 1}, node)
+        self.emit({"op": "StoreLocal", "local": slot}, node)
+        self.cells.add(name)
+
+    def emit_cell_ref(self, name: str, node: ast.AST) -> None:
+        if name in self.outers:
+            self.emit({"op": "LoadLocal", "local": 0}, node)
+            self.emit({"op": "EnvSlot", "index": self.outers[name]}, node)
+            return
+        self.emit({"op": "LoadLocal", "local": self.lookup(name)}, node)
+        self.emit({"op": "EnvSlot", "index": 0}, node)
+
+    def emit_closure(self, rec: dict[str, Any], node: ast.AST) -> None:
+        for name in rec["captured"]:
+            self.emit_cell_ref(name, node)
+        self.emit({"op": "NewEnv", "count": len(rec["captured"])}, node)
+        self.emit({"op": "NewClosure", "func": rec["id"]}, node)
+
     def bind_or_assign(self, name: str) -> int:
         if name in self.slots:
             return self.slots[name]
         return self.declare(name)
 
     def statement(self, statement: ast.stmt) -> None:
-        if isinstance(statement, ast.Pass):
+        if isinstance(statement, ast.Pass) or isinstance(statement, ast.Nonlocal):
             return
         if isinstance(statement, ast.Expr):
             self.expression(statement.value)
@@ -392,7 +724,14 @@ class Lowerer:
             self.for_statement(statement)
             return
         if isinstance(statement, ast.FunctionDef) or isinstance(statement, ast.AsyncFunctionDef):
-            self.fail(statement, "nested functions are not supported", WHY_SUBSET)
+            if isinstance(statement, ast.AsyncFunctionDef):
+                self.fail(statement, "nested functions cannot be async", WHY_SUBSET, "keep durable operations in run")
+            rec = self.recs.get(id(statement))
+            if rec is None:
+                self.fail(statement, "nested functions are not supported", WHY_SUBSET)
+            self.emit_closure(rec, statement)
+            self.store_name(statement.name, statement)
+            return
         if isinstance(statement, ast.ClassDef):
             self.fail(statement, "classes are not supported", WHY_SUBSET)
         self.fail(statement, f"unsupported statement: {type(statement).__name__}", WHY_SUBSET)
@@ -402,9 +741,8 @@ class Lowerer:
             raise CompileError("assignment target must be a local, property, index, or one-level unpack")
         target = statement.targets[0]
         if isinstance(target, ast.Name):
-            slot = self.bind_or_assign(target.id)
             self.expression(statement.value)
-            self.emit({"op": "StoreLocal", "local": slot}, statement)
+            self.store_name(target.id, statement)
             return
         if isinstance(target, ast.Tuple):
             self.unpack(target, statement.value, statement)
@@ -417,7 +755,9 @@ class Lowerer:
             ast.Sub: "Sub",
             ast.Mult: "Mul",
             ast.Div: "Div",
+            ast.FloorDiv: "FloorDiv",
             ast.Mod: "Rem",
+            ast.Pow: "Pow",
         }.get(type(statement.op))
         if op is None:
             raise CompileError("unsupported augmented assignment")
@@ -429,23 +769,24 @@ class Lowerer:
             if not isinstance(element, ast.Name):
                 raise CompileError("unpacking bindings must be simple names")
             names.append(element.id)
-        slots = [self.bind_or_assign(name) for name in names]
+        for name in names:
+            if name not in self.outers:
+                self.bind_or_assign(name)
         self.expression(value)
-        for index, slot in enumerate(slots):
+        for index, name in enumerate(names):
             self.emit({"op": "ArrayIndex", "index": index}, node)
-            self.emit({"op": "StoreLocal", "local": slot}, node)
+            self.store_name(name, node)
         self.emit({"op": "Pop"}, node)
 
     def store_target(self, target: ast.expr, value: ast.expr, node: ast.AST, compound: str | None) -> None:
         if isinstance(target, ast.Name):
-            slot = self.lookup(target.id) if compound else self.bind_or_assign(target.id)
             if compound:
-                self.emit({"op": "LoadLocal", "local": slot}, target)
+                self.load_name(target.id, target)
                 self.expression(value)
                 self.emit({"op": compound}, node)
             else:
                 self.expression(value)
-            self.emit({"op": "StoreLocal", "local": slot}, node)
+            self.store_name(target.id, node)
             return
         if isinstance(target, ast.Attribute):
             base = self.alloc()
@@ -516,7 +857,7 @@ class Lowerer:
             raise CompileError("`for/else` is not supported")
         if not isinstance(statement.target, ast.Name):
             raise CompileError("`for` binding must be a name")
-        element = self.bind_or_assign(statement.target.id)
+        self.bind_or_assign(statement.target.id)
         index = self.alloc()
         length = self.alloc()
         self.expression(statement.iter)
@@ -536,7 +877,7 @@ class Lowerer:
         self.expression(statement.iter)
         self.emit({"op": "LoadLocal", "local": index}, statement)
         self.emit({"op": "GetIndex"}, statement)
-        self.emit({"op": "StoreLocal", "local": element}, statement.target)
+        self.store_name(statement.target.id, statement.target)
         self.block(statement.body)
         incr = self.pc()
         loop.continue_target = incr
@@ -663,7 +1004,7 @@ class Lowerer:
             if node.id == "False":
                 self.emit({"op": "LoadConst", "value": {"t": "bool", "v": False}}, node)
                 return
-            self.emit({"op": "LoadLocal", "local": self.lookup(node.id)}, node)
+            self.load_name(node.id, node)
             return
         literal = const_value(node)
         if literal is not None:
@@ -722,14 +1063,19 @@ class Lowerer:
             self.bin_op(node)
             return
         if isinstance(node, ast.Lambda):
-            self.fail(node, "lambdas are not compiled; pass them only as effect callbacks", WHY_SUBSET)
+            rec = self.recs.get(id(node))
+            if rec is None:
+                self.fail(node, "lambdas are not compiled; pass them only as effect callbacks", WHY_SUBSET)
+            self.emit_closure(rec, node)
+            return
         if isinstance(node, ast.Call):
             if self.lower_call(node):
                 return
             name = self.resolve_durable(node.func)
             if name in {"gather", "race"}:
                 raise CompileError(f"await `{name}` directly; do not store the call")
-            self.fail(node, "call is not a resolved durable operation", WHY_SUBSET)
+            self.call_value(node)
+            return
         self.fail(node, f"unsupported expression: {type(node).__name__}", WHY_SUBSET)
 
     def compare(self, node: ast.Compare) -> None:
@@ -799,7 +1145,9 @@ class Lowerer:
             ast.Sub: "Sub",
             ast.Mult: "Mul",
             ast.Div: "Div",
+            ast.FloorDiv: "FloorDiv",
             ast.Mod: "Rem",
+            ast.Pow: "Pow",
         }.get(type(node.op))
         if mapped is None:
             raise CompileError(f"unsupported operator: {type(node.op).__name__}")
@@ -815,14 +1163,23 @@ class Lowerer:
             self.expression(node.args[0])
             self.emit({"op": "Length"}, node)
             return True
+        if isinstance(func, ast.Name) and (
+            func.id in self.slots or func.id in self.outers or func.id in self.cells
+        ):
+            return False
         if isinstance(func, ast.Name) and func.id in self.functions:
-            function_id, param_count, required = self.functions[func.id]
+            function_id, param_count, required, closure = self.functions[func.id]
             argc = len(node.args)
             if argc < required or argc > param_count:
                 raise CompileError(f"`{func.id}` expects {required} to {param_count} arguments")
+            if closure:
+                self.emit({"op": "LoadFunc", "func": function_id}, func)
             for argument in node.args:
                 self.expression(argument)
-            self.emit({"op": "Call", "func": function_id, "argc": argc}, node)
+            if closure:
+                self.emit({"op": "CallClosure", "argc": argc}, node)
+            else:
+                self.emit({"op": "Call", "func": function_id, "argc": argc}, node)
             return True
         if (
             isinstance(func, ast.Attribute)
@@ -834,6 +1191,14 @@ class Lowerer:
             self.emit({"op": "ArrayPush"}, node)
             return True
         return False
+
+    def call_value(self, node: ast.Call) -> None:
+        if node.keywords or any(isinstance(arg, ast.Starred) for arg in node.args):
+            raise CompileError("spread and keyword arguments are not supported")
+        self.expression(node.func)
+        for argument in node.args:
+            self.expression(argument)
+        self.emit({"op": "CallClosure", "argc": len(node.args)}, node)
 
     def durable(self, node: ast.Await) -> None:
         if not self.allow_durable:
@@ -1047,6 +1412,8 @@ def required_from(instructions: list[dict[str, Any]]) -> tuple[list[str], list[s
             "Div",
             "Rem",
             "Neg",
+            "Pow",
+            "FloorDiv",
             "GetIndex",
             "SetIndex",
             "Length",
@@ -1054,6 +1421,14 @@ def required_from(instructions: list[dict[str, Any]]) -> tuple[list[str], list[s
             "UnwatchIter",
             "Same",
             "Call",
+            "NewCell",
+            "NewEnv",
+            "NewClosure",
+            "EnvGet",
+            "EnvSet",
+            "EnvSlot",
+            "CallClosure",
+            "LoadFunc",
         }:
             add_engine("lang.compute")
     return engine, host

@@ -1,5 +1,7 @@
 """Canonical JSON matching `tcc_ir` BTreeMap stringify and the TypeScript frontend."""
 
+import math
+
 
 def canonical_stringify(value: object) -> str:
     return _write(value)
@@ -15,6 +17,8 @@ def _write(value: object) -> str:
     if isinstance(value, float):
         if value != value or value in (float("inf"), float("-inf")):
             return "null"
+        if value == 0.0 and math.copysign(1.0, value) < 0:
+            return "-0"
         if value.is_integer():
             return str(int(value))
         return repr(value) if value == 0 else format(value, ".15g")

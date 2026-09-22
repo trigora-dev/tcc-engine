@@ -10,9 +10,19 @@ from tcc_engine.compile import compile
 from tcc_engine.canonical import canonical_stringify
 
 
+def loads(text: str):
+    return json.loads(text, parse_int=_parse_int)
+
+
+def _parse_int(text: str):
+    if text == "-0":
+        return -0.0
+    return int(text)
+
+
 def drive(engine: EngineBinding, effects: dict, events: dict):
     for _ in range(10000):
-        outcome = json.loads(engine.run_until_host(100000))
+        outcome = loads(engine.run_until_host(100000))
         kind = outcome["type"]
         if kind == "completed":
             return outcome["result"]
@@ -58,10 +68,10 @@ def drive(engine: EngineBinding, effects: dict, events: dict):
 def resume_once(artifact: str, args: list, effects: dict, events: dict) -> None:
     engine = EngineBinding(artifact, "ordinary-resume", canonical_stringify(args) if args else None)
     for _ in range(10000):
-        outcome = json.loads(engine.run_until_host(100000))
+        outcome = loads(engine.run_until_host(100000))
         kind = outcome["type"]
         if kind == "suspended":
-            continuation = json.loads(engine.continuation_json())
+            continuation = loads(engine.continuation_json())
             if len(continuation.get("frames") or []) != 1:
                 raise RuntimeError("resumed continuation has a helper frame")
             resumed = EngineBinding.resume(artifact, engine.continuation_json())
@@ -85,7 +95,7 @@ def resume_once(artifact: str, args: list, effects: dict, events: dict) -> None:
             )
         elif request_type == "persist_effect" and not events:
             engine.apply_response(json.dumps({"type": "ack"}))
-            continuation = json.loads(engine.continuation_json())
+            continuation = loads(engine.continuation_json())
             if len(continuation.get("frames") or []) != 1:
                 raise RuntimeError("resumed continuation has a helper frame")
             resumed = EngineBinding.resume(artifact, engine.continuation_json())

@@ -220,6 +220,21 @@ fn continuation_to_json(continuation: &Continuation) -> Json {
             ),
         );
     }
+    if continuation.func_refs.iter().any(Option::is_some) {
+        map.insert(
+            "func_refs".to_string(),
+            Json::Array(
+                continuation
+                    .func_refs
+                    .iter()
+                    .map(|id| match id {
+                        Some(id) => Json::Number(*id as f64),
+                        None => Json::Null,
+                    })
+                    .collect(),
+            ),
+        );
+    }
     Json::Object(map)
 }
 
@@ -243,6 +258,22 @@ pub(crate) fn cell_to_json(cell: &HeapCell) -> Json {
         }
         HeapCell::Hole => {
             map.insert("t".to_string(), Json::String("hole".to_string()));
+        }
+        HeapCell::Cell(value) => {
+            map.insert("t".to_string(), Json::String("cell".to_string()));
+            map.insert("v".to_string(), value_to_json(value));
+        }
+        HeapCell::Env(cells) => {
+            map.insert("t".to_string(), Json::String("env".to_string()));
+            map.insert(
+                "v".to_string(),
+                Json::Array(cells.iter().map(|id| Json::Number(*id as f64)).collect()),
+            );
+        }
+        HeapCell::Closure { func, env } => {
+            map.insert("t".to_string(), Json::String("closure".to_string()));
+            map.insert("func".to_string(), Json::Number(*func as f64));
+            map.insert("env".to_string(), Json::Number(*env as f64));
         }
     }
     Json::Object(map)
@@ -268,6 +299,18 @@ pub(crate) fn json_to_cell(json: &Json) -> Result<HeapCell, StateError> {
             Ok(HeapCell::Array(array))
         }
         "hole" => Ok(HeapCell::Hole),
+        "cell" => Ok(HeapCell::Cell(json_to_value(Json::get(map, "v")?)?)),
+        "env" => Ok(HeapCell::Env(
+            Json::get(map, "v")?
+                .as_array()?
+                .iter()
+                .map(|item| item.as_u32())
+                .collect::<Result<_, _>>()?,
+        )),
+        "closure" => Ok(HeapCell::Closure {
+            func: Json::get(map, "func")?.as_u32()?,
+            env: Json::get(map, "env")?.as_u32()?,
+        }),
         other => Err(StateError::InvalidEncoding(format!(
             "unknown heap cell `{other}`"
         ))),
@@ -294,6 +337,7 @@ fn json_to_continuation(json: &Json) -> Result<Continuation, StateError> {
             "reentries",
             "heap",
             "iterating",
+            "func_refs",
         ],
         "continuation",
     )?;
@@ -360,6 +404,17 @@ fn json_to_continuation(json: &Json) -> Result<Continuation, StateError> {
                 .as_array()?
                 .iter()
                 .map(|item| item.as_u32())
+                .collect::<Result<_, _>>()?,
+        },
+        func_refs: match map.get("func_refs") {
+            None | Some(Json::Null) => Vec::new(),
+            Some(other) => other
+                .as_array()?
+                .iter()
+                .map(|item| match item {
+                    Json::Null => Ok(None),
+                    number => Ok(Some(number.as_u32()?)),
+                })
                 .collect::<Result<_, _>>()?,
         },
     };
@@ -665,6 +720,7 @@ pub(crate) fn try_handler_to_json(handler: &TryHandler) -> Json {
         "stack_len".to_string(),
         Json::Number(handler.stack_len as f64),
     );
+    map.insert("frame".to_string(), Json::Number(handler.frame as f64));
     Json::Object(map)
 }
 
@@ -677,6 +733,10 @@ pub(crate) fn json_to_try_handler(json: &Json) -> Result<TryHandler, StateError>
             other => Some(other.as_u32()?),
         },
         stack_len: Json::get(map, "stack_len")?.as_u32()?,
+        frame: match map.get("frame") {
+            None | Some(Json::Null) => 0,
+            Some(other) => other.as_u32()?,
+        },
     })
 }
 

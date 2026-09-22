@@ -341,6 +341,8 @@ fn needs_lang_compute(instruction: &Instruction) -> bool {
             | Instruction::Div
             | Instruction::Rem
             | Instruction::Neg
+            | Instruction::Pow
+            | Instruction::FloorDiv
             | Instruction::GetIndex
             | Instruction::SetIndex
             | Instruction::Length
@@ -348,6 +350,14 @@ fn needs_lang_compute(instruction: &Instruction) -> bool {
             | Instruction::UnwatchIter
             | Instruction::Same
             | Instruction::Call { .. }
+            | Instruction::NewCell
+            | Instruction::NewEnv { .. }
+            | Instruction::NewClosure { .. }
+            | Instruction::EnvGet { .. }
+            | Instruction::EnvSet { .. }
+            | Instruction::EnvSlot { .. }
+            | Instruction::CallClosure { .. }
+            | Instruction::LoadFunc { .. }
     )
 }
 

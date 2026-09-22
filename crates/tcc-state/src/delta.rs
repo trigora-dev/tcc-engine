@@ -72,6 +72,7 @@ pub struct ContinuationDelta {
     /// Full heap when any cell changed. Ids stay stable across the replacement.
     pub heap: Option<Vec<HeapCell>>,
     pub iterating: Option<Vec<u32>>,
+    pub func_refs: Option<Vec<Option<u32>>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -192,6 +193,11 @@ pub fn diff_continuation(base: &Continuation, current: &Continuation) -> Option<
         } else {
             Some(current.iterating.clone())
         },
+        func_refs: if base.func_refs == current.func_refs {
+            None
+        } else {
+            Some(current.func_refs.clone())
+        },
     })
 }
 
@@ -248,6 +254,9 @@ pub fn apply_continuation_delta(
     }
     if let Some(iterating) = &delta.iterating {
         base.iterating = iterating.clone();
+    }
+    if let Some(func_refs) = &delta.func_refs {
+        base.func_refs = func_refs.clone();
     }
     absorb_continuation(&mut base);
     Ok(base)
@@ -325,6 +334,20 @@ pub fn continuation_delta_to_json(delta: &ContinuationDelta) -> Json {
                 iterating
                     .iter()
                     .map(|id| Json::Number(*id as f64))
+                    .collect(),
+            ),
+        );
+    }
+    if let Some(func_refs) = &delta.func_refs {
+        map.insert(
+            "func_refs".to_string(),
+            Json::Array(
+                func_refs
+                    .iter()
+                    .map(|id| match id {
+                        Some(id) => Json::Number(*id as f64),
+                        None => Json::Null,
+                    })
                     .collect(),
             ),
         );
@@ -427,6 +450,20 @@ pub fn json_to_continuation_delta(json: &Json) -> Result<ContinuationDelta, Stat
                     .as_array()?
                     .iter()
                     .map(|item| item.as_u32())
+                    .collect::<Result<_, _>>()?,
+            ),
+        },
+        func_refs: match map.get("func_refs") {
+            None => None,
+            Some(Json::Null) => Some(Vec::new()),
+            Some(value) => Some(
+                value
+                    .as_array()?
+                    .iter()
+                    .map(|item| match item {
+                        Json::Null => Ok(None),
+                        number => Ok(Some(number.as_u32()?)),
+                    })
                     .collect::<Result<_, _>>()?,
             ),
         },

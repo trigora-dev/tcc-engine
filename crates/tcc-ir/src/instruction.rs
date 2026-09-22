@@ -82,6 +82,8 @@ pub enum Instruction {
     Div,
     Rem,
     Neg,
+    Pow,
+    FloorDiv,
     /// Pop index, pop collection, push the element.
     GetIndex,
     /// Pop value, pop index, pop collection, write the slot, push the collection.
@@ -94,6 +96,36 @@ pub enum Instruction {
     UnwatchIter,
     /// Reference equality. Python `is` and TypeScript `===` on collections.
     Same,
+    /// Pop a value and push a ref to a new captured-binding cell.
+    NewCell,
+    /// Pop `count` cell refs and push an environment. Slot 0 is the deepest value.
+    NewEnv {
+        count: u32,
+    },
+    /// Pop an environment ref and push a closure for `func`.
+    NewClosure {
+        func: FuncId,
+    },
+    /// Pop an environment ref and push the value stored in cell `index`.
+    EnvGet {
+        index: u32,
+    },
+    /// Pop a value, pop an environment ref, and store the value in cell `index`.
+    EnvSet {
+        index: u32,
+    },
+    /// Pop an environment ref and push the cell ref at `index`.
+    EnvSlot {
+        index: u32,
+    },
+    /// Pop a closure and `argc` arguments. The callee's first local is the environment.
+    CallClosure {
+        argc: u32,
+    },
+    /// Push the one empty-environment closure for `func` in this execution.
+    LoadFunc {
+        func: FuncId,
+    },
     Throw,
     PushTry {
         catch: Pc,
