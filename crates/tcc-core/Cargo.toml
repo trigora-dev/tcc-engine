@@ -5,6 +5,10 @@ edition = "2021"
 publish = false
 description = "TCC execution and durable-operation semantics"
 
+[[bin]]
+name = "tcc-drive"
+path = "src/bin/drive.rs"
+
 [dependencies]
 tcc-ir = { path = "../tcc-ir" }
 tcc-state = { path = "../tcc-state" }

@@ -114,6 +114,21 @@ fn function_to_json(function: &Function) -> Json {
         "local_count".to_string(),
         Json::Number(function.local_count as f64),
     );
+    if function.param_defaults.iter().any(|item| item.is_some()) {
+        map.insert(
+            "param_defaults".to_string(),
+            Json::Array(
+                function
+                    .param_defaults
+                    .iter()
+                    .map(|item| match item {
+                        Some(value) => const_to_json(value),
+                        None => Json::Null,
+                    })
+                    .collect(),
+            ),
+        );
+    }
     map.insert(
         "instructions".to_string(),
         Json::Array(
@@ -152,6 +167,24 @@ fn span_to_json(span: &Option<SourceSpan>) -> Json {
             );
             Json::Object(map)
         }
+    }
+}
+
+fn instruction_name(instruction: &Instruction) -> &'static str {
+    match instruction {
+        Instruction::Add => "Add",
+        Instruction::Sub => "Sub",
+        Instruction::Mul => "Mul",
+        Instruction::Div => "Div",
+        Instruction::Rem => "Rem",
+        Instruction::Neg => "Neg",
+        Instruction::GetIndex => "GetIndex",
+        Instruction::SetIndex => "SetIndex",
+        Instruction::Length => "Length",
+        Instruction::WatchIter => "WatchIter",
+        Instruction::UnwatchIter => "UnwatchIter",
+        Instruction::Same => "Same",
+        _ => "Nop",
     }
 }
 
@@ -281,8 +314,52 @@ fn instruction_to_json(instruction: &Instruction) -> Json {
         Instruction::PopTry => {
             map.insert("op".to_string(), Json::String("PopTry".to_string()));
         }
+        Instruction::Add
+        | Instruction::Sub
+        | Instruction::Mul
+        | Instruction::Div
+        | Instruction::Rem
+        | Instruction::Neg
+        | Instruction::GetIndex
+        | Instruction::SetIndex
+        | Instruction::Length
+        | Instruction::WatchIter
+        | Instruction::UnwatchIter
+        | Instruction::Same => {
+            map.insert(
+                "op".to_string(),
+                Json::String(instruction_name(instruction).into()),
+            );
+        }
     }
     Json::Object(map)
+}
+
+fn number_payload(number: f64) -> Json {
+    if number.is_nan() {
+        Json::String("NaN".to_string())
+    } else if number.is_infinite() && number.is_sign_positive() {
+        Json::String("Infinity".to_string())
+    } else if number.is_infinite() {
+        Json::String("-Infinity".to_string())
+    } else {
+        Json::Number(number)
+    }
+}
+
+fn json_to_number(json: &Json) -> Result<f64, IrError> {
+    match json {
+        Json::Number(number) if number.is_finite() => Ok(*number),
+        Json::String(text) => match text.as_str() {
+            "NaN" => Ok(f64::NAN),
+            "Infinity" => Ok(f64::INFINITY),
+            "-Infinity" => Ok(f64::NEG_INFINITY),
+            _ => Err(IrError::InvalidEncoding(
+                "number const must be finite or NaN/Infinity/-Infinity".to_string(),
+            )),
+        },
+        _ => Err(IrError::InvalidEncoding("number const".to_string())),
+    }
 }
 
 fn const_to_json(value: &ConstValue) -> Json {
@@ -300,7 +377,7 @@ fn const_to_json(value: &ConstValue) -> Json {
         }
         ConstValue::Number(number) => {
             map.insert("t".to_string(), Json::String("number".to_string()));
-            map.insert("v".to_string(), Json::Number(*number));
+            map.insert("v".to_string(), number_payload(*number));
         }
         ConstValue::String(text) => {
             map.insert("t".to_string(), Json::String("string".to_string()));
@@ -373,6 +450,20 @@ fn json_to_function(json: &Json) -> Result<Function, IrError> {
         name: Json::get(map, "name")?.as_str()?.to_string(),
         param_count: Json::get(map, "param_count")?.as_u32()?,
         local_count: Json::get(map, "local_count")?.as_u32()?,
+        param_defaults: match map.get("param_defaults") {
+            None | Some(Json::Null) => Vec::new(),
+            Some(value) => value
+                .as_array()?
+                .iter()
+                .map(|item| {
+                    if matches!(item, Json::Null) {
+                        Ok(None)
+                    } else {
+                        json_to_const(item).map(Some)
+                    }
+                })
+                .collect::<Result<_, _>>()?,
+        },
         instructions: Json::get(map, "instructions")?
             .as_array()?
             .iter()
@@ -473,6 +564,18 @@ fn json_to_instruction(json: &Json) -> Result<Instruction, IrError> {
             },
         }),
         "PopTry" => Ok(Instruction::PopTry),
+        "Add" => Ok(Instruction::Add),
+        "Sub" => Ok(Instruction::Sub),
+        "Mul" => Ok(Instruction::Mul),
+        "Div" => Ok(Instruction::Div),
+        "Rem" => Ok(Instruction::Rem),
+        "Neg" => Ok(Instruction::Neg),
+        "GetIndex" => Ok(Instruction::GetIndex),
+        "SetIndex" => Ok(Instruction::SetIndex),
+        "Length" => Ok(Instruction::Length),
+        "WatchIter" => Ok(Instruction::WatchIter),
+        "UnwatchIter" => Ok(Instruction::UnwatchIter),
+        "Same" => Ok(Instruction::Same),
         other => Err(IrError::InvalidEncoding(format!(
             "unknown instruction `{other}`"
         ))),
@@ -488,10 +591,7 @@ fn json_to_const(json: &Json) -> Result<ConstValue, IrError> {
             Json::Bool(flag) => Ok(ConstValue::Bool(*flag)),
             _ => Err(IrError::InvalidEncoding("bool const".to_string())),
         },
-        "number" => match Json::get(map, "v")? {
-            Json::Number(number) => Ok(ConstValue::Number(*number)),
-            _ => Err(IrError::InvalidEncoding("number const".to_string())),
-        },
+        "number" => Ok(ConstValue::Number(json_to_number(Json::get(map, "v")?)?)),
         "string" => Ok(ConstValue::String(
             Json::get(map, "v")?.as_str()?.to_string(),
         )),

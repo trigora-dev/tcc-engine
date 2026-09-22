@@ -234,6 +234,7 @@ mod tests {
             name: "main".into(),
             param_count: 0,
             local_count,
+            param_defaults: Vec::new(),
             instructions,
             spans,
         }

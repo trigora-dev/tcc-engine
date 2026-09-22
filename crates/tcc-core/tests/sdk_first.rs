@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use tcc_core::{Engine, EngineOutcome, HostRequest, HostResponse};
 use tcc_ir::{encode_artifact, Artifact, EngineCaps};
-use tcc_state::{decode_continuation, encode_continuation, ContinuationStatus, Value};
+use tcc_state::{
+    decode_continuation, encode_continuation, export_value, ContinuationStatus, Value,
+};
 
 fn expect_host(outcome: EngineOutcome) -> HostRequest {
     match outcome {
@@ -64,7 +66,9 @@ fn sdk_first_example_completes_with_object_result() {
     let mut expected = BTreeMap::new();
     expected.insert("approval".into(), Value::String("ok".into()));
     expected.insert("result".into(), Value::Number(42.0));
-    assert_eq!(engine.continuation().result, Some(Value::Object(expected)));
+    let result = engine.continuation().result.clone().unwrap();
+    let exported = export_value(&engine.continuation().heap, &result).unwrap();
+    assert_eq!(exported, Value::Object(expected));
 }
 
 #[test]

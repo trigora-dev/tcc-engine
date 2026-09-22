@@ -10,12 +10,13 @@ use crate::continuation::{
     Continuation, ContinuationStatus, JoinReentry, JoinState, PendingOp, TryHandler,
 };
 use crate::encode::{
-    join_to_json, json_to_join, json_to_pending, json_to_try_handler, json_to_value, parse_status,
-    pending_to_json, status_name, try_handler_to_json, value_to_json,
+    cell_to_json, join_to_json, json_to_cell, json_to_join, json_to_pending, json_to_try_handler,
+    json_to_value, parse_status, pending_to_json, status_name, try_handler_to_json, value_to_json,
 };
 use crate::error::StateError;
+use crate::heap::absorb_continuation;
 use crate::json::Json;
-use crate::value::Value;
+use crate::value::{HeapCell, Value};
 
 /// Force a snapshot at least every `N` deltas so recovery walks a bounded suffix.
 pub const MATERIALIZE_EVERY: u32 = 32;
@@ -68,6 +69,9 @@ pub struct ContinuationDelta {
     pub try_stack: Option<Vec<TryHandler>>,
     pub join: Option<Option<JoinState>>,
     pub reentries: Option<Vec<JoinReentry>>,
+    /// Full heap when any cell changed. Ids stay stable across the replacement.
+    pub heap: Option<Vec<HeapCell>>,
+    pub iterating: Option<Vec<u32>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -178,6 +182,16 @@ pub fn diff_continuation(base: &Continuation, current: &Continuation) -> Option<
         } else {
             Some(current.reentries.clone())
         },
+        heap: if base.heap == current.heap {
+            None
+        } else {
+            Some(current.heap.clone())
+        },
+        iterating: if base.iterating == current.iterating {
+            None
+        } else {
+            Some(current.iterating.clone())
+        },
     })
 }
 
@@ -229,6 +243,13 @@ pub fn apply_continuation_delta(
     if let Some(reentries) = &delta.reentries {
         base.reentries = reentries.clone();
     }
+    if let Some(heap) = &delta.heap {
+        base.heap = heap.clone();
+    }
+    if let Some(iterating) = &delta.iterating {
+        base.iterating = iterating.clone();
+    }
+    absorb_continuation(&mut base);
     Ok(base)
 }
 
@@ -289,6 +310,23 @@ pub fn continuation_delta_to_json(delta: &ContinuationDelta) -> Json {
         map.insert(
             "reentries".to_string(),
             Json::Array(reentries.iter().map(reentry_delta_to_json).collect()),
+        );
+    }
+    if let Some(heap) = &delta.heap {
+        map.insert(
+            "heap".to_string(),
+            Json::Array(heap.iter().map(cell_to_json).collect()),
+        );
+    }
+    if let Some(iterating) = &delta.iterating {
+        map.insert(
+            "iterating".to_string(),
+            Json::Array(
+                iterating
+                    .iter()
+                    .map(|id| Json::Number(*id as f64))
+                    .collect(),
+            ),
         );
     }
     Json::Object(map)
@@ -370,6 +408,28 @@ pub fn json_to_continuation_delta(json: &Json) -> Result<ContinuationDelta, Stat
                     .collect::<Result<_, _>>()?,
             ),
         },
+        heap: match map.get("heap") {
+            None => None,
+            Some(Json::Null) => Some(Vec::new()),
+            Some(value) => Some(
+                value
+                    .as_array()?
+                    .iter()
+                    .map(json_to_cell)
+                    .collect::<Result<_, _>>()?,
+            ),
+        },
+        iterating: match map.get("iterating") {
+            None => None,
+            Some(Json::Null) => Some(Vec::new()),
+            Some(value) => Some(
+                value
+                    .as_array()?
+                    .iter()
+                    .map(|item| item.as_u32())
+                    .collect::<Result<_, _>>()?,
+            ),
+        },
     })
 }
 
@@ -443,6 +503,7 @@ fn snapshot_units(continuation: &Continuation) -> usize {
         .map(|frame| frame.locals.len() + 2)
         .sum::<usize>()
         + continuation.stack.len()
+        + continuation.heap.len()
         + 4
 }
 
@@ -471,6 +532,8 @@ fn delta_units(delta: &ContinuationDelta) -> usize {
             })
             .unwrap_or(0)
         + usize::from(delta.reentries.is_some())
+        + delta.heap.as_ref().map(|heap| heap.len()).unwrap_or(0)
+        + usize::from(delta.iterating.is_some())
 }
 
 #[cfg(test)]
@@ -478,10 +541,54 @@ mod tests {
     use super::*;
     use crate::continuation::{PendingOp, WaitKind};
     use crate::encode::{decode_continuation, encode_continuation};
-    use crate::value::Value;
+    use std::collections::BTreeMap;
+
+    use crate::value::{HeapCell, Value};
 
     fn start() -> Continuation {
         Continuation::start("gold-exec", "gold-hash", 1, "ts.subset.v1", 0, 2)
+    }
+
+    #[test]
+    fn heap_mutation_is_a_delta_when_the_local_ref_is_unchanged() {
+        let mut base = start();
+        base.heap.push(HeapCell::Object(BTreeMap::from([(
+            "x".into(),
+            Value::Number(1.0),
+        )])));
+        base.frames[0].locals[0] = Value::Ref(0);
+        base.frames[0].locals[1] = Value::Ref(0);
+        let mut changed = base.clone();
+        match &mut changed.heap[0] {
+            HeapCell::Object(fields) => {
+                fields.insert("x".into(), Value::Number(2.0));
+            }
+            _ => panic!("object"),
+        }
+        let delta = diff_continuation(&base, &changed).unwrap();
+        assert!(delta.frames.is_empty());
+        assert!(delta.heap.is_some());
+        let applied = apply_continuation_delta(base, &delta).unwrap();
+        assert_eq!(applied.heap, changed.heap);
+        assert_eq!(applied.frames[0].locals[0], Value::Ref(0));
+        assert_eq!(applied.frames[0].locals[1], Value::Ref(0));
+    }
+
+    #[test]
+    fn durable_number_equality_drives_local_deltas() {
+        let mut base = start();
+        base.frames[0].locals[0] = Value::Number(f64::NAN);
+        base.frames[0].locals[1] = Value::Number(0.0);
+        let mut same_nan = base.clone();
+        same_nan.frames[0].locals[0] = Value::Number(f64::from_bits(0x7ff8_0000_0000_0001));
+        let delta = diff_continuation(&base, &same_nan).unwrap();
+        assert!(delta.frames.is_empty());
+        let mut signed = base.clone();
+        signed.frames[0].locals[1] = Value::Number(-0.0);
+        let delta = diff_continuation(&base, &signed).unwrap();
+        assert_eq!(delta.frames.len(), 1);
+        assert_eq!(delta.frames[0].locals.len(), 1);
+        assert_eq!(delta.frames[0].locals[0].slot, 1);
     }
 
     #[test]

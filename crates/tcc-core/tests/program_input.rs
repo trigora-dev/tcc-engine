@@ -36,6 +36,7 @@ fn artifact(
                 name: "run".into(),
                 param_count,
                 local_count,
+                param_defaults: Vec::new(),
                 instructions,
                 spans,
             }],

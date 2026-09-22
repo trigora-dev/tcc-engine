@@ -97,11 +97,43 @@ fn artifact(local_count: u32, instructions: Vec<Instruction>) -> Artifact {
                 name: "run".into(),
                 param_count: 0,
                 local_count,
+                param_defaults: Vec::new(),
                 instructions,
                 spans,
             }],
         },
     }
+}
+
+#[test]
+fn object_alias_mutation_is_visible_through_both_names() {
+    let artifact = artifact(
+        2,
+        vec![
+            Instruction::NewObject,
+            Instruction::LoadConst {
+                value: ConstValue::Number(1.0),
+            },
+            Instruction::SetProp { key: "x".into() },
+            Instruction::StoreLocal { local: LocalId(0) },
+            Instruction::LoadLocal { local: LocalId(0) },
+            Instruction::StoreLocal { local: LocalId(1) },
+            Instruction::LoadLocal { local: LocalId(1) },
+            Instruction::LoadConst {
+                value: ConstValue::Number(2.0),
+            },
+            Instruction::SetProp { key: "x".into() },
+            Instruction::Pop,
+            Instruction::LoadLocal { local: LocalId(0) },
+            Instruction::GetProp { key: "x".into() },
+            Instruction::Return,
+        ],
+    );
+    let mut engine = Engine::start(artifact, "alias", &EngineCaps::current()).unwrap();
+    assert_eq!(
+        drive(&mut engine, &BTreeMap::new(), None),
+        Value::Number(2.0)
+    );
 }
 
 #[test]

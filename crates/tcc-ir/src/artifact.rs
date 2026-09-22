@@ -1,5 +1,5 @@
 use crate::features::{EngineFeature, HostCapability, ENGINE_FORMAT_VERSION};
-use crate::instruction::Instruction;
+use crate::instruction::{ConstValue, Instruction};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FuncId(pub u32);
@@ -62,6 +62,8 @@ pub struct Function {
     pub name: String,
     pub param_count: u32,
     pub local_count: u32,
+    /// Aligned with parameters. `None` means no default. Omitted when empty.
+    pub param_defaults: Vec<Option<ConstValue>>,
     pub instructions: Vec<Instruction>,
     /// Parallel to `instructions`. Missing entries are allowed as `None`.
     pub spans: Vec<Option<SourceSpan>>,

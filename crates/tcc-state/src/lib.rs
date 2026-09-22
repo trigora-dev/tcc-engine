@@ -9,6 +9,7 @@ pub mod continuation;
 pub mod delta;
 pub mod encode;
 pub mod error;
+pub mod heap;
 pub mod json;
 pub mod value;
 
@@ -23,4 +24,5 @@ pub use delta::{
 };
 pub use encode::{decode_continuation, decode_value, encode_continuation, encode_value};
 pub use error::StateError;
-pub use value::Value;
+pub use heap::{absorb_continuation, absorb_value, export_value, gc_heap, structural_eq};
+pub use value::{numbers_durable_eq, numbers_strict_eq, HeapCell, Value};

@@ -34,6 +34,7 @@ fn first_example() -> Artifact {
                 name: "main".into(),
                 param_count: 0,
                 local_count: 1,
+                param_defaults: Vec::new(),
                 instructions: vec![
                     Instruction::LoadConst {
                         value: ConstValue::String("charge".into()),

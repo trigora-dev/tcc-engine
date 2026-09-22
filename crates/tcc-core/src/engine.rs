@@ -6,7 +6,8 @@ use tcc_ir::{
     MAX_JOIN_BRANCHES,
 };
 use tcc_state::{
-    persist_intent, BranchOp, BranchPhase, Continuation, ContinuationStatus, JoinBranch, JoinKind,
+    absorb_continuation, absorb_value, export_value, gc_heap, persist_intent, structural_eq,
+    BranchOp, BranchPhase, Continuation, ContinuationStatus, HeapCell, JoinBranch, JoinKind,
     JoinReentry, JoinState, JoinStatus, PendingOp, PersistKind, Value, WaitKind,
 };
 
@@ -66,10 +67,16 @@ impl Engine {
             entry.id.0,
             entry.local_count,
         );
+        let args: Vec<Value> = args
+            .iter()
+            .cloned()
+            .map(|value| absorb_value(&mut continuation.heap, value))
+            .collect();
         bind_program_args(
             &artifact.envelope.language_semantics_version,
             entry.param_count,
-            args,
+            &entry.param_defaults,
+            &args,
             &mut continuation.frames[0].locals,
         )?;
         let liveness = analyze_program(&artifact.program);
@@ -107,6 +114,8 @@ impl Engine {
                 found: continuation.language_semantics_version.clone(),
             });
         }
+        let mut continuation = continuation;
+        absorb_continuation(&mut continuation);
         validate_resume_frames(&artifact, &continuation)?;
         match continuation.status {
             ContinuationStatus::Completed => return Err(CoreError::Terminal("completed")),
@@ -183,6 +192,7 @@ impl Engine {
                 },
                 HostResponse::EffectResult { value },
             ) => {
+                let value = absorb_value(&mut self.continuation.heap, value);
                 self.continuation.stack.push(value);
                 self.advance_pc()?;
                 self.continuation.pending = None;
@@ -191,7 +201,9 @@ impl Engine {
                         key,
                         idempotency_key,
                         status: EffectStatus::Completed,
-                        result: self.continuation.stack.last().cloned(),
+                        result: self.continuation.stack.last().cloned().map(|value| {
+                            export_value(&self.continuation.heap, &value).unwrap_or(value)
+                        }),
                     },
                 });
                 Ok(())
@@ -305,6 +317,7 @@ impl Engine {
                 }),
                 HostResponse::EventPayload { value, .. },
             ) => {
+                let value = absorb_value(&mut self.continuation.heap, value);
                 self.continuation.stack.push(value);
                 self.clear_wait_and_persist();
                 Ok(())
@@ -327,6 +340,7 @@ impl Engine {
                 }),
                 HostResponse::ChildResult { value, .. },
             ) => {
+                let value = absorb_value(&mut self.continuation.heap, value);
                 self.continuation.stack.push(value);
                 self.clear_wait_and_persist();
                 Ok(())
@@ -352,6 +366,8 @@ impl Engine {
 
     fn queue_persist(&mut self) {
         self.compact_dead_locals();
+        absorb_continuation(&mut self.continuation);
+        gc_heap(&mut self.continuation);
         let intent = persist_intent(
             self.confirmed.as_ref(),
             &self.continuation,
@@ -419,9 +435,9 @@ impl Engine {
 
         match self.continuation.status {
             ContinuationStatus::Completed => {
-                return EngineOutcome::Completed {
-                    result: self.continuation.result.clone().unwrap_or(Value::Undefined),
-                };
+                let raw = self.continuation.result.clone().unwrap_or(Value::Undefined);
+                let result = export_value(&self.continuation.heap, &raw).unwrap_or(raw);
+                return EngineOutcome::Completed { result };
             }
             ContinuationStatus::Failed => {
                 return EngineOutcome::Failed {
@@ -512,17 +528,18 @@ impl Engine {
                 self.advance_pc().map(|()| None)
             }
             Instruction::NewObject => {
-                self.continuation
-                    .stack
-                    .push(Value::Object(std::collections::BTreeMap::new()));
+                let id = self.alloc_cell(HeapCell::Object(std::collections::BTreeMap::new()));
+                self.continuation.stack.push(Value::Ref(id));
                 self.advance_pc().map(|()| None)
             }
             Instruction::SetProp { key } => {
                 let value = self.pop()?;
-                let mut object = self.pop()?;
-                match &mut object {
-                    Value::Object(fields) => {
-                        fields.insert(key, value);
+                let object = self.pop()?;
+                let id = self.expect_ref(object, "SetProp requires an object")?;
+                self.guard_structure(id)?;
+                match self.continuation.heap.get_mut(id as usize) {
+                    Some(HeapCell::Object(fields)) => {
+                        fields.insert(key.clone(), value);
                     }
                     _ => {
                         return Err(CoreError::TypeError(
@@ -530,13 +547,16 @@ impl Engine {
                         ))
                     }
                 }
-                self.continuation.stack.push(object);
+                self.continuation.stack.push(Value::Ref(id));
                 self.advance_pc().map(|()| None)
             }
             Instruction::GetProp { key } => {
                 let object = self.pop()?;
-                let value = match object {
-                    Value::Object(fields) => fields.get(&key).cloned().unwrap_or(Value::Undefined),
+                let id = self.expect_ref(object, "GetProp requires an object")?;
+                let value = match self.continuation.heap.get(id as usize) {
+                    Some(HeapCell::Object(fields)) => {
+                        fields.get(&key).cloned().unwrap_or(Value::Undefined)
+                    }
                     _ => {
                         return Err(CoreError::TypeError(
                             "GetProp requires an object".to_string(),
@@ -547,25 +567,28 @@ impl Engine {
                 self.advance_pc().map(|()| None)
             }
             Instruction::NewArray => {
-                self.continuation.stack.push(Value::Array(Vec::new()));
+                let id = self.alloc_cell(HeapCell::Array(Vec::new()));
+                self.continuation.stack.push(Value::Ref(id));
                 self.advance_pc().map(|()| None)
             }
             Instruction::ArrayPush => {
                 let value = self.pop()?;
-                let mut array = self.pop()?;
-                match &mut array {
-                    Value::Array(items) => items.push(value),
+                let array = self.pop()?;
+                let id = self.expect_ref(array, "ArrayPush requires an array")?;
+                self.guard_structure(id)?;
+                match self.continuation.heap.get_mut(id as usize) {
+                    Some(HeapCell::Array(items)) => items.push(value),
                     _ => {
                         return Err(CoreError::TypeError(
                             "ArrayPush requires an array".to_string(),
                         ))
                     }
                 }
-                self.continuation.stack.push(array);
+                self.continuation.stack.push(Value::Ref(id));
                 self.advance_pc().map(|()| None)
             }
-            Instruction::StrictEq => self.binary(|left, right| Ok(Value::Bool(left == right))),
-            Instruction::StrictNeq => self.binary(|left, right| Ok(Value::Bool(left != right))),
+            Instruction::StrictEq => self.compare_equal(false),
+            Instruction::StrictNeq => self.compare_equal(true),
             Instruction::Lt => self.numeric_cmp(|a, b| a < b),
             Instruction::Le => self.numeric_cmp(|a, b| a <= b),
             Instruction::Gt => self.numeric_cmp(|a, b| a > b),
@@ -604,13 +627,26 @@ impl Engine {
             Instruction::JoinAll => self.finish_join(),
             Instruction::JoinAny => self.finish_any(),
             Instruction::ArrayIndex { index } => self.array_index(index),
-            Instruction::Call { .. } => {
-                let frame = self.frame()?;
-                Err(CoreError::UnknownInstruction {
-                    func: frame.func_id,
-                    pc: frame.pc,
-                })
+            Instruction::Add => self.apply_bin(crate::compute::Arith::Add),
+            Instruction::Sub => self.apply_bin(crate::compute::Arith::Sub),
+            Instruction::Mul => self.apply_bin(crate::compute::Arith::Mul),
+            Instruction::Div => self.apply_bin(crate::compute::Arith::Div),
+            Instruction::Rem => self.apply_bin(crate::compute::Arith::Rem),
+            Instruction::Neg => self.apply_bin(crate::compute::Arith::Neg),
+            Instruction::GetIndex => self.get_index(),
+            Instruction::SetIndex => self.set_index(),
+            Instruction::Length => self.collection_length(),
+            Instruction::WatchIter => self.watch_iter(),
+            Instruction::UnwatchIter => self.unwatch_iter(),
+            Instruction::Same => {
+                let right = self.pop()?;
+                let left = self.pop()?;
+                self.continuation
+                    .stack
+                    .push(Value::Bool(js_equal(&left, &right)));
+                self.advance_pc().map(|()| None)
             }
+            Instruction::Call { func, argc } => self.call(func, argc),
             Instruction::Throw => {
                 let value = self.pop()?;
                 self.throw_value(value)
@@ -711,6 +747,10 @@ impl Engine {
             args.push(self.pop()?);
         }
         args.reverse();
+        let args = args
+            .into_iter()
+            .map(|value| export_value(&self.continuation.heap, &value).unwrap_or(value))
+            .collect();
         let (invoke_id, child_execution_id) = if self.join_is_active() {
             let invoke_id = self.next_planned_branch_id()?;
             let child_execution_id = format!("child:{invoke_id}");
@@ -899,7 +939,8 @@ impl Engine {
             join.state = JoinStatus::Succeeded;
         }
         self.continuation.join = None;
-        self.continuation.stack.push(Value::Array(items));
+        let id = self.alloc_cell(HeapCell::Array(items));
+        self.continuation.stack.push(Value::Ref(id));
         self.advance_pc().map(|()| None)
     }
 
@@ -1079,15 +1120,243 @@ impl Engine {
             .last()
             .cloned()
             .ok_or(CoreError::StackUnderflow)?;
-        let Value::Array(items) = top else {
-            return Err(CoreError::TypeError("ArrayIndex requires an array".into()));
+        let id = self.expect_ref(top, "ArrayIndex requires an array")?;
+        let value = match self.continuation.heap.get(id as usize) {
+            Some(HeapCell::Array(items)) => items
+                .get(index as usize)
+                .cloned()
+                .unwrap_or(Value::Undefined),
+            _ => {
+                return Err(CoreError::TypeError(
+                    "ArrayIndex requires an array".to_string(),
+                ))
+            }
         };
-        let value = items
-            .get(index as usize)
-            .cloned()
-            .unwrap_or(Value::Undefined);
         self.continuation.stack.push(value);
         self.advance_pc().map(|()| None)
+    }
+
+    fn alloc_cell(&mut self, cell: HeapCell) -> u32 {
+        let id = self.continuation.heap.len() as u32;
+        self.continuation.heap.push(cell);
+        id
+    }
+
+    fn expect_ref(&self, value: Value, message: &str) -> Result<u32, CoreError> {
+        match value {
+            Value::Ref(id) => Ok(id),
+            _ => Err(CoreError::TypeError(message.to_string())),
+        }
+    }
+
+    fn guard_structure(&self, id: u32) -> Result<(), CoreError> {
+        if self.continuation.iterating.contains(&id) {
+            Err(CoreError::TypeError(
+                "cannot change a collection while it is being iterated".to_string(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn compare_equal(&mut self, negate: bool) -> Result<Option<EngineOutcome>, CoreError> {
+        let right = self.pop()?;
+        let left = self.pop()?;
+        let equal = if self.continuation.language_semantics_version == LANGUAGE_SEMANTICS_PY {
+            structural_eq(&self.continuation.heap, &left, &right)
+                .map_err(|err| CoreError::TypeError(err.to_string()))?
+        } else {
+            js_equal(&left, &right)
+        };
+        self.continuation
+            .stack
+            .push(Value::Bool(if negate { !equal } else { equal }));
+        self.advance_pc().map(|()| None)
+    }
+
+    fn apply_bin(&mut self, op: crate::compute::Arith) -> Result<Option<EngineOutcome>, CoreError> {
+        let (left, right) = if matches!(op, crate::compute::Arith::Neg) {
+            (self.pop()?, None)
+        } else {
+            let right = self.pop()?;
+            (self.pop()?, Some(right))
+        };
+        let lang = self.continuation.language_semantics_version.clone();
+        match crate::compute::apply_arith(&lang, op, left, right) {
+            Ok(value) => {
+                self.continuation.stack.push(value);
+                self.advance_pc().map(|()| None)
+            }
+            Err(crate::compute::ArithFail::Type(message)) => {
+                Err(CoreError::TypeError(message.to_string()))
+            }
+            Err(crate::compute::ArithFail::Raise(message)) => {
+                self.throw_value(Value::String(message.to_string()))
+            }
+        }
+    }
+
+    fn get_index(&mut self) -> Result<Option<EngineOutcome>, CoreError> {
+        let index_value = self.pop()?;
+        let collection = self.pop()?;
+        let id = self.expect_ref(collection, "index requires a collection")?;
+        let lang = self.continuation.language_semantics_version.clone();
+        let index = match crate::compute::index_number(&lang, index_value) {
+            Ok(index) => index,
+            Err(crate::compute::ArithFail::Type(message)) => {
+                return Err(CoreError::TypeError(message.to_string()))
+            }
+            Err(crate::compute::ArithFail::Raise(message)) => {
+                return self.throw_value(Value::String(message.to_string()))
+            }
+        };
+        let len = match self.continuation.heap.get(id as usize) {
+            Some(HeapCell::Array(items)) => items.len(),
+            _ => {
+                return Err(CoreError::TypeError(
+                    "index requires a list or array".to_string(),
+                ))
+            }
+        };
+        let resolved = if lang == LANGUAGE_SEMANTICS_PY && index < 0 {
+            len as i64 + index
+        } else {
+            index
+        };
+        if resolved < 0 || resolved as usize >= len {
+            if lang == LANGUAGE_SEMANTICS_PY {
+                return self.throw_value(Value::String("IndexError".into()));
+            }
+            self.continuation.stack.push(Value::Undefined);
+        } else {
+            let value = match self.continuation.heap.get(id as usize) {
+                Some(HeapCell::Array(items)) => items[resolved as usize].clone(),
+                _ => Value::Undefined,
+            };
+            self.continuation.stack.push(value);
+        }
+        self.advance_pc().map(|()| None)
+    }
+
+    fn set_index(&mut self) -> Result<Option<EngineOutcome>, CoreError> {
+        let value = self.pop()?;
+        let index_value = self.pop()?;
+        let collection = self.pop()?;
+        let id = self.expect_ref(collection, "index assignment requires a collection")?;
+        self.guard_structure(id)?;
+        let lang = self.continuation.language_semantics_version.clone();
+        let index = match crate::compute::index_number(&lang, index_value) {
+            Ok(index) => index,
+            Err(crate::compute::ArithFail::Type(message)) => {
+                return Err(CoreError::TypeError(message.to_string()))
+            }
+            Err(crate::compute::ArithFail::Raise(message)) => {
+                return self.throw_value(Value::String(message.to_string()))
+            }
+        };
+        let len = match self.continuation.heap.get(id as usize) {
+            Some(HeapCell::Array(items)) => items.len(),
+            _ => {
+                return Err(CoreError::TypeError(
+                    "index assignment requires a list or array".to_string(),
+                ))
+            }
+        };
+        let resolved = if lang == LANGUAGE_SEMANTICS_PY && index < 0 {
+            len as i64 + index
+        } else {
+            index
+        };
+        if resolved < 0 || resolved as usize >= len {
+            return Err(CoreError::TypeError(
+                "index assignment is out of range".to_string(),
+            ));
+        }
+        match self.continuation.heap.get_mut(id as usize) {
+            Some(HeapCell::Array(items)) => items[resolved as usize] = value,
+            _ => {
+                return Err(CoreError::TypeError(
+                    "index assignment requires a list or array".to_string(),
+                ))
+            }
+        }
+        self.continuation.stack.push(Value::Ref(id));
+        self.advance_pc().map(|()| None)
+    }
+
+    fn collection_length(&mut self) -> Result<Option<EngineOutcome>, CoreError> {
+        let collection = self.pop()?;
+        let id = self.expect_ref(collection, "length requires a collection")?;
+        let len = match self.continuation.heap.get(id as usize) {
+            Some(HeapCell::Array(items)) => items.len(),
+            _ => {
+                return Err(CoreError::TypeError(
+                    "length requires a list or array".to_string(),
+                ))
+            }
+        };
+        self.continuation.stack.push(Value::Number(len as f64));
+        self.advance_pc().map(|()| None)
+    }
+
+    fn watch_iter(&mut self) -> Result<Option<EngineOutcome>, CoreError> {
+        let top = self
+            .continuation
+            .stack
+            .last()
+            .cloned()
+            .ok_or(CoreError::StackUnderflow)?;
+        let id = self.expect_ref(top, "for requires a list or array")?;
+        if !matches!(
+            self.continuation.heap.get(id as usize),
+            Some(HeapCell::Array(_))
+        ) {
+            return Err(CoreError::TypeError(
+                "for requires a list or array".to_string(),
+            ));
+        }
+        self.continuation.iterating.push(id);
+        self.advance_pc().map(|()| None)
+    }
+
+    fn unwatch_iter(&mut self) -> Result<Option<EngineOutcome>, CoreError> {
+        if self.continuation.iterating.pop().is_none() {
+            return Err(CoreError::TypeError(
+                "unwatch without an active for".to_string(),
+            ));
+        }
+        self.advance_pc().map(|()| None)
+    }
+
+    fn call(&mut self, func: FuncId, argc: u32) -> Result<Option<EngineOutcome>, CoreError> {
+        let mut args = Vec::with_capacity(argc as usize);
+        for _ in 0..argc {
+            args.push(self.pop()?);
+        }
+        args.reverse();
+        let function = self
+            .artifact
+            .function(func)
+            .ok_or_else(|| CoreError::TypeError(format!("missing function {}", func.0)))?;
+        if function.local_count as usize > 4096 {
+            return Err(CoreError::TypeError("too many locals".into()));
+        }
+        let mut locals = vec![Value::Undefined; function.local_count as usize];
+        bind_program_args(
+            &self.continuation.language_semantics_version,
+            function.param_count,
+            &function.param_defaults,
+            &args,
+            &mut locals,
+        )?;
+        let func_id = function.id.0;
+        self.advance_pc()?;
+        self.continuation.frames.push(tcc_state::Frame {
+            func_id,
+            pc: 0,
+            locals,
+        });
+        Ok(None)
     }
 
     fn join_is_active(&self) -> bool {
@@ -1288,6 +1557,7 @@ impl Engine {
                 });
             }
         };
+        let value = absorb_value(&mut self.continuation.heap, value);
         self.complete_registered_branch(&branch_id, value)
     }
 
@@ -1362,6 +1632,7 @@ fn const_to_value(value: &ConstValue) -> Value {
 fn bind_program_args(
     language_semantics_version: &str,
     param_count: u32,
+    defaults: &[Option<tcc_ir::ConstValue>],
     args: &[Value],
     locals: &mut [Value],
 ) -> Result<(), CoreError> {
@@ -1375,18 +1646,22 @@ fn bind_program_args(
         }
         LANGUAGE_SEMANTICS_PY => {
             let given = args.len();
-            if given != expected {
-                return Err(CoreError::TypeError(if given < expected {
-                    format!(
+            if given > expected {
+                return Err(CoreError::TypeError(format!(
+                    "run() takes {expected} positional arguments but {given} were given"
+                )));
+            }
+            for index in 0..expected {
+                if index < given {
+                    locals[index] = args[index].clone();
+                } else if let Some(Some(default)) = defaults.get(index) {
+                    locals[index] = const_to_value(default);
+                } else {
+                    return Err(CoreError::TypeError(format!(
                         "run() missing {} required positional argument(s)",
                         expected - given
-                    )
-                } else {
-                    format!("run() takes {expected} positional arguments but {given} were given")
-                }));
-            }
-            for (index, value) in args.iter().enumerate() {
-                locals[index] = value.clone();
+                    )));
+                }
             }
             Ok(())
         }
@@ -1396,13 +1671,20 @@ fn bind_program_args(
     }
 }
 
+fn js_equal(left: &Value, right: &Value) -> bool {
+    match (left, right) {
+        (Value::Number(left), Value::Number(right)) => tcc_state::numbers_strict_eq(*left, *right),
+        _ => left == right,
+    }
+}
+
 fn is_truthy(value: &Value) -> bool {
     match value {
         Value::Undefined | Value::Null => false,
         Value::Bool(flag) => *flag,
         Value::Number(number) => *number != 0.0 && !number.is_nan(),
         Value::String(text) => !text.is_empty(),
-        Value::Object(_) | Value::Array(_) => true,
+        Value::Object(_) | Value::Array(_) | Value::Ref(_) => true,
     }
 }
 
@@ -1508,6 +1790,7 @@ mod tests {
                     name: "main".into(),
                     param_count: 0,
                     local_count: 0,
+                    param_defaults: Vec::new(),
                     instructions: vec![Instruction::Nop, Instruction::Return],
                     spans: vec![None, None],
                 }],

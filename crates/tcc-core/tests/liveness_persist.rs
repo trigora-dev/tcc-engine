@@ -38,6 +38,7 @@ fn wait_artifact() -> Artifact {
                 name: "run".into(),
                 param_count: 0,
                 local_count: 3,
+                param_defaults: Vec::new(),
                 instructions: vec![
                     Instruction::LoadConst {
                         value: ConstValue::String("keep".into()),

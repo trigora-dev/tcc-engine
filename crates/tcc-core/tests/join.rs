@@ -34,6 +34,7 @@ fn artifact(instructions: Vec<Instruction>) -> Artifact {
                 name: "run".into(),
                 param_count: 0,
                 local_count: 2,
+                param_defaults: Vec::new(),
                 instructions,
                 spans,
             }],

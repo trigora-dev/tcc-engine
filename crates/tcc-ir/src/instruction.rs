@@ -76,6 +76,24 @@ pub enum Instruction {
     ArrayIndex {
         index: u32,
     },
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Neg,
+    /// Pop index, pop collection, push the element.
+    GetIndex,
+    /// Pop value, pop index, pop collection, write the slot, push the collection.
+    SetIndex,
+    /// Pop collection, push its length.
+    Length,
+    /// Record the collection on top of the stack as the active `for` target.
+    WatchIter,
+    /// Pop one active `for` target.
+    UnwatchIter,
+    /// Reference equality. Python `is` and TypeScript `===` on collections.
+    Same,
     Throw,
     PushTry {
         catch: Pc,

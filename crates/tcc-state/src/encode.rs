@@ -5,8 +5,9 @@ use crate::continuation::{
     JoinKind, JoinReentry, JoinState, JoinStatus, PendingOp, TryHandler, WaitKind,
 };
 use crate::error::StateError;
+use crate::heap::absorb_continuation;
 use crate::json::Json;
-use crate::value::Value;
+use crate::value::{HeapCell, Value};
 
 pub fn encode_value(value: &Value) -> Result<Vec<u8>, StateError> {
     Ok(value_to_json(value).stringify().into_bytes())
@@ -28,6 +29,33 @@ pub fn decode_continuation(bytes: &[u8]) -> Result<Continuation, StateError> {
     json_to_continuation(&Json::parse(text)?)
 }
 
+pub(crate) fn number_payload(number: f64) -> Json {
+    if number.is_nan() {
+        Json::String("NaN".to_string())
+    } else if number.is_infinite() && number.is_sign_positive() {
+        Json::String("Infinity".to_string())
+    } else if number.is_infinite() {
+        Json::String("-Infinity".to_string())
+    } else {
+        Json::Number(number)
+    }
+}
+
+pub(crate) fn json_to_number(json: &Json) -> Result<f64, StateError> {
+    match json {
+        Json::Number(number) if number.is_finite() => Ok(*number),
+        Json::String(text) => match text.as_str() {
+            "NaN" => Ok(f64::NAN),
+            "Infinity" => Ok(f64::INFINITY),
+            "-Infinity" => Ok(f64::NEG_INFINITY),
+            _ => Err(StateError::InvalidEncoding(
+                "number value must be finite or NaN/Infinity/-Infinity".to_string(),
+            )),
+        },
+        _ => Err(StateError::InvalidEncoding("number value".to_string())),
+    }
+}
+
 pub(crate) fn value_to_json(value: &Value) -> Json {
     let mut map = BTreeMap::new();
     match value {
@@ -43,7 +71,7 @@ pub(crate) fn value_to_json(value: &Value) -> Json {
         }
         Value::Number(number) => {
             map.insert("t".to_string(), Json::String("number".to_string()));
-            map.insert("v".to_string(), Json::Number(*number));
+            map.insert("v".to_string(), number_payload(*number));
         }
         Value::String(text) => {
             map.insert("t".to_string(), Json::String("string".to_string()));
@@ -64,6 +92,10 @@ pub(crate) fn value_to_json(value: &Value) -> Json {
                 Json::Array(items.iter().map(value_to_json).collect()),
             );
         }
+        Value::Ref(id) => {
+            map.insert("t".to_string(), Json::String("ref".to_string()));
+            map.insert("v".to_string(), Json::Number(*id as f64));
+        }
     }
     Json::Object(map)
 }
@@ -77,10 +109,7 @@ pub(crate) fn json_to_value(json: &Json) -> Result<Value, StateError> {
             Json::Bool(flag) => Ok(Value::Bool(*flag)),
             _ => Err(StateError::InvalidEncoding("bool value".to_string())),
         },
-        "number" => match Json::get(map, "v")? {
-            Json::Number(number) => Ok(Value::Number(*number)),
-            _ => Err(StateError::InvalidEncoding("number value".to_string())),
-        },
+        "number" => Ok(Value::Number(json_to_number(Json::get(map, "v")?)?)),
         "string" => Ok(Value::String(Json::get(map, "v")?.as_str()?.to_string())),
         "object" => {
             let fields = Json::get(map, "v")?.as_object()?;
@@ -98,6 +127,10 @@ pub(crate) fn json_to_value(json: &Json) -> Result<Value, StateError> {
             }
             Ok(Value::Array(array))
         }
+        "ref" => Ok(Value::Ref(Json::get(map, "v")?.as_u32()?)),
+        "hole" => Err(StateError::InvalidEncoding(
+            "hole is a heap cell, not a value".to_string(),
+        )),
         _ => Err(StateError::UnsupportedValue),
     }
 }
@@ -169,7 +202,76 @@ fn continuation_to_json(continuation: &Continuation) -> Json {
             Json::Array(continuation.reentries.iter().map(reentry_to_json).collect()),
         );
     }
+    if !continuation.heap.is_empty() {
+        map.insert(
+            "heap".to_string(),
+            Json::Array(continuation.heap.iter().map(cell_to_json).collect()),
+        );
+    }
+    if !continuation.iterating.is_empty() {
+        map.insert(
+            "iterating".to_string(),
+            Json::Array(
+                continuation
+                    .iterating
+                    .iter()
+                    .map(|id| Json::Number(*id as f64))
+                    .collect(),
+            ),
+        );
+    }
     Json::Object(map)
+}
+
+pub(crate) fn cell_to_json(cell: &HeapCell) -> Json {
+    let mut map = BTreeMap::new();
+    match cell {
+        HeapCell::Object(fields) => {
+            map.insert("t".to_string(), Json::String("object".to_string()));
+            let mut object = BTreeMap::new();
+            for (key, value) in fields {
+                object.insert(key.clone(), value_to_json(value));
+            }
+            map.insert("v".to_string(), Json::Object(object));
+        }
+        HeapCell::Array(items) => {
+            map.insert("t".to_string(), Json::String("array".to_string()));
+            map.insert(
+                "v".to_string(),
+                Json::Array(items.iter().map(value_to_json).collect()),
+            );
+        }
+        HeapCell::Hole => {
+            map.insert("t".to_string(), Json::String("hole".to_string()));
+        }
+    }
+    Json::Object(map)
+}
+
+pub(crate) fn json_to_cell(json: &Json) -> Result<HeapCell, StateError> {
+    let map = json.as_object()?;
+    match Json::get(map, "t")?.as_str()? {
+        "object" => {
+            let fields = Json::get(map, "v")?.as_object()?;
+            let mut object = BTreeMap::new();
+            for (key, value) in fields {
+                object.insert(key.clone(), json_to_value(value)?);
+            }
+            Ok(HeapCell::Object(object))
+        }
+        "array" => {
+            let items = Json::get(map, "v")?.as_array()?;
+            let mut array = Vec::new();
+            for item in items {
+                array.push(json_to_value(item)?);
+            }
+            Ok(HeapCell::Array(array))
+        }
+        "hole" => Ok(HeapCell::Hole),
+        other => Err(StateError::InvalidEncoding(format!(
+            "unknown heap cell `{other}`"
+        ))),
+    }
 }
 
 fn json_to_continuation(json: &Json) -> Result<Continuation, StateError> {
@@ -190,10 +292,12 @@ fn json_to_continuation(json: &Json) -> Result<Continuation, StateError> {
             "try_stack",
             "join",
             "reentries",
+            "heap",
+            "iterating",
         ],
         "continuation",
     )?;
-    Ok(Continuation {
+    let mut continuation = Continuation {
         execution_id: Json::get(map, "execution_id")?.as_str()?.to_string(),
         artifact: ArtifactId {
             hash: Json::get(map, "artifact_hash")?.as_str()?.to_string(),
@@ -242,7 +346,25 @@ fn json_to_continuation(json: &Json) -> Result<Continuation, StateError> {
                 .map(json_to_reentry)
                 .collect::<Result<_, _>>()?,
         },
-    })
+        heap: match map.get("heap") {
+            None | Some(Json::Null) => Vec::new(),
+            Some(other) => other
+                .as_array()?
+                .iter()
+                .map(json_to_cell)
+                .collect::<Result<_, _>>()?,
+        },
+        iterating: match map.get("iterating") {
+            None | Some(Json::Null) => Vec::new(),
+            Some(other) => other
+                .as_array()?
+                .iter()
+                .map(|item| item.as_u32())
+                .collect::<Result<_, _>>()?,
+        },
+    };
+    absorb_continuation(&mut continuation);
+    Ok(continuation)
 }
 
 fn reject_unknown(
@@ -729,6 +851,56 @@ mod tests {
             let bytes = encode_value(&value).unwrap();
             assert_eq!(decode_value(&bytes).unwrap(), value);
         }
+    }
+
+    #[test]
+    fn nonfinite_numbers_round_trip_canonically() {
+        let signaling = f64::from_bits(0x7ff8_0000_0000_0001);
+        let cases = [
+            f64::NAN,
+            signaling,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            -0.0,
+            0.0,
+        ];
+        for number in cases {
+            let value = Value::Number(number);
+            let bytes = encode_value(&value).unwrap();
+            let text = std::str::from_utf8(&bytes).unwrap();
+            assert!(!text.contains("null"), "{text}");
+            let decoded = decode_value(&bytes).unwrap();
+            assert_eq!(decoded, Value::Number(number));
+        }
+        let nan_bytes = encode_value(&Value::Number(signaling)).unwrap();
+        assert_eq!(nan_bytes, encode_value(&Value::Number(f64::NAN)).unwrap());
+        let text = std::str::from_utf8(&nan_bytes).unwrap();
+        assert!(text.contains("\"NaN\""), "{text}");
+        let inf_bytes = encode_value(&Value::Number(f64::INFINITY)).unwrap();
+        let inf = std::str::from_utf8(&inf_bytes).unwrap();
+        assert!(inf.contains("\"Infinity\""), "{inf}");
+        let neg_bytes = encode_value(&Value::Number(f64::NEG_INFINITY)).unwrap();
+        let neg = std::str::from_utf8(&neg_bytes).unwrap();
+        assert!(neg.contains("\"-Infinity\""), "{neg}");
+        let neg_zero_bytes = encode_value(&Value::Number(-0.0)).unwrap();
+        let neg_zero = std::str::from_utf8(&neg_zero_bytes).unwrap();
+        assert!(neg_zero.contains("-0"), "{neg_zero}");
+        assert!(!neg_zero.contains("\"-0\""), "{neg_zero}");
+        assert_ne!(Value::Number(0.0), Value::Number(-0.0));
+        assert_eq!(Value::Number(f64::NAN), Value::Number(signaling));
+        let err = decode_value(br#"{"t":"number","v":"nan"}"#).unwrap_err();
+        assert!(matches!(err, StateError::InvalidEncoding(_)));
+    }
+
+    #[test]
+    fn continuation_preserves_nonfinite_local() {
+        let mut continuation = Continuation::start("exec-nan", "hash-nan", 1, "ts.subset.v1", 0, 1);
+        continuation.frames[0].locals[0] = Value::Number(f64::INFINITY);
+        let bytes = encode_continuation(&continuation).unwrap();
+        let decoded = decode_continuation(&bytes).unwrap();
+        assert_eq!(decoded.frames[0].locals[0], Value::Number(f64::INFINITY));
+        let text = std::str::from_utf8(&bytes).unwrap();
+        assert!(text.contains("\"Infinity\""), "{text}");
     }
 
     #[test]

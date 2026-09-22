@@ -80,7 +80,7 @@ Exceptions:
 - `PushTry { catch, finally }`
 - `PopTry`
 
-Constants are `undefined`, `null`, boolean, IEEE-754 binary64 number, and string. Runtime values may also be objects (`NewObject` / `SetProp` / `GetProp`) and arrays (`NewArray` / `ArrayPush`) whose elements are those value types. Nested identity and cycles are not in this format version’s executed subset. `===` / `!==` compare values structurally (there is no object identity). Numeric compare requires two numbers. These are JavaScript-inspired value semantics. They are not a universal language value model.
+Constants are `undefined`, `null`, boolean, IEEE-754 binary64 number, and string. Finite numeric constants, including `-0`, are JSON numbers. Non-finite constants use `"NaN"`, `"Infinity"`, or `"-Infinity"` on the same `number` tag. Runtime values may also be objects (`NewObject` / `SetProp` / `GetProp`) and arrays (`NewArray` / `ArrayPush`). In a continuation those collections are heap refs, so aliasing and cycles are representable. TypeScript `===` / `!==` on collections is reference equality. Python `==` / `!=` on collections is structural. Numeric compare requires two numbers. These are not a universal language value model. Identity does not cross a host boundary: effect results, event payloads, and invoke arguments are inlined.
 
 ## Language semantics
 

@@ -2,6 +2,7 @@
 
 #![allow(clippy::derive_partial_eq_without_eq)]
 
+mod compute;
 pub mod engine;
 pub mod error;
 pub mod protocol;

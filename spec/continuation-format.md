@@ -22,7 +22,15 @@ A continuation is the explicit program state required to resume an execution. It
 
 Unknown continuation fields fail decode. They must not be dropped. A `join` object whose `kind`, `state`, `phase`, or branch `op` tag is unknown fails decode. `kind` is required. Missing `kind` fails decode.
 
-Values in frames and on the stack use the encoding defined for the continuation's `language_semantics_version`. For `ts.subset.v1` that is `undefined`, `null`, boolean, IEEE-754 binary64 number, string, objects with string keys, and arrays (no cycles).
+Values in frames and on the stack use the encoding defined for the continuation's `language_semantics_version`. Scalars are `undefined`, `null`, boolean, IEEE-754 binary64 number, and string. Objects and arrays are `ref` ids into the continuation `heap`.
+
+Finite numbers, including `-0`, are JSON numbers. `-0` must not become `0`. Non-finite numbers use a string on the same `number` tag: `"NaN"`, `"Infinity"`, `"-Infinity"`. Every NaN payload collapses to one canonical NaN. Checkpoint equality uses that encoding, so canonical NaNs match and `-0` does not match `+0`. JavaScript `===` still treats `NaN` as unequal to itself and `-0` as equal to `+0`.
+
+`heap` is optional. Missing `heap` is a pre-identity checkpoint: inline objects and arrays still decode, and each is interned as its own cell. New checkpoints write `ref` values plus `heap` cells (`object`, `array`, or `hole`). Holes keep surviving ids stable. Unreachable cells become holes at persist; trailing holes are dropped. A local that still holds the same ref can observe a heap mutation, so a delta includes the full heap when any cell changes. `materialize` stays authoritative.
+
+Assignment and calls copy the ref, not the cell. Cycles (`a.x = a`) are representable in the heap. A cyclic value cannot be inlined across a host boundary. JavaScript `===` on collections is reference equality. Python `==` is structural, and a cycle in that walk is a runtime error. Python `is` remains identity.
+
+`iterating` is an optional list of heap ids whose structure must not change. It is present while a `for` over that cell is active, including across a durable boundary in the loop body. Empty `heap` and empty `iterating` are omitted.
 
 Unknown value tags must fail decode. They must not be coerced.
 

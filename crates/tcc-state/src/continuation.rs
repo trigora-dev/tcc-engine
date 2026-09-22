@@ -1,4 +1,4 @@
-use crate::value::Value;
+use crate::value::{HeapCell, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactId {
@@ -140,6 +140,10 @@ pub struct Continuation {
     pub try_stack: Vec<TryHandler>,
     pub join: Option<JoinState>,
     pub reentries: Vec<JoinReentry>,
+    /// Object and array cells. Empty when the execution has not allocated.
+    pub heap: Vec<HeapCell>,
+    /// Heap ids whose structure must not change, outermost loop last.
+    pub iterating: Vec<u32>,
 }
 
 impl Continuation {
@@ -171,6 +175,8 @@ impl Continuation {
             try_stack: Vec::new(),
             join: None,
             reentries: Vec::new(),
+            heap: Vec::new(),
+            iterating: Vec::new(),
         }
     }
 }

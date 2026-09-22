@@ -36,6 +36,7 @@ impl EngineFeature {
     pub const DURABLE_INVOKE: &'static str = "durable.invoke";
     pub const DURABLE_CONCURRENT_GROUP: &'static str = "durable.concurrent_group";
     pub const EXCEPTIONS: &'static str = "ts.exceptions";
+    pub const LANG_COMPUTE: &'static str = "lang.compute";
 
     pub fn known() -> &'static [&'static str] {
         &[
@@ -46,6 +47,7 @@ impl EngineFeature {
             Self::DURABLE_INVOKE,
             Self::DURABLE_CONCURRENT_GROUP,
             Self::EXCEPTIONS,
+            Self::LANG_COMPUTE,
         ]
     }
 

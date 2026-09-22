@@ -129,8 +129,31 @@ pub fn validate(artifact: &Artifact, caps: &EngineCaps) -> Result<(), IrError> {
             });
         }
 
+        if function.param_defaults.len() > function.param_count as usize {
+            return Err(IrError::InvalidEncoding(format!(
+                "function {} has more defaults than parameters",
+                function.id.0
+            )));
+        }
+        let is_entry = function.id == artifact.program.entry;
         let len = function.instructions.len();
         for instruction in &function.instructions {
+            if !is_entry && is_durable_instruction(instruction) {
+                return Err(IrError::InvalidEncoding(
+                    "durable operations are only allowed in the program entry".into(),
+                ));
+            }
+            if needs_lang_compute(instruction)
+                && !artifact
+                    .envelope
+                    .required_engine_features
+                    .iter()
+                    .any(|feature| feature.0 == EngineFeature::LANG_COMPUTE)
+            {
+                return Err(IrError::InvalidEncoding(
+                    "arithmetic, indexing, and calls require lang.compute".into(),
+                ));
+            }
             for Pc(target) in instruction.jump_targets() {
                 if target as usize >= len {
                     return Err(IrError::JumpOutOfRange {
@@ -228,6 +251,7 @@ impl Artifact {
                     name: "main".to_string(),
                     param_count: 0,
                     local_count: 0,
+                    param_defaults: Vec::new(),
                     instructions: vec![Instruction::Return],
                     spans: vec![None],
                 }],
@@ -265,6 +289,7 @@ impl Artifact {
                     name: "run".to_string(),
                     param_count: 0,
                     local_count: 2,
+                    param_defaults: Vec::new(),
                     instructions: vec![
                         Instruction::LoadConst {
                             value: ConstValue::String("generate".to_string()),
@@ -292,6 +317,38 @@ impl Artifact {
             },
         }
     }
+}
+
+fn is_durable_instruction(instruction: &Instruction) -> bool {
+    matches!(
+        instruction,
+        Instruction::Effect
+            | Instruction::Sleep
+            | Instruction::WaitForEvent
+            | Instruction::Invoke { .. }
+            | Instruction::Fork { .. }
+            | Instruction::JoinAll
+            | Instruction::JoinAny
+    )
+}
+
+fn needs_lang_compute(instruction: &Instruction) -> bool {
+    matches!(
+        instruction,
+        Instruction::Add
+            | Instruction::Sub
+            | Instruction::Mul
+            | Instruction::Div
+            | Instruction::Rem
+            | Instruction::Neg
+            | Instruction::GetIndex
+            | Instruction::SetIndex
+            | Instruction::Length
+            | Instruction::WatchIter
+            | Instruction::UnwatchIter
+            | Instruction::Same
+            | Instruction::Call { .. }
+    )
 }
 
 #[cfg(test)]
@@ -337,6 +394,7 @@ mod tests {
                     name: "main".to_string(),
                     param_count: 0,
                     local_count: 0,
+                    param_defaults: Vec::new(),
                     instructions: vec![Instruction::Jump { target: Pc(4) }, Instruction::Return],
                     spans: vec![None, None],
                 }],
@@ -385,6 +443,7 @@ mod tests {
                         name: "a".to_string(),
                         param_count: 0,
                         local_count: 0,
+                        param_defaults: Vec::new(),
                         instructions: vec![Instruction::Return],
                         spans: vec![None],
                     },
@@ -393,6 +452,7 @@ mod tests {
                         name: "b".to_string(),
                         param_count: 0,
                         local_count: 0,
+                        param_defaults: Vec::new(),
                         instructions: vec![Instruction::Return],
                         spans: vec![None],
                     },
@@ -416,6 +476,7 @@ mod tests {
                     name: "main".to_string(),
                     param_count: 0,
                     local_count: 0,
+                    param_defaults: Vec::new(),
                     instructions: vec![Instruction::Return],
                     spans: vec![],
                 }],

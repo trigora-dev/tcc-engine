@@ -102,6 +102,7 @@ fn finish(seed: u64, local_count: u32, instructions: Vec<Instruction>) -> Artifa
                 name: "run".into(),
                 param_count: 0,
                 local_count,
+                param_defaults: Vec::new(),
                 instructions,
                 spans: vec![None; len],
             }],

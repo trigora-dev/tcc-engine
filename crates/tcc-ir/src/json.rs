@@ -73,18 +73,24 @@ impl Json {
     }
 }
 
+fn write_finite_number(out: &mut String, number: f64) {
+    if number == 0.0 && number.is_sign_negative() {
+        out.push_str("-0");
+        return;
+    }
+    if number.is_finite() {
+        let _ = write!(out, "{number}");
+        return;
+    }
+    out.push_str("null");
+}
+
 fn write_json(out: &mut String, value: &Json) {
     match value {
         Json::Null => out.push_str("null"),
         Json::Bool(true) => out.push_str("true"),
         Json::Bool(false) => out.push_str("false"),
-        Json::Number(number) => {
-            if number.is_finite() {
-                let _ = write!(out, "{number}");
-            } else {
-                out.push_str("null");
-            }
-        }
+        Json::Number(number) => write_finite_number(out, *number),
         Json::String(text) => write_string(out, text),
         Json::Array(items) => {
             out.push('[');
