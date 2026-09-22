@@ -70,6 +70,8 @@ class PythonSqliteDriver:
             effects=input.get("effects"),
             event_payload=input.get("eventPayload"),
             auto_deliver_event=input.get("autoDeliverEvent", True),
+            completion_order=input.get("completionOrder") or "source",
+            child_artifacts=input.get("childArtifacts"),
             cancel=input.get("cancel", False),
             effect_log_path=workspace["logPath"],
         )
@@ -88,6 +90,8 @@ class PythonSqliteDriver:
                     "effects": input.get("effects") or {"generate": 42},
                     "event_payload": input.get("eventPayload"),
                     "auto_deliver_event": input.get("autoDeliverEvent", True),
+                    "completion_order": input.get("completionOrder") or "source",
+                    "child_artifacts": input.get("childArtifacts"),
                     "cancel": input.get("cancel", False),
                 }
             ),
@@ -123,6 +127,8 @@ class PythonSqliteDriver:
             effects=input.get("effects"),
             event_payload=input.get("eventPayload"),
             auto_deliver_event=input.get("autoDeliverEvent", True),
+            completion_order=input.get("completionOrder") or "source",
+            child_artifacts=input.get("childArtifacts"),
             cancel=input.get("cancel", False),
             effect_log_path=workspace["logPath"],
         )

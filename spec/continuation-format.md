@@ -14,9 +14,13 @@ A continuation is the explicit program state required to resume an execution. It
 | `status` | `runnable`, `running`, `suspended`, `completed`, `failed`, or `cancelled` |
 | `frames` | Call stack: function id, program counter, locals |
 | `stack` | Operand stack |
-| `pending` | Outstanding durable operation, if any |
+| `pending` | Outstanding durable operation, if any. Still singular inside a join: the in-flight registration, not the whole group |
 | `result` | Result value when status is `completed` |
 | `try_stack` | Active exception handlers (`catch` pc, optional `finally` pc, stack depth). Absent or empty when none. |
+| `join` | Active `JoinState` when a concurrent group is open. Absent or null when none. See [concurrency.md](concurrency.md) |
+| `reentries` | Per-`Fork`-site next reentry count. Absent or empty when the execution has not finished a join |
+
+Unknown continuation fields fail decode. They must not be dropped. A `join` object whose `kind`, `state`, `phase`, or branch `op` tag is unknown fails decode. `kind` is required. Missing `kind` fails decode.
 
 Values in frames and on the stack use the encoding defined for the continuation's `language_semantics_version`. For `ts.subset.v1` that is `undefined`, `null`, boolean, IEEE-754 binary64 number, string, objects with string keys, and arrays (no cycles).
 

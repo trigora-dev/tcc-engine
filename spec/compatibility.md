@@ -15,6 +15,16 @@ The engine rejects an artifact whose `engine_format_version` it does not impleme
 
 Host JSON without `host_protocol_version` is `MissingHostProtocolVersion`. A present value other than `1` is `UnsupportedHostProtocol { got, supported }`. There is no “missing means 1” rule.
 
+Protocol v1 is the finalized shape in [host-protocol.md](host-protocol.md). It includes ordinary single-op delivery and correlated join delivery. There is no protocol v2 and no decoder for the pre-correlation payloads (`event_payload` / `timer_fired` / `child_result` that cannot name a branch when the execution is in a join).
+
+| Artifact | Host protocol v1 | Runs |
+|---|---|---|
+| Non-join, `branch` omitted on deliveries | finalized v1 | yes |
+| Concurrent group, deliveries carry `branch` | finalized v1 | yes |
+| Pre-correlation wire shape (join delivery without `branch`, or a second dialect) | — | no |
+
+`engine_format_version` stays `1`. Format v1 includes `Fork`, `JoinAll`, and `JoinAny`. `durable.concurrent_group` is the feature an engine checks before running those instructions. It does not preserve a pre-join reading of the same bytes. A join object without `kind` fails decode.
+
 Package versions on npm/PyPI (`0.1.0-rc.1`, later `0.1.0`, …) are **not** these identifiers. A later package release may still emit `engine_format_version` 1 and `ts.subset.v1` / `py.subset.v1` when the change is packaging, diagnostics, or a bug fix. Frontends export `PACKAGE_VERSION`, `FRONTEND_IDENTITY`, `LANGUAGE_SEMANTICS_VERSION`, and `ENGINE_FORMAT_VERSION` as distinct constants. Envelope `frontend_version` names the frontend build; it is not the language-semantics version.
 
 ## Artifact identity

@@ -15,6 +15,7 @@ const config = process.env.TCC_CONFIG_PATH
       failCounts?: Record<string, number>;
       eventPayload?: unknown;
       autoDeliverEvent?: boolean;
+      completionOrder?: "source" | "reverse";
       childArtifacts?: Record<string, string>;
       cancel?: boolean;
     })
@@ -35,6 +36,7 @@ const options = {
   ownerToken,
   eventPayload,
   autoDeliverEvent,
+  completionOrder: config.completionOrder,
   effectLogPath,
   effects,
   failCounts: config.failCounts,

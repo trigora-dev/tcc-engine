@@ -20,6 +20,8 @@ export type StartInput = {
   effects?: Record<string, unknown>;
   eventPayload?: unknown;
   autoDeliverEvent?: boolean;
+  completionOrder?: "source" | "reverse";
+  childArtifacts?: Record<string, string>;
   cancel?: boolean;
 };
 
@@ -33,6 +35,8 @@ export type ResumeInput = {
   effects?: Record<string, unknown>;
   eventPayload?: unknown;
   autoDeliverEvent?: boolean;
+  completionOrder?: "source" | "reverse";
+  childArtifacts?: Record<string, string>;
   cancel?: boolean;
 };
 

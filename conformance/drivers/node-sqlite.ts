@@ -70,6 +70,8 @@ export function createNodeSqliteDriver(): HostConformanceDriver {
         effects: input.effects,
         eventPayload: input.eventPayload,
         autoDeliverEvent: input.autoDeliverEvent,
+        completionOrder: input.completionOrder,
+        childArtifacts: input.childArtifacts,
         cancel: input.cancel,
         effectLogPath: paths.logPath,
       });
@@ -88,6 +90,8 @@ export function createNodeSqliteDriver(): HostConformanceDriver {
           effects: input.effects ?? { generate: 42 },
           eventPayload: input.eventPayload,
           autoDeliverEvent: input.autoDeliverEvent,
+          completionOrder: input.completionOrder,
+          childArtifacts: input.childArtifacts,
           cancel: input.cancel,
         }),
       );
@@ -119,6 +123,8 @@ export function createNodeSqliteDriver(): HostConformanceDriver {
         effects: input.effects,
         eventPayload: input.eventPayload,
         autoDeliverEvent: input.autoDeliverEvent,
+        completionOrder: input.completionOrder,
+        childArtifacts: input.childArtifacts,
         cancel: input.cancel,
         effectLogPath: workspace.logPath,
       });

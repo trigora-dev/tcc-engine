@@ -34,6 +34,7 @@ impl EngineFeature {
     pub const DURABLE_SLEEP: &'static str = "durable.sleep";
     pub const DURABLE_WAIT_FOR_EVENT: &'static str = "durable.wait_for_event";
     pub const DURABLE_INVOKE: &'static str = "durable.invoke";
+    pub const DURABLE_CONCURRENT_GROUP: &'static str = "durable.concurrent_group";
     pub const EXCEPTIONS: &'static str = "ts.exceptions";
 
     pub fn known() -> &'static [&'static str] {
@@ -43,6 +44,7 @@ impl EngineFeature {
             Self::DURABLE_SLEEP,
             Self::DURABLE_WAIT_FOR_EVENT,
             Self::DURABLE_INVOKE,
+            Self::DURABLE_CONCURRENT_GROUP,
             Self::EXCEPTIONS,
         ]
     }

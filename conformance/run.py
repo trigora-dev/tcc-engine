@@ -42,16 +42,57 @@ def _run_reconstruct(driver: Any, cases: dict[str, Any]) -> None:
         assert applied == fixture["expected"], rel
 
 
-def _run_crash_resume(driver: Any, item: dict[str, Any]) -> None:
+def _compile_typescript_file(path: Path) -> str:
+    completed = __import__("subprocess").run(
+        [
+            "node",
+            "--experimental-strip-types",
+            str(HERE / "compile-ts.ts"),
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    )
+    return completed.stdout
+
+
+def _child_artifacts(item: dict[str, Any]) -> dict[str, str] | None:
+    children = item.get("children") or {}
+    if not children:
+        return None
+    artifacts = {}
+    for name, spec in children.items():
+        path = HERE / spec["file"]
+        artifacts[name] = _compile_typescript_file(path)
+    return artifacts
+
+
+def _compile_case(driver: Any, item: dict[str, Any]) -> str:
+    if item.get("compiler") == "typescript":
+        spec = item["typescript"]
+        if spec.get("file"):
+            path = HERE / spec["file"]
+        else:
+            raise RuntimeError(f"case {item['id']} typescript compiler needs a file")
+        return _compile_typescript_file(path)
     spec = _program_for(item, driver.language)
     source, filename = _load_program(spec)
-    artifact_json = driver.compile(source, filename)
+    return driver.compile(source, filename)
+
+
+def _run_crash_resume(driver: Any, item: dict[str, Any]) -> None:
+    artifact_json = _compile_case(driver, item)
+    children = _child_artifacts(item)
     expected_status = "cancelled" if item.get("cancel") else "completed"
     started = driver.start(
         artifactJson=artifact_json,
         effects=item.get("effects"),
         eventPayload=item.get("event_payload"),
         autoDeliverEvent=item.get("auto_deliver_event", True),
+        completionOrder=item.get("completion_order") or "source",
+        childArtifacts=children,
         cancel=item.get("cancel", False),
     )
     assert started["status"] == expected_status, (
@@ -69,6 +110,8 @@ def _run_crash_resume(driver: Any, item: dict[str, Any]) -> None:
             effects=item.get("effects"),
             eventPayload=item.get("event_payload"),
             autoDeliverEvent=item.get("auto_deliver_event", True),
+            completionOrder=item.get("completion_order") or "source",
+            childArtifacts=children,
             cancel=item.get("cancel", False),
         )
         resumed = driver.resume(
@@ -76,6 +119,8 @@ def _run_crash_resume(driver: Any, item: dict[str, Any]) -> None:
             effects=item.get("effects"),
             eventPayload=item.get("event_payload"),
             autoDeliverEvent=item.get("auto_deliver_event", True),
+            completionOrder=item.get("completion_order") or "source",
+            childArtifacts=children,
             cancel=item.get("cancel", False),
         )
         assert resumed["status"] == expected_status, (

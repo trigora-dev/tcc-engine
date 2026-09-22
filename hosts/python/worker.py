@@ -41,6 +41,7 @@ options = {
     "owner_token": owner_token,
     "event_payload": event_payload,
     "auto_deliver_event": auto_deliver_event,
+    "completion_order": config.get("completion_order") or "source",
     "effect_log_path": effect_log_path,
     "effects": effects,
     "fail_counts": config.get("fail_counts"),

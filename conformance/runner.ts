@@ -3,6 +3,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { canonicalStringify } from "../frontends/typescript/src/canonical.ts";
+import { compile } from "../frontends/typescript/src/compile.ts";
 import type { HostConformanceDriver } from "./driver.ts";
 import type { ContinuationDelta, ContinuationJson } from "./reconstruct.ts";
 
@@ -22,6 +24,9 @@ type SemanticCase = {
   effects?: Record<string, unknown>;
   event_payload?: unknown;
   auto_deliver_event?: boolean;
+  completion_order?: "source" | "reverse";
+  compiler?: "typescript";
+  children?: Record<string, ProgramSpec>;
   cancel?: boolean;
   typescript?: ProgramSpec | { stored: ProgramSpec; other: ProgramSpec };
   python?: ProgramSpec | { stored: ProgramSpec; other: ProgramSpec };
@@ -92,22 +97,41 @@ async function runReconstruct(
   }
 }
 
+function compileChildren(
+  item: SemanticCase,
+): Record<string, string> | undefined {
+  if (!item.children) {
+    return undefined;
+  }
+  const artifacts: Record<string, string> = {};
+  for (const [name, spec] of Object.entries(item.children)) {
+    const program = loadProgram(spec);
+    artifacts[name] = canonicalStringify(
+      compile(program.source, { filename: program.filename }),
+    );
+  }
+  return artifacts;
+}
+
 async function runCrashResume(
   driver: HostConformanceDriver,
   item: SemanticCase,
 ): Promise<void> {
-  const spec = programFor(item, driver.language);
-  if (isPinningSpec(spec)) {
-    throw new Error(`case ${item.id} is not a crash-resume program`);
-  }
-  const program = loadProgram(spec);
-  const artifactJson = driver.compile(program.source, program.filename);
+  const program = item.compiler === "typescript" && item.typescript && !isPinningSpec(item.typescript)
+    ? loadProgram(item.typescript)
+    : loadProgram(programFor(item, driver.language) as ProgramSpec);
+  const artifactJson = item.compiler === "typescript"
+    ? canonicalStringify(compile(program.source, { filename: program.filename }))
+    : driver.compile(program.source, program.filename);
+  const childArtifacts = compileChildren(item);
   const expectedStatus = item.cancel ? "cancelled" : "completed";
   const started = await driver.start({
     artifactJson,
     effects: item.effects,
     eventPayload: item.event_payload,
     autoDeliverEvent: item.auto_deliver_event,
+    completionOrder: item.completion_order,
+    childArtifacts,
     cancel: item.cancel,
   });
   assert.equal(
@@ -134,6 +158,8 @@ async function runCrashResume(
       effects: item.effects,
       eventPayload: item.event_payload,
       autoDeliverEvent: item.auto_deliver_event,
+      completionOrder: item.completion_order,
+      childArtifacts,
       cancel: item.cancel,
     });
     const resumed = await driver.resume({
@@ -141,6 +167,8 @@ async function runCrashResume(
       effects: item.effects,
       eventPayload: item.event_payload,
       autoDeliverEvent: item.auto_deliver_event,
+      completionOrder: item.completion_order,
+      childArtifacts,
       cancel: item.cancel,
     });
     assert.equal(

@@ -16,16 +16,32 @@ pub enum ConstValue {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instruction {
     Nop,
-    Jump { target: Pc },
-    JumpIfTrue { target: Pc },
-    JumpIfFalse { target: Pc },
-    LoadLocal { local: LocalId },
-    StoreLocal { local: LocalId },
-    LoadConst { value: ConstValue },
+    Jump {
+        target: Pc,
+    },
+    JumpIfTrue {
+        target: Pc,
+    },
+    JumpIfFalse {
+        target: Pc,
+    },
+    LoadLocal {
+        local: LocalId,
+    },
+    StoreLocal {
+        local: LocalId,
+    },
+    LoadConst {
+        value: ConstValue,
+    },
     Pop,
     NewObject,
-    SetProp { key: String },
-    GetProp { key: String },
+    SetProp {
+        key: String,
+    },
+    GetProp {
+        key: String,
+    },
     NewArray,
     ArrayPush,
     StrictEq,
@@ -36,13 +52,32 @@ pub enum Instruction {
     Ge,
     Not,
     Return,
-    Call { func: FuncId, argc: u32 },
+    Call {
+        func: FuncId,
+        argc: u32,
+    },
     Effect,
     Sleep,
     WaitForEvent,
     Invoke,
+    /// Open a concurrent group. `join_pc` is the `JoinAll` or `JoinAny` that settles it.
+    Fork {
+        count: u32,
+        join_pc: Pc,
+    },
+    /// Push the join aggregate in input order. Requires `durable.concurrent_group`.
+    JoinAll,
+    /// Push the winning branch value. Requires `durable.concurrent_group`.
+    JoinAny,
+    /// Copy `array[index]` onto the stack. The array stays underneath.
+    ArrayIndex {
+        index: u32,
+    },
     Throw,
-    PushTry { catch: Pc, finally: Option<Pc> },
+    PushTry {
+        catch: Pc,
+        finally: Option<Pc>,
+    },
     PopTry,
 }
 
@@ -59,6 +94,7 @@ impl Instruction {
                     targets.push(*pc);
                 }
             }
+            Instruction::Fork { join_pc, .. } => targets.push(*join_pc),
             _ => {}
         }
         targets.into_iter()

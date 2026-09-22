@@ -2,7 +2,7 @@
 
 Durable operations are explicit instructions. Ordinary computation is not journaled.
 
-A library call is not a durable operation unless a frontend lowers it to one of the operations below, or the host exposes it as a capability.
+A library call is not a durable operation unless a frontend lowers it to one of the operations below, or the host exposes it as a capability. `await Promise.all([...])` and `await Promise.race([...])` of those operations are structured concurrency in [concurrency.md](concurrency.md), not extra host operations.
 
 For the TypeScript frontend, durable operations are **resolved imports** of `@tcc-engine/primitives` or `@trigora/sdk` exports `effect`, `waitForEvent`, `sleep`, and `invoke`. For the Python frontend, they are **resolved imports** of `tcc_engine.primitives` or `trigora` exports `effect`, `wait_for_event`, `sleep`, and `invoke`. Both spellings lower to the same instructions. Neither package is required at compile time: the frontend injects declarations. Aliased imports are durable. A function that is merely named `effect` is not. Durable operations are imports, not a context object or a `workflow()` wrapper.
 
@@ -15,7 +15,8 @@ The effect callback is not compiled into the artifact. The host performs the wor
 | Effect | `Effect` | `{execution_id}:{key}` | `run_effect`, then `persist_effect` |
 | Sleep | `Sleep` | timer wait on this execution | `register_timer` |
 | Event wait | `WaitForEvent` | `{execution_id}:{name}:{correlation_key}:{pc}` | `register_wait` |
-| Child invoke | `Invoke` | `{parent}:invoke:{pc}` | `create_child` |
+| Child invoke | `Invoke` | `{parent}:invoke:{pc}` outside a join; `branch_id` inside one | `create_child` |
+| Concurrent group | `Fork` / `JoinAll` / `JoinAny` | `branch_id = execution + Fork pc + reentry + index` | the branch's own request, correlated by `branch` |
 
 If an effect journal record is `completed`, a later `run_effect` for that identity must return the stored result and must not invoke the external operation again. The host looks up the journal by `{execution_id}:{key}` when the engine emits `run_effect`. After a crash the engine may emit `run_effect` again because in-memory outstanding requests are not part of the continuation.
 

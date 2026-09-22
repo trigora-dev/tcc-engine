@@ -131,9 +131,11 @@ class Store:
               consumed INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS timers (
-              execution_id TEXT PRIMARY KEY,
+              execution_id TEXT NOT NULL,
+              branch_id TEXT NOT NULL DEFAULT '',
               resume_at_ms INTEGER NOT NULL,
-              status TEXT NOT NULL
+              status TEXT NOT NULL,
+              PRIMARY KEY (execution_id, branch_id)
             );
             CREATE TABLE IF NOT EXISTS children (
               invoke_id TEXT PRIMARY KEY,
@@ -639,9 +641,12 @@ class Store:
         )
         self.db.commit()
 
+    def get_wait(self, wait_id: str) -> sqlite3.Row | None:
+        return self.db.execute("SELECT * FROM waits WHERE wait_id = ?", (wait_id,)).fetchone()
+
     def pending_wait(self, execution_id: str) -> sqlite3.Row | None:
         return self.db.execute(
-            "SELECT * FROM waits WHERE execution_id = ? AND status = 'pending' LIMIT 1",
+            "SELECT * FROM waits WHERE execution_id = ? AND status = 'pending' ORDER BY rowid LIMIT 1",
             (execution_id,),
         ).fetchone()
 
@@ -667,22 +672,27 @@ class Store:
         self.db.commit()
         return row
 
-    def upsert_timer(self, execution_id: str, resume_at_ms: int) -> None:
+    def upsert_timer(self, execution_id: str, resume_at_ms: int, branch_id: str = "") -> None:
         self.db.execute(
-            """INSERT INTO timers(execution_id, resume_at_ms, status)
-               VALUES (?, ?, 'pending')
-               ON CONFLICT(execution_id) DO NOTHING""",
-            (execution_id, resume_at_ms),
+            """INSERT INTO timers(execution_id, branch_id, resume_at_ms, status)
+               VALUES (?, ?, ?, 'pending')
+               ON CONFLICT(execution_id, branch_id) DO NOTHING""",
+            (execution_id, branch_id, resume_at_ms),
         )
         self.db.commit()
 
-    def pending_timer(self, execution_id: str) -> sqlite3.Row | None:
+    def pending_timer(self, execution_id: str, branch_id: str = "") -> sqlite3.Row | None:
         return self.db.execute(
-            "SELECT resume_at_ms, status FROM timers WHERE execution_id = ?", (execution_id,)
+            """SELECT branch_id, resume_at_ms, status FROM timers
+               WHERE execution_id = ? AND branch_id = ? AND status = 'pending'""",
+            (execution_id, branch_id),
         ).fetchone()
 
-    def resolve_timer(self, execution_id: str) -> None:
-        self.db.execute("UPDATE timers SET status = 'resolved' WHERE execution_id = ?", (execution_id,))
+    def resolve_timer(self, execution_id: str, branch_id: str = "") -> None:
+        self.db.execute(
+            "UPDATE timers SET status = 'resolved' WHERE execution_id = ? AND branch_id = ?",
+            (execution_id, branch_id),
+        )
         self.db.commit()
 
     def _apply_create_child(self, op: dict[str, Any]) -> None:

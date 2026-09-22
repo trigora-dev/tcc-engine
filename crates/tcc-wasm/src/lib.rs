@@ -181,6 +181,7 @@ mod tests {
     use tcc_core::{Engine as NativeEngine, EngineOutcome, HostRequest, HostResponse};
     use tcc_ir::encode_artifact;
     use tcc_ir::gen::{generate, seed_count};
+    use tcc_ir::{ConstValue, Envelope, FuncId, Function, Instruction, Pc, Program};
     use tcc_state::Value;
 
     #[test]
@@ -334,6 +335,113 @@ mod tests {
     }
 
     #[test]
+    fn native_and_c_abi_agree_on_a_join() {
+        let instructions = vec![
+            Instruction::Fork {
+                count: 2,
+                join_pc: Pc(5),
+            },
+            Instruction::LoadConst {
+                value: ConstValue::String("a".into()),
+            },
+            Instruction::Effect,
+            Instruction::LoadConst {
+                value: ConstValue::String("b".into()),
+            },
+            Instruction::Effect,
+            Instruction::JoinAll,
+            Instruction::Return,
+        ];
+        let spans = vec![None; instructions.len()];
+        let artifact = Artifact {
+            envelope: Envelope {
+                artifact_hash: "join".into(),
+                frontend_id: "typescript".into(),
+                frontend_version: "0.0.0".into(),
+                language_semantics_version: "ts.subset.v1".into(),
+                engine_format_version: ENGINE_FORMAT_VERSION,
+                required_engine_features: tcc_ir::FeatureSet::current_engine(),
+                required_host_capabilities: tcc_ir::HostCapability::known()
+                    .iter()
+                    .map(|id| tcc_ir::HostCapability((*id).to_string()))
+                    .collect(),
+                runtime_modules: Vec::new(),
+            },
+            program: Program {
+                entry: FuncId(0),
+                functions: vec![Function {
+                    id: FuncId(0),
+                    name: "run".into(),
+                    param_count: 0,
+                    local_count: 0,
+                    instructions,
+                    spans,
+                }],
+            },
+        };
+        let json = encode_artifact(&artifact).unwrap();
+        let native_result = drive_native(artifact, "join-agree");
+        start(&json, "join-agree");
+        let cabi_result = drive_cabi();
+        assert_eq!(native_result, cabi_result);
+        assert!(cabi_result.contains("\"t\":\"array\""));
+    }
+
+    #[test]
+    fn native_and_c_abi_agree_on_a_race() {
+        let instructions = vec![
+            Instruction::Fork {
+                count: 2,
+                join_pc: Pc(5),
+            },
+            Instruction::LoadConst {
+                value: ConstValue::String("a".into()),
+            },
+            Instruction::Effect,
+            Instruction::LoadConst {
+                value: ConstValue::String("b".into()),
+            },
+            Instruction::Effect,
+            Instruction::JoinAny,
+            Instruction::Return,
+        ];
+        let spans = vec![None; instructions.len()];
+        let artifact = Artifact {
+            envelope: Envelope {
+                artifact_hash: "race".into(),
+                frontend_id: "typescript".into(),
+                frontend_version: "0.0.0".into(),
+                language_semantics_version: "ts.subset.v1".into(),
+                engine_format_version: ENGINE_FORMAT_VERSION,
+                required_engine_features: tcc_ir::FeatureSet::current_engine(),
+                required_host_capabilities: tcc_ir::HostCapability::known()
+                    .iter()
+                    .map(|id| tcc_ir::HostCapability((*id).to_string()))
+                    .collect(),
+                runtime_modules: Vec::new(),
+            },
+            program: Program {
+                entry: FuncId(0),
+                functions: vec![Function {
+                    id: FuncId(0),
+                    name: "run".into(),
+                    param_count: 0,
+                    local_count: 0,
+                    instructions,
+                    spans,
+                }],
+            },
+        };
+        let json = encode_artifact(&artifact).unwrap();
+        let native_result = drive_native(artifact, "race-agree");
+        start(&json, "race-agree");
+        let cabi_result = drive_cabi();
+        assert_eq!(native_result, cabi_result);
+        assert!(cabi_result.contains("\"t\":\"number\""));
+        assert!(!cabi_result.contains("\"t\":\"array\""));
+    }
+
+    #[test]
     fn generated_native_matches_c_abi() {
         for seed in 0..seed_count().min(16) {
             let artifact = generate(seed);
@@ -375,18 +483,20 @@ mod tests {
                     Some(tcc_state::PendingOp::Wait {
                         kind: tcc_state::WaitKind::Timer { .. },
                     }) => engine
-                        .apply_host_response(HostResponse::TimerFired)
+                        .apply_host_response(HostResponse::TimerFired { branch: None })
                         .unwrap(),
                     Some(tcc_state::PendingOp::Wait {
                         kind: tcc_state::WaitKind::Child { .. },
                     }) => engine
                         .apply_host_response(HostResponse::ChildResult {
                             value: Value::Number(7.0),
+                            branch: None,
                         })
                         .unwrap(),
                     _ => engine
                         .apply_host_response(HostResponse::EventPayload {
                             value: Value::String("ok".into()),
+                            branch: None,
                         })
                         .unwrap(),
                 },

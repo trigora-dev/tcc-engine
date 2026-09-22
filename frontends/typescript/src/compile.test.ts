@@ -413,3 +413,89 @@ export default async function run() {
   assert.equal(artifact.program.functions[0]?.instructions[1]?.op, "Effect");
   assert.equal(artifact.program.functions[0]?.instructions[4]?.op, "WaitForEvent");
 });
+
+test("lowers direct await Promise.all and rejects the other shapes", () => {
+  const source = `
+import { effect } from "@tcc-engine/primitives";
+export default async function run() {
+  const [a, b] = await Promise.all([
+    effect("a", async () => 1),
+    effect("b", async () => 2),
+  ]);
+  return a;
+}
+`;
+  const artifact = compile(source, { filename: "all.ts" });
+  const ops = artifact.program.functions[0]?.instructions.map((instruction) => instruction.op);
+  assert.ok(ops?.includes("Fork"));
+  assert.ok(ops?.includes("JoinAll"));
+  assert.ok(artifact.envelope.required_engine_features.includes("durable.concurrent_group"));
+  assert.throws(
+    () =>
+      compile(
+        `
+import { effect } from "@tcc-engine/primitives";
+export default async function run() {
+  const p = Promise.all([effect("a", async () => 1)]);
+  return p;
+}
+`,
+        { filename: "stored.ts" },
+      ),
+    /await Promise.all directly/,
+  );
+  assert.throws(
+    () =>
+      compile(
+        `
+export default async function run() {
+  return await Promise.race([1]);
+}
+`,
+        { filename: "race.ts" },
+      ),
+    /Promise.race branches must be durable calls/,
+  );
+  const race = compile(
+    `
+import { effect, sleep } from "@tcc-engine/primitives";
+export default async function run() {
+  return await Promise.race([
+    effect("charge", async () => 1),
+    sleep(5000),
+  ]);
+}
+`,
+    { filename: "race.ts" },
+  );
+  const raceOps = race.program.functions[0]?.instructions.map((instruction) => instruction.op);
+  assert.ok(raceOps?.includes("Fork"));
+  assert.ok(raceOps?.includes("JoinAny"));
+  assert.ok(!raceOps?.includes("JoinAll"));
+  assert.throws(
+    () =>
+      compile(
+        `
+import { effect } from "@tcc-engine/primitives";
+export default async function run() {
+  const p = Promise.race([effect("a", async () => 1)]);
+  return p;
+}
+`,
+        { filename: "stored-race.ts" },
+      ),
+    /await Promise.race directly/,
+  );
+  assert.throws(
+    () =>
+      compile(
+        `
+export default async function run() {
+  return await Promise.any([1]);
+}
+`,
+        { filename: "any.ts" },
+      ),
+    /Promise.any is not supported/,
+  );
+});

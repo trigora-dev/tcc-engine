@@ -246,6 +246,21 @@ fn instruction_to_json(instruction: &Instruction) -> Json {
         Instruction::Invoke => {
             map.insert("op".to_string(), Json::String("Invoke".to_string()));
         }
+        Instruction::Fork { count, join_pc } => {
+            map.insert("op".to_string(), Json::String("Fork".to_string()));
+            map.insert("count".to_string(), Json::Number(*count as f64));
+            map.insert("join_pc".to_string(), Json::Number(join_pc.0 as f64));
+        }
+        Instruction::JoinAll => {
+            map.insert("op".to_string(), Json::String("JoinAll".to_string()));
+        }
+        Instruction::JoinAny => {
+            map.insert("op".to_string(), Json::String("JoinAny".to_string()));
+        }
+        Instruction::ArrayIndex { index } => {
+            map.insert("op".to_string(), Json::String("ArrayIndex".to_string()));
+            map.insert("index".to_string(), Json::Number(*index as f64));
+        }
         Instruction::Throw => {
             map.insert("op".to_string(), Json::String("Throw".to_string()));
         }
@@ -430,6 +445,15 @@ fn json_to_instruction(json: &Json) -> Result<Instruction, IrError> {
         "Sleep" => Ok(Instruction::Sleep),
         "WaitForEvent" => Ok(Instruction::WaitForEvent),
         "Invoke" => Ok(Instruction::Invoke),
+        "Fork" => Ok(Instruction::Fork {
+            count: Json::get(map, "count")?.as_u32()?,
+            join_pc: Pc(Json::get(map, "join_pc")?.as_u32()?),
+        }),
+        "JoinAll" => Ok(Instruction::JoinAll),
+        "JoinAny" => Ok(Instruction::JoinAny),
+        "ArrayIndex" => Ok(Instruction::ArrayIndex {
+            index: Json::get(map, "index")?.as_u32()?,
+        }),
         "Throw" => Ok(Instruction::Throw),
         "PushTry" => Ok(Instruction::PushTry {
             catch: Pc(Json::get(map, "catch")?.as_u32()?),

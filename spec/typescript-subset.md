@@ -21,6 +21,7 @@ Authoring uses resolved imports from `@tcc-engine/primitives` (engine-native) or
 - Property read `obj.key`
 - `===` / `!==`, unary `!`, numeric `<` `<=` `>` `>=`
 - Sequential and branched mixes of durable operations
+- Direct `await Promise.all([effect | waitForEvent | sleep | invoke, ...])` and `await Promise.race([...])` of at most 32 branches, including `return await` of either and an outer use of that await. Array destructuring is supported only for `await Promise.all(...)`. See [concurrency.md](concurrency.md).
 
 Effect keys, event names, and invoke names are string literals. Effect callbacks are not compiled into the artifact.
 
@@ -28,7 +29,7 @@ Effect keys, event names, and invoke names are string literals. Effect callbacks
 
 - Effect: `{execution_id}:{key}`. Re-executing the same instruction with the same key skips a completed journal entry.
 - Wait: `{execution_id}:{name}:{correlation}:{pc}` (empty correlation is an empty field)
-- Child invoke: `{parent}:invoke:{pc}`
+- Child invoke: `{parent}:invoke:{pc}` outside a join. Inside `Promise.all` or `Promise.race`, wait, timer, and child ids are the branch id from [concurrency.md](concurrency.md).
 
 ## Not supported
 
@@ -36,6 +37,6 @@ Effect keys, event names, and invoke names are string literals. Effect callbacks
 - Labeled `break` / `continue`, `for-in` / `for-of`
 - Closures, nested functions, `this`, classes
 - `++` / `--`, arithmetic, logical `&&` / `||` (use nested `if`)
-- Destructuring, rest/spread, optional chaining, `new`
-- `Promise.all` / `Promise.race`
+- Destructuring other than `const [a, b] = await Promise.all(...)`, rest/spread, optional chaining, `new`
+- Stored promises, `Promise.any` / `Promise.allSettled`, spread or dynamic `Promise.all` / `Promise.race` arguments
 - Parameters on the entry function

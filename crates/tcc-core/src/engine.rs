@@ -2,10 +2,11 @@ use std::collections::HashMap;
 
 use tcc_ir::{
     analyze_program, validate, Artifact, ConstValue, EngineCaps, FuncId, FunctionLiveness,
-    Instruction, ENGINE_FORMAT_VERSION,
+    Instruction, Pc, ENGINE_FORMAT_VERSION, MAX_JOIN_BRANCHES,
 };
 use tcc_state::{
-    persist_intent, Continuation, ContinuationStatus, PendingOp, PersistKind, Value, WaitKind,
+    persist_intent, BranchOp, BranchPhase, Continuation, ContinuationStatus, JoinBranch, JoinKind,
+    JoinReentry, JoinState, JoinStatus, PendingOp, PersistKind, Value, WaitKind,
 };
 
 use crate::error::CoreError;
@@ -13,6 +14,8 @@ use crate::protocol::{
     ChildSpec, EffectRecord, EffectStatus, HostRequest, HostResponse, WaitRegistration,
 };
 
+/// Checkpoint requests carry a continuation delta, so this enum stays large.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineOutcome {
     Host(HostRequest),
@@ -130,24 +133,29 @@ impl Engine {
                 HostResponse::PersistConfirmed { revision },
             ) => {
                 self.continuation.revision = revision;
-                self.continuation.status = match self.continuation.pending {
-                    Some(_) => ContinuationStatus::Suspended,
-                    None if matches!(
-                        self.continuation.status,
-                        ContinuationStatus::Completed
-                            | ContinuationStatus::Failed
-                            | ContinuationStatus::Cancelled
-                    ) =>
-                    {
-                        self.continuation.status
-                    }
-                    None => ContinuationStatus::Runnable,
-                };
-                self.confirmed = Some(self.continuation.clone());
                 match kind {
                     PersistKind::Snapshot => self.deltas_since_snapshot = 0,
                     PersistKind::Delta => self.deltas_since_snapshot += 1,
                 }
+                if self
+                    .continuation
+                    .join
+                    .as_ref()
+                    .is_some_and(|join| join.state == JoinStatus::Failed)
+                {
+                    self.confirmed = Some(self.continuation.clone());
+                    self.throw_join_failure()?;
+                    return Ok(());
+                }
+                if self.continuation.join.as_ref().is_some_and(|join| {
+                    join.kind == JoinKind::Any && join.state == JoinStatus::Succeeded
+                }) {
+                    self.confirmed = Some(self.continuation.clone());
+                    self.publish_race_success()?;
+                    return Ok(());
+                }
+                self.continuation.status = self.status_after_checkpoint();
+                self.confirmed = Some(self.continuation.clone());
                 Ok(())
             }
             (HostRequest::PersistCheckpoint { .. }, HostResponse::Ack) => Ok(()),
@@ -179,6 +187,9 @@ impl Engine {
                 HostResponse::EffectFailed { message },
             ) => {
                 self.continuation.pending = None;
+                if self.race_is_active() {
+                    self.advance_pc()?;
+                }
                 self.outstanding = Some(HostRequest::PersistEffect {
                     record: EffectRecord {
                         key,
@@ -195,7 +206,28 @@ impl Engine {
                         Some(Value::String(text)) => text,
                         _ => "effect failed".to_string(),
                     };
+                    if self.join_is_active() {
+                        if self.race_is_active() {
+                            self.record_race_branch_failure(message);
+                            self.after_race_branch_progress();
+                        } else {
+                            self.fail_active_branch(message);
+                            self.queue_persist();
+                        }
+                        return Ok(());
+                    }
                     return self.throw_value(Value::String(message)).map(|_| ());
+                }
+                if self.join_is_active() {
+                    let value = self.pop()?;
+                    self.complete_planned_branch(value)?;
+                    if self.race_is_active() {
+                        self.after_race_branch_progress();
+                    } else {
+                        self.continuation.status = self.status_after_checkpoint();
+                        self.queue_persist();
+                    }
+                    return Ok(());
                 }
                 self.queue_persist();
                 Ok(())
@@ -206,6 +238,17 @@ impl Engine {
                 | HostRequest::CreateChild { .. },
                 HostResponse::Ack,
             ) => {
+                if self.join_is_active() {
+                    self.note_branch_registered();
+                    self.continuation.pending = None;
+                    if self.race_is_active() {
+                        self.after_race_branch_progress();
+                    } else {
+                        self.continuation.status = self.status_after_checkpoint();
+                        self.queue_persist();
+                    }
+                    return Ok(());
+                }
                 self.continuation.status = ContinuationStatus::Suspended;
                 self.queue_persist();
                 Ok(())
@@ -225,6 +268,14 @@ impl Engine {
     }
 
     fn apply_wake(&mut self, response: HostResponse) -> Result<(), CoreError> {
+        if self.continuation.join.is_some() {
+            return self.apply_join_wake(response);
+        }
+        if response_branch(&response).is_some() {
+            return Err(CoreError::TypeError(
+                "branch is only valid for a concurrent group".into(),
+            ));
+        }
         match (
             &self.continuation.status,
             &self.continuation.pending,
@@ -235,7 +286,7 @@ impl Engine {
                 Some(PendingOp::Wait {
                     kind: WaitKind::Event { .. },
                 }),
-                HostResponse::EventPayload { value },
+                HostResponse::EventPayload { value, .. },
             ) => {
                 self.continuation.stack.push(value);
                 self.clear_wait_and_persist();
@@ -246,7 +297,7 @@ impl Engine {
                 Some(PendingOp::Wait {
                     kind: WaitKind::Timer { .. },
                 }),
-                HostResponse::TimerFired,
+                HostResponse::TimerFired { .. },
             ) => {
                 self.continuation.stack.push(Value::Undefined);
                 self.clear_wait_and_persist();
@@ -257,7 +308,7 @@ impl Engine {
                 Some(PendingOp::Wait {
                     kind: WaitKind::Child { .. },
                 }),
-                HostResponse::ChildResult { value },
+                HostResponse::ChildResult { value, .. },
             ) => {
                 self.continuation.stack.push(value);
                 self.clear_wait_and_persist();
@@ -314,6 +365,39 @@ impl Engine {
     pub fn run_until_host(&mut self, budget: u32) -> EngineOutcome {
         if let Some(request) = &self.outstanding {
             return EngineOutcome::Host(request.clone());
+        }
+
+        if self
+            .continuation
+            .join
+            .as_ref()
+            .is_some_and(|join| join.state == JoinStatus::Failed)
+        {
+            if let Err(err) = self.throw_join_failure() {
+                self.continuation.status = ContinuationStatus::Failed;
+                return EngineOutcome::Failed {
+                    message: err.to_string(),
+                };
+            }
+            if let Some(request) = self.outstanding.clone() {
+                return EngineOutcome::Host(request);
+            }
+        }
+        if self
+            .continuation
+            .join
+            .as_ref()
+            .is_some_and(|join| join.kind == JoinKind::Any && join.state == JoinStatus::Succeeded)
+        {
+            if let Err(err) = self.publish_race_success() {
+                self.continuation.status = ContinuationStatus::Failed;
+                return EngineOutcome::Failed {
+                    message: err.to_string(),
+                };
+            }
+            if let Some(request) = self.outstanding.clone() {
+                return EngineOutcome::Host(request);
+            }
         }
 
         match self.continuation.status {
@@ -499,6 +583,10 @@ impl Engine {
             Instruction::Sleep => self.yield_sleep(),
             Instruction::WaitForEvent => self.yield_wait(),
             Instruction::Invoke => self.yield_invoke(),
+            Instruction::Fork { count, join_pc } => self.begin_join(count, join_pc),
+            Instruction::JoinAll => self.finish_join(),
+            Instruction::JoinAny => self.finish_any(),
+            Instruction::ArrayIndex { index } => self.array_index(index),
             Instruction::Call { .. } => {
                 let frame = self.frame()?;
                 Err(CoreError::UnknownInstruction {
@@ -528,6 +616,9 @@ impl Engine {
 
     fn yield_effect(&mut self) -> Result<Option<EngineOutcome>, CoreError> {
         let key = expect_string(self.pop()?)?;
+        if self.join_is_active() {
+            self.bind_planned_branch(BranchOp::Effect { key: key.clone() })?;
+        }
         let execution_id = self.continuation.execution_id.clone();
         let idempotency_key = format!("{execution_id}:{key}");
         self.continuation.pending = Some(PendingOp::Effect {
@@ -545,23 +636,37 @@ impl Engine {
     fn yield_sleep(&mut self) -> Result<Option<EngineOutcome>, CoreError> {
         let duration = expect_number(self.pop()?)?;
         let resume_at_ms = duration.max(0.0) as u64;
+        let branch = if self.join_is_active() {
+            Some(self.bind_planned_branch(BranchOp::Timer { resume_at_ms })?)
+        } else {
+            None
+        };
         self.advance_pc()?;
         self.continuation.pending = Some(PendingOp::Wait {
             kind: WaitKind::Timer { resume_at_ms },
         });
-        let request = HostRequest::RegisterTimer { resume_at_ms };
+        let request = HostRequest::RegisterTimer {
+            resume_at_ms,
+            branch,
+        };
         self.outstanding = Some(request.clone());
         Ok(Some(EngineOutcome::Host(request)))
     }
 
     fn yield_wait(&mut self) -> Result<Option<EngineOutcome>, CoreError> {
         let event_name = expect_string(self.pop()?)?;
-        let wait_id = event_wait_id(
-            &self.continuation.execution_id,
-            &event_name,
-            None,
-            self.frame()?.pc,
-        );
+        let wait_id = if self.join_is_active() {
+            self.bind_planned_branch(BranchOp::Event {
+                event_name: event_name.clone(),
+            })?
+        } else {
+            event_wait_id(
+                &self.continuation.execution_id,
+                &event_name,
+                None,
+                self.frame()?.pc,
+            )
+        };
         self.advance_pc()?;
         self.continuation.pending = Some(PendingOp::Wait {
             kind: WaitKind::Event {
@@ -584,9 +689,21 @@ impl Engine {
 
     fn yield_invoke(&mut self) -> Result<Option<EngineOutcome>, CoreError> {
         let program_name = expect_string(self.pop()?)?;
-        let pc = self.frame()?.pc;
-        let invoke_id = format!("{}:invoke:{}", self.continuation.execution_id, pc);
-        let child_execution_id = format!("child:{invoke_id}");
+        let (invoke_id, child_execution_id) = if self.join_is_active() {
+            let invoke_id = self.next_planned_branch_id()?;
+            let child_execution_id = format!("child:{invoke_id}");
+            self.bind_planned_branch(BranchOp::Child {
+                program_name: program_name.clone(),
+                invoke_id: invoke_id.clone(),
+                child_execution_id: child_execution_id.clone(),
+            })?;
+            (invoke_id, child_execution_id)
+        } else {
+            let pc = self.frame()?.pc;
+            let invoke_id = format!("{}:invoke:{}", self.continuation.execution_id, pc);
+            let child_execution_id = format!("child:{invoke_id}");
+            (invoke_id, child_execution_id)
+        };
         self.advance_pc()?;
         self.continuation.pending = Some(PendingOp::Wait {
             kind: WaitKind::Child {
@@ -685,6 +802,527 @@ impl Engine {
     fn set_pc(&mut self, pc: u32) -> Result<(), CoreError> {
         self.frame_mut()?.pc = pc;
         Ok(())
+    }
+
+    fn begin_join(&mut self, count: u32, join_pc: Pc) -> Result<Option<EngineOutcome>, CoreError> {
+        if self.continuation.join.is_some() {
+            return Err(CoreError::TypeError(
+                "nested concurrent groups are not supported".into(),
+            ));
+        }
+        if count == 0 || count as usize > MAX_JOIN_BRANCHES {
+            return Err(CoreError::TypeError(format!(
+                "join branch count {count} exceeds {MAX_JOIN_BRANCHES}"
+            )));
+        }
+        let kind = self.join_kind_at(join_pc)?;
+        let site = self.frame()?.pc;
+        let reentry = self
+            .continuation
+            .reentries
+            .iter()
+            .find(|entry| entry.site == site)
+            .map(|entry| entry.next)
+            .unwrap_or(0);
+        let execution_id = self.continuation.execution_id.clone();
+        let instance = format!("{execution_id}:{site}:{reentry}");
+        let branches = (0..count)
+            .map(|index| JoinBranch {
+                index,
+                branch_id: format!("{instance}:{index}"),
+                op: None,
+                phase: BranchPhase::Planned,
+                result: None,
+                error: None,
+            })
+            .collect();
+        self.continuation.join = Some(JoinState {
+            kind,
+            site,
+            reentry,
+            join_pc: join_pc.0,
+            state: JoinStatus::Active,
+            winner_branch: None,
+            failure_branch: None,
+            branches,
+        });
+        self.advance_pc().map(|()| None)
+    }
+
+    fn finish_join(&mut self) -> Result<Option<EngineOutcome>, CoreError> {
+        let join = self
+            .continuation
+            .join
+            .clone()
+            .ok_or_else(|| CoreError::TypeError("JoinAll without Fork".into()))?;
+        if join.kind != JoinKind::All {
+            return Err(CoreError::TypeError("JoinAll on a race".into()));
+        }
+        if join.state != JoinStatus::Active
+            || join
+                .branches
+                .iter()
+                .any(|branch| branch.phase != BranchPhase::Completed)
+        {
+            self.continuation.status = ContinuationStatus::Suspended;
+            return Ok(Some(EngineOutcome::Suspended));
+        }
+        let items = join
+            .branches
+            .iter()
+            .map(|branch| branch.result.clone().unwrap_or(Value::Undefined))
+            .collect();
+        self.record_reentry(join.site, join.reentry);
+        if let Some(join) = self.continuation.join.as_mut() {
+            join.state = JoinStatus::Succeeded;
+        }
+        self.continuation.join = None;
+        self.continuation.stack.push(Value::Array(items));
+        self.advance_pc().map(|()| None)
+    }
+
+    fn finish_any(&mut self) -> Result<Option<EngineOutcome>, CoreError> {
+        let join = self
+            .continuation
+            .join
+            .clone()
+            .ok_or_else(|| CoreError::TypeError("JoinAny without Fork".into()))?;
+        if join.kind != JoinKind::Any {
+            return Err(CoreError::TypeError("JoinAny on an all-join".into()));
+        }
+        if join.state == JoinStatus::Succeeded {
+            self.publish_race_success()?;
+            return Ok(None);
+        }
+        if join.state == JoinStatus::Failed {
+            self.throw_join_failure()?;
+            if let Some(request) = self.outstanding.clone() {
+                return Ok(Some(EngineOutcome::Host(request)));
+            }
+            return Ok(None);
+        }
+        if join
+            .branches
+            .iter()
+            .any(|branch| branch.phase == BranchPhase::Planned)
+        {
+            return Err(CoreError::TypeError(
+                "JoinAny before every branch is registered".into(),
+            ));
+        }
+        if join
+            .branches
+            .iter()
+            .any(|branch| matches!(branch.phase, BranchPhase::Completed | BranchPhase::Failed))
+        {
+            self.settle_race();
+            self.queue_persist();
+            return Ok(Some(EngineOutcome::Host(
+                self.outstanding.clone().expect("just queued"),
+            )));
+        }
+        self.continuation.status = ContinuationStatus::Suspended;
+        Ok(Some(EngineOutcome::Suspended))
+    }
+
+    fn join_kind_at(&self, join_pc: Pc) -> Result<JoinKind, CoreError> {
+        let frame = self.frame()?;
+        let function = self
+            .artifact
+            .function(FuncId(frame.func_id))
+            .ok_or(CoreError::NoFrame)?;
+        match function.instructions.get(join_pc.0 as usize) {
+            Some(Instruction::JoinAll) => Ok(JoinKind::All),
+            Some(Instruction::JoinAny) => Ok(JoinKind::Any),
+            _ => Err(CoreError::TypeError(
+                "join_pc must be JoinAll or JoinAny".into(),
+            )),
+        }
+    }
+
+    fn race_is_active(&self) -> bool {
+        self.continuation
+            .join
+            .as_ref()
+            .is_some_and(|join| join.kind == JoinKind::Any && join.state == JoinStatus::Active)
+    }
+
+    fn after_race_branch_progress(&mut self) {
+        let planned = self.continuation.join.as_ref().is_some_and(|join| {
+            join.branches
+                .iter()
+                .any(|branch| branch.phase == BranchPhase::Planned)
+        });
+        if planned {
+            self.continuation.status = ContinuationStatus::Runnable;
+            self.queue_persist();
+            return;
+        }
+        let ready = self.continuation.join.as_ref().is_some_and(|join| {
+            join.branches
+                .iter()
+                .any(|branch| matches!(branch.phase, BranchPhase::Completed | BranchPhase::Failed))
+        });
+        if ready {
+            self.settle_race();
+            self.queue_persist();
+            return;
+        }
+        self.continuation.status = ContinuationStatus::Suspended;
+        self.queue_persist();
+    }
+
+    fn settle_race(&mut self) {
+        let Some(join) = self.continuation.join.as_mut() else {
+            return;
+        };
+        if join.kind != JoinKind::Any || join.state != JoinStatus::Active {
+            return;
+        }
+        let winner = join
+            .branches
+            .iter()
+            .filter(|branch| matches!(branch.phase, BranchPhase::Completed | BranchPhase::Failed))
+            .map(|branch| branch.index)
+            .min();
+        let Some(index) = winner else {
+            return;
+        };
+        let failed = join
+            .branches
+            .iter()
+            .any(|branch| branch.index == index && branch.phase == BranchPhase::Failed);
+        for branch in &mut join.branches {
+            if branch.index != index
+                && matches!(branch.phase, BranchPhase::Planned | BranchPhase::Registered)
+            {
+                branch.phase = BranchPhase::Detached;
+            }
+        }
+        join.winner_branch = Some(index);
+        if failed {
+            join.state = JoinStatus::Failed;
+            join.failure_branch = Some(index);
+        } else {
+            join.state = JoinStatus::Succeeded;
+            join.failure_branch = None;
+        }
+        self.continuation.pending = None;
+        self.continuation.status = ContinuationStatus::Runnable;
+    }
+
+    fn publish_race_success(&mut self) -> Result<(), CoreError> {
+        let join = self
+            .continuation
+            .join
+            .clone()
+            .ok_or_else(|| CoreError::TypeError("no race winner".into()))?;
+        let value = join
+            .winner_branch
+            .and_then(|index| {
+                join.branches
+                    .iter()
+                    .find(|branch| branch.index == index)
+                    .and_then(|branch| branch.result.clone())
+            })
+            .unwrap_or(Value::Undefined);
+        self.record_reentry(join.site, join.reentry);
+        self.continuation.join = None;
+        self.continuation.stack.push(value);
+        self.continuation.status = ContinuationStatus::Runnable;
+        if self.frame()?.pc == join.join_pc {
+            self.advance_pc()?;
+        }
+        Ok(())
+    }
+
+    fn record_race_branch_failure(&mut self, message: String) {
+        let Some(join) = self.continuation.join.as_mut() else {
+            return;
+        };
+        if let Some(branch) = join
+            .branches
+            .iter_mut()
+            .find(|branch| branch.phase == BranchPhase::Planned && branch.op.is_some())
+        {
+            branch.phase = BranchPhase::Failed;
+            branch.error = Some(message);
+        }
+    }
+
+    fn array_index(&mut self, index: u32) -> Result<Option<EngineOutcome>, CoreError> {
+        let top = self
+            .continuation
+            .stack
+            .last()
+            .cloned()
+            .ok_or(CoreError::StackUnderflow)?;
+        let Value::Array(items) = top else {
+            return Err(CoreError::TypeError("ArrayIndex requires an array".into()));
+        };
+        let value = items
+            .get(index as usize)
+            .cloned()
+            .unwrap_or(Value::Undefined);
+        self.continuation.stack.push(value);
+        self.advance_pc().map(|()| None)
+    }
+
+    fn join_is_active(&self) -> bool {
+        self.continuation
+            .join
+            .as_ref()
+            .is_some_and(|join| join.state == JoinStatus::Active)
+    }
+
+    fn next_planned_branch_id(&self) -> Result<String, CoreError> {
+        let join = self
+            .continuation
+            .join
+            .as_ref()
+            .ok_or_else(|| CoreError::TypeError("durable op outside a join".into()))?;
+        join.branches
+            .iter()
+            .find(|branch| branch.phase == BranchPhase::Planned && branch.op.is_none())
+            .map(|branch| branch.branch_id.clone())
+            .ok_or_else(|| CoreError::TypeError("no planned join branch".into()))
+    }
+
+    fn bind_planned_branch(&mut self, op: BranchOp) -> Result<String, CoreError> {
+        let branch_id = self.next_planned_branch_id()?;
+        let join = self.continuation.join.as_mut().expect("join");
+        let branch = join
+            .branches
+            .iter_mut()
+            .find(|branch| branch.branch_id == branch_id)
+            .expect("planned branch");
+        branch.op = Some(op);
+        Ok(branch_id)
+    }
+
+    fn note_branch_registered(&mut self) {
+        let Some(join) = self.continuation.join.as_mut() else {
+            return;
+        };
+        if let Some(branch) = join
+            .branches
+            .iter_mut()
+            .find(|branch| branch.phase == BranchPhase::Planned && branch.op.is_some())
+        {
+            branch.phase = BranchPhase::Registered;
+        }
+    }
+
+    fn complete_planned_branch(&mut self, value: Value) -> Result<(), CoreError> {
+        let join = self
+            .continuation
+            .join
+            .as_mut()
+            .ok_or_else(|| CoreError::TypeError("no join".into()))?;
+        let branch = join
+            .branches
+            .iter_mut()
+            .find(|branch| branch.phase == BranchPhase::Planned && branch.op.is_some())
+            .ok_or_else(|| CoreError::TypeError("no planned branch to complete".into()))?;
+        branch.phase = BranchPhase::Completed;
+        branch.result = Some(value);
+        Ok(())
+    }
+
+    fn fail_active_branch(&mut self, message: String) {
+        let Some(join) = self.continuation.join.as_mut() else {
+            return;
+        };
+        let index = join
+            .branches
+            .iter()
+            .find(|branch| branch.phase == BranchPhase::Planned && branch.op.is_some())
+            .map(|branch| branch.index);
+        if let Some(index) = index {
+            if let Some(branch) = join
+                .branches
+                .iter_mut()
+                .find(|branch| branch.index == index)
+            {
+                branch.phase = BranchPhase::Failed;
+                branch.error = Some(message);
+            }
+            join.state = JoinStatus::Failed;
+            join.failure_branch = Some(index);
+            for branch in &mut join.branches {
+                if branch.index != index
+                    && matches!(branch.phase, BranchPhase::Planned | BranchPhase::Registered)
+                {
+                    branch.phase = BranchPhase::Detached;
+                }
+            }
+        }
+        self.continuation.pending = None;
+        self.continuation.status = ContinuationStatus::Runnable;
+    }
+
+    fn status_after_checkpoint(&self) -> ContinuationStatus {
+        if matches!(
+            self.continuation.status,
+            ContinuationStatus::Completed
+                | ContinuationStatus::Failed
+                | ContinuationStatus::Cancelled
+        ) {
+            return self.continuation.status;
+        }
+        if self.continuation.pending.is_some() {
+            return ContinuationStatus::Suspended;
+        }
+        if let Some(join) = &self.continuation.join {
+            if join.state == JoinStatus::Active {
+                let planned = join
+                    .branches
+                    .iter()
+                    .any(|branch| branch.phase == BranchPhase::Planned);
+                let waiting = join
+                    .branches
+                    .iter()
+                    .any(|branch| branch.phase == BranchPhase::Registered);
+                if waiting && !planned {
+                    return ContinuationStatus::Suspended;
+                }
+            }
+        }
+        ContinuationStatus::Runnable
+    }
+
+    fn record_reentry(&mut self, site: u32, reentry: u32) {
+        if let Some(entry) = self
+            .continuation
+            .reentries
+            .iter_mut()
+            .find(|entry| entry.site == site)
+        {
+            entry.next = reentry.saturating_add(1);
+        } else {
+            self.continuation.reentries.push(JoinReentry {
+                site,
+                next: reentry.saturating_add(1),
+            });
+        }
+    }
+
+    fn throw_join_failure(&mut self) -> Result<(), CoreError> {
+        let join = self
+            .continuation
+            .join
+            .clone()
+            .ok_or_else(|| CoreError::TypeError("no failed join".into()))?;
+        let message = join
+            .failure_branch
+            .and_then(|index| {
+                join.branches
+                    .iter()
+                    .find(|branch| branch.index == index)
+                    .and_then(|branch| branch.error.clone())
+            })
+            .unwrap_or_else(|| "branch failed".to_string());
+        self.record_reentry(join.site, join.reentry);
+        self.continuation.join = None;
+        let handler = !self.continuation.try_stack.is_empty();
+        self.throw_value(Value::String(message))?;
+        if handler && self.outstanding.is_none() {
+            self.queue_persist();
+        }
+        Ok(())
+    }
+
+    fn apply_join_wake(&mut self, response: HostResponse) -> Result<(), CoreError> {
+        if matches!(response, HostResponse::Cancel) {
+            self.continuation.status = ContinuationStatus::Cancelled;
+            self.continuation.pending = None;
+            self.continuation.join = None;
+            self.queue_persist();
+            return Ok(());
+        }
+        let active = self
+            .continuation
+            .join
+            .as_ref()
+            .is_some_and(|join| join.state == JoinStatus::Active);
+        let branch = response_branch(&response);
+        let Some(branch_id) = branch else {
+            if active {
+                return Err(CoreError::TypeError("join delivery requires branch".into()));
+            }
+            return Ok(());
+        };
+        if !active {
+            return Ok(());
+        }
+        let value = match response {
+            HostResponse::EventPayload { value, .. } => value,
+            HostResponse::TimerFired { .. } => Value::Undefined,
+            HostResponse::ChildResult { value, .. } => value,
+            other => {
+                return Err(CoreError::UnexpectedHostResponse {
+                    expected: "join wake",
+                    got: other.kind_name(),
+                });
+            }
+        };
+        self.complete_registered_branch(&branch_id, value)
+    }
+
+    fn complete_registered_branch(
+        &mut self,
+        branch_id: &str,
+        value: Value,
+    ) -> Result<(), CoreError> {
+        let join = self
+            .continuation
+            .join
+            .as_mut()
+            .ok_or_else(|| CoreError::TypeError("no join".into()))?;
+        let Some(branch) = join
+            .branches
+            .iter_mut()
+            .find(|branch| branch.branch_id == branch_id)
+        else {
+            return Err(CoreError::TypeError(format!(
+                "unknown branch `{branch_id}`"
+            )));
+        };
+        if branch.phase != BranchPhase::Registered {
+            return Ok(());
+        }
+        branch.phase = BranchPhase::Completed;
+        branch.result = Some(value);
+        self.continuation.pending = None;
+        if self
+            .continuation
+            .join
+            .as_ref()
+            .is_some_and(|join| join.kind == JoinKind::Any && join.state == JoinStatus::Active)
+        {
+            self.after_race_branch_progress();
+            return Ok(());
+        }
+        self.continuation.status = ContinuationStatus::Runnable;
+        let waiting = self.continuation.join.as_ref().is_some_and(|join| {
+            join.branches
+                .iter()
+                .any(|branch| branch.phase == BranchPhase::Registered)
+        });
+        if waiting {
+            self.continuation.status = ContinuationStatus::Suspended;
+        }
+        self.queue_persist();
+        Ok(())
+    }
+}
+
+fn response_branch(response: &HostResponse) -> Option<String> {
+    match response {
+        HostResponse::EventPayload { branch, .. }
+        | HostResponse::TimerFired { branch }
+        | HostResponse::ChildResult { branch, .. } => branch.clone(),
+        _ => None,
     }
 }
 

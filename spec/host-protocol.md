@@ -4,6 +4,8 @@ The engine emits host requests and applies host responses. Bindings present this
 
 Every encoded host request, outcome, and response JSON object must include `host_protocol_version`. The current version is `1`. Absence is a malformed message (`MissingHostProtocolVersion`), not an implicit v1. A present value other than `1` is `UnsupportedHostProtocol`. Bindings stamp `1` when wrapping host objects that omit it; the WASM C ABI and `decode_response` do not.
 
+Version `1` is the finalized protocol. It covers a single outstanding operation and a concurrent group ([concurrency.md](concurrency.md)). There is no version `2`. Join deliveries that omit `branch` are rejected. Non-join deliveries omit `branch`. Missing `branch` does not mean branch 0.
+
 The engine does not depend on a particular database, operating system, or cloud provider.
 
 Host conformance for this protocol is the named kit in [host-conformance-v1.md](host-conformance-v1.md).
@@ -23,7 +25,7 @@ Host conformance for this protocol is the named kit in [host-conformance-v1.md](
 | `persist_checkpoint` | Commit continuation state. Reply with `persist_confirmed` (including `revision`) or `ack` |
 | `run_effect` | Perform the external operation using the supplied identity |
 | `persist_effect` | Persist the effect journal record |
-| `register_timer` | Arrange a wake at `resume_at_ms` |
+| `register_timer` | Arrange a wake at `resume_at_ms`. Inside a join, `branch` is the timer id |
 | `register_wait` | Persist the event wait. Wake on a matching event or timeout |
 | `create_child` | Create the child execution named by `program_name`. Wake the parent when the child is terminal |
 | `fetch_artifact` | Return the artifact for the given hash |
@@ -72,9 +74,9 @@ The host owns durable state. The engine’s in-memory `outstanding` request is n
 | `persist_confirmed` | Checkpoint committed at `revision` |
 | `effect_result` | Effect succeeded |
 | `effect_failed` | Effect failed |
-| `event_payload` | Matching event delivered. Valid when the continuation is `suspended` on an event wait and no persist request is outstanding |
-| `timer_fired` | Matching timer delivered. Valid when the continuation is `suspended` on a timer wait |
-| `child_result` | Child execution completed. Valid when the continuation is `suspended` on a child wait |
+| `event_payload` | Matching event delivered. `value` plus optional `branch`. Required when the continuation is in a concurrent group. One delivery resolves one wait, in registration order |
+| `timer_fired` | Matching timer delivered. Optional `branch`, required inside a join. Two sleeps are two timers even when `resume_at_ms` matches |
+| `child_result` | Child execution completed. `value` plus optional `branch`, required inside a join |
 | `cancel` | Host-delivered cancellation. Takes effect at a durable boundary; does not interrupt an in-flight `run_effect` |
 | `artifact` | Requested artifact identity |
 

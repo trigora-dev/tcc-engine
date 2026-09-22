@@ -44,18 +44,20 @@ fn drive(engine: &mut Engine) -> Value {
                 Some(tcc_state::PendingOp::Wait {
                     kind: tcc_state::WaitKind::Timer { .. },
                 }) => engine
-                    .apply_host_response(HostResponse::TimerFired)
+                    .apply_host_response(HostResponse::TimerFired { branch: None })
                     .unwrap(),
                 Some(tcc_state::PendingOp::Wait {
                     kind: tcc_state::WaitKind::Child { .. },
                 }) => engine
                     .apply_host_response(HostResponse::ChildResult {
                         value: Value::Number(7.0),
+                        branch: None,
                     })
                     .unwrap(),
                 _ => engine
                     .apply_host_response(HostResponse::EventPayload {
                         value: Value::String("ok".into()),
+                        branch: None,
                     })
                     .unwrap(),
             },

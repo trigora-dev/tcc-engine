@@ -45,6 +45,75 @@ pub enum WaitKind {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BranchPhase {
+    Planned,
+    Registered,
+    Completed,
+    Failed,
+    Detached,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BranchOp {
+    Effect {
+        key: String,
+    },
+    Timer {
+        resume_at_ms: u64,
+    },
+    Event {
+        event_name: String,
+    },
+    Child {
+        program_name: String,
+        invoke_id: String,
+        child_execution_id: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinKind {
+    All,
+    Any,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinStatus {
+    Active,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct JoinBranch {
+    pub index: u32,
+    pub branch_id: String,
+    pub op: Option<BranchOp>,
+    pub phase: BranchPhase,
+    pub result: Option<Value>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct JoinState {
+    pub kind: JoinKind,
+    pub site: u32,
+    pub reentry: u32,
+    pub join_pc: u32,
+    pub state: JoinStatus,
+    pub winner_branch: Option<u32>,
+    pub failure_branch: Option<u32>,
+    pub branches: Vec<JoinBranch>,
+}
+
+/// Next reentry to use when `Fork` at `site` runs again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JoinReentry {
+    pub site: u32,
+    pub next: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PendingOp {
     Effect {
@@ -69,6 +138,8 @@ pub struct Continuation {
     pub pending: Option<PendingOp>,
     pub result: Option<Value>,
     pub try_stack: Vec<TryHandler>,
+    pub join: Option<JoinState>,
+    pub reentries: Vec<JoinReentry>,
 }
 
 impl Continuation {
@@ -98,6 +169,8 @@ impl Continuation {
             pending: None,
             result: None,
             try_stack: Vec::new(),
+            join: None,
+            reentries: Vec::new(),
         }
     }
 }

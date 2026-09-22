@@ -37,5 +37,5 @@ Authoring uses resolved imports from `tcc_engine.primitives` (engine-native) or 
 - Arithmetic, `and` / `or` (use nested `if`)
 - Collection truthiness (`if []:` / `if {}:`)
 - Integers that are not exact binary64 values
-- `Promise.all`-style fan-out
+- `asyncio.gather` / `Promise.all` / `Promise.race` fan-out (the instructions exist; this frontend does not lower them — see [concurrency.md](concurrency.md))
 - Parameters on the entry function

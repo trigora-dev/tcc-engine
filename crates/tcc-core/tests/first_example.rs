@@ -161,6 +161,7 @@ fn first_example_runs_effect_wait_and_completes() {
     engine
         .apply_host_response(HostResponse::EventPayload {
             value: Value::String("ok".into()),
+            branch: None,
         })
         .unwrap();
     assert_eq!(engine.continuation().pending, None);

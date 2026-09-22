@@ -26,6 +26,8 @@ export type RunOptions = {
   leaseMs?: number;
   budget?: number;
   autoDeliverEvent?: boolean;
+  /** Deliver one registered join branch per wake. `reverse` completes the highest index first. */
+  completionOrder?: "source" | "reverse";
   effectLogPath?: string;
   failCounts?: Record<string, number>;
   childArtifacts?: Record<string, string>;
@@ -222,6 +224,7 @@ export async function resumeExecution(options: ResumeOptions): Promise<RunResult
       eventPayload: options.eventPayload,
       budget: options.budget,
       autoDeliverEvent: options.autoDeliverEvent ?? true,
+      completionOrder: options.completionOrder,
       effectLogPath: options.effectLogPath,
       leaseMs: options.leaseMs,
       failCounts: options.failCounts,
@@ -304,7 +307,11 @@ function handleOutcome(
         case "persist_checkpoint":
           return persistCheckpoint(store, state.engine, request, options, deferCheckpoint);
         case "register_timer":
-          store.upsertTimer(options.executionId, Number(request.resume_at_ms ?? 0));
+          store.upsertTimer(
+            options.executionId,
+            Number(request.resume_at_ms ?? 0),
+            typeof request.branch === "string" ? request.branch : "",
+          );
           maybeCrash("after_register_timer");
           state.engine.applyHostResponse({ type: "ack" });
           return "continue";
@@ -382,7 +389,12 @@ function executeEffect(
   if (options.effectLogPath) {
     appendFileSync(options.effectLogPath, `${key}\n`);
   }
-  const value = encodeValue(runEffect(key));
+  const produced = runEffect(key);
+  if (produced === "__fail__") {
+    engine.applyHostResponse({ type: "effect_failed", message: "failed" });
+    return "continue";
+  }
+  const value = encodeValue(produced);
   maybeCrash("after_effect_provider");
   engine.applyHostResponse({ type: "effect_result", value });
   return "continue";
@@ -492,8 +504,15 @@ function deliverWake(
     return "continue";
   }
   const continuation = JSON.parse(state.engine.continuationJson()) as {
-    pending?: { kind?: { type?: string; invoke_id?: string } };
+    pending?: { kind?: { type?: string; invoke_id?: string } } | null;
+    join?: {
+      state?: string;
+      branches?: Array<{ index: number; branch_id: string; phase: string; op?: { type?: string } | null }>;
+    } | null;
   };
+  if (continuation.join?.state === "active" && !continuation.pending) {
+    return deliverJoin(store, state, options, continuation.join, deferCheckpoint);
+  }
   const waitKind = continuation.pending?.kind?.type;
   if (waitKind === "timer") {
     const timer = store.pendingTimer(options.executionId);
@@ -501,8 +520,10 @@ function deliverWake(
       return snapshot(store, options.executionId, "suspended", undefined);
     }
     maybeCrash("before_timer_fired");
-    store.resolveTimer(options.executionId);
-    state.engine.applyHostResponse({ type: "timer_fired" });
+    store.resolveTimer(options.executionId, timer.branch_id ?? "");
+    state.engine.applyHostResponse(
+      timer.branch_id ? { type: "timer_fired", branch: timer.branch_id } : { type: "timer_fired" },
+    );
     return "continue";
   }
   if (waitKind === "child") {
@@ -511,12 +532,47 @@ function deliverWake(
   return deliverEvent(store, state.engine, options);
 }
 
+function deliverJoin(
+  store: Store,
+  state: EngineState,
+  options: RunOptions & { ownerToken: string; executionId: string },
+  join: {
+    branches?: Array<{ index: number; branch_id: string; phase: string; op?: { type?: string } | null }>;
+  },
+  deferCheckpoint = false,
+): "continue" | { activateChild: true } | RunResult {
+  const branches = [...(join.branches ?? [])].filter((branch) => branch.phase === "registered");
+  branches.sort((left, right) => left.index - right.index);
+  if (options.completionOrder === "reverse") {
+    branches.reverse();
+  }
+  const branch = branches[0];
+  if (!branch) {
+    return snapshot(store, options.executionId, "suspended", undefined);
+  }
+  if (branch.op?.type === "timer") {
+    const timer = store.pendingTimer(options.executionId, branch.branch_id);
+    if (!timer || timer.status !== "pending") {
+      return snapshot(store, options.executionId, "suspended", undefined);
+    }
+    maybeCrash("before_timer_fired");
+    store.resolveTimer(options.executionId, branch.branch_id);
+    state.engine.applyHostResponse({ type: "timer_fired", branch: branch.branch_id });
+    return "continue";
+  }
+  if (branch.op?.type === "child") {
+    return deliverChild(store, state, options, branch.branch_id, deferCheckpoint, branch.branch_id);
+  }
+  return deliverEvent(store, state.engine, options, branch.branch_id);
+}
+
 function deliverChild(
   store: Store,
   state: EngineState,
   options: RunOptions & { ownerToken: string; executionId: string },
   invokeId: string | undefined,
   deferCheckpoint = false,
+  branch?: string,
 ): "continue" | { activateChild: true } | RunResult {
   if (!invokeId) {
     return snapshot(store, options.executionId, "suspended", undefined);
@@ -530,6 +586,7 @@ function deliverChild(
     state.engine.applyHostResponse({
       type: "child_result",
       value: JSON.parse(child.result_json),
+      ...(branch ? { branch } : {}),
     });
     return "continue";
   }
@@ -574,6 +631,7 @@ function deliverChild(
   state.engine.applyHostResponse({
     type: "child_result",
     value: childResult.result,
+    ...(branch ? { branch } : {}),
   });
   return "continue";
 }
@@ -582,8 +640,9 @@ function deliverEvent(
   store: Store,
   engine: EngineBinding,
   options: RunOptions & { executionId: string },
+  waitId?: string,
 ): "continue" | RunResult {
-  const wait = store.pendingWait(options.executionId);
+  const wait = waitId ? store.getWait(waitId) : store.pendingWait(options.executionId);
   if (!wait) {
     return snapshot(store, options.executionId, "suspended", undefined);
   }
@@ -608,6 +667,7 @@ function deliverEvent(
   engine.applyHostResponse({
     type: "event_payload",
     value: JSON.parse(payloadJson),
+    ...(waitId ? { branch: waitId } : {}),
   });
   return "continue";
 }

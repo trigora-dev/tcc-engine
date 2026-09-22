@@ -60,6 +60,7 @@ Locals and constants:
 - `GetProp { key }`
 - `NewArray`
 - `ArrayPush`
+- `ArrayIndex { index }` — copy one element of the array on top of the stack, leaving the array in place
 - `StrictEq`
 - `StrictNeq`
 - `Lt` / `Le` / `Gt` / `Ge`
@@ -71,6 +72,7 @@ Durable operations:
 - `Sleep`
 - `WaitForEvent`
 - `Invoke`
+- `Fork { count, join_pc }` / `JoinAll` / `JoinAny` — require `durable.concurrent_group`; `count` is 1 through 32. `JoinAny` is `Promise.race`. See [concurrency.md](concurrency.md)
 
 Exceptions:
 

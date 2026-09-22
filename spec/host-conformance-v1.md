@@ -70,6 +70,28 @@ These names are `TCC_CRASH_AT` values in the reference hosts (`hosts/node/src/ho
 
 Resume must load the blob stored under `artifact.hash`. Passing a different compiled artifact, or compiling mutated source and substituting it, must fail with `ArtifactMismatch`. The host must not resume against “whatever is currently compiled.”
 
+## Concurrent groups
+
+`concurrent_group.all` and `concurrent_group.any` are part of this kit. `Promise.any` and `Promise.allSettled` are not. Cases live in [`conformance/cases.json`](../conformance/cases.json) and are specified in [concurrency.md](concurrency.md):
+
+- multiple waits, including the same event name
+- correlated deliveries (`branch` required; omitted `branch` is rejected)
+- reverse completion order, with the aggregate still in input order
+- crash after partial completion
+- multiple children, no duplicates
+- fail-fast plus a detached sibling
+- loop re-entry does not alias `branch_id`
+
+`concurrent_group.any` covers `Promise.race`:
+
+- a wait that wins over a timer, and a timer that wins under reverse delivery
+- two `waitForEvent` branches with the same name: one event settles branch 0 and detaches branch 1
+- crash after the winner checkpoint, including a rejecting race inside `try` / `catch` whose catch body runs once
+- an invoke winner whose sibling child was already created and is not cancelled
+- loop re-entry does not alias `branch_id`
+
+The TypeScript compiler produces the artifact. The Python frontend does not lower `gather` or `Promise.race`. The Python SQLite adapter still runs the compiled artifact. Drivers accept `completionOrder: "source" | "reverse"` so one event is delivered to one wait in that order.
+
 ## Out of scope for this kit version
 
-Closures, broader JavaScript/Python, `Promise.all`, extra persist heuristics, Docker, and a third language. The language recovery suite (`if`/`else`, loops, invoke, cancel, sleep) stays on the reference hosts and is not part of this kit.
+Closures, broader JavaScript/Python, `Promise.any`, `Promise.allSettled`, extra persist heuristics, Docker, and a third language. The language recovery suite (`if`/`else`, loops, invoke, cancel, sleep, `Promise.all` and `Promise.race` crash and liveness) stays on the reference hosts in addition to the kit cases above.

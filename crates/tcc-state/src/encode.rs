@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
 use crate::continuation::{
-    ArtifactId, Continuation, ContinuationStatus, Frame, PendingOp, TryHandler, WaitKind,
+    ArtifactId, BranchOp, BranchPhase, Continuation, ContinuationStatus, Frame, JoinBranch,
+    JoinKind, JoinReentry, JoinState, JoinStatus, PendingOp, TryHandler, WaitKind,
 };
 use crate::error::StateError;
 use crate::json::Json;
@@ -159,11 +160,39 @@ fn continuation_to_json(continuation: &Continuation) -> Json {
                 .collect(),
         ),
     );
+    if let Some(join) = &continuation.join {
+        map.insert("join".to_string(), join_to_json(join));
+    }
+    if !continuation.reentries.is_empty() {
+        map.insert(
+            "reentries".to_string(),
+            Json::Array(continuation.reentries.iter().map(reentry_to_json).collect()),
+        );
+    }
     Json::Object(map)
 }
 
 fn json_to_continuation(json: &Json) -> Result<Continuation, StateError> {
     let map = json.as_object()?;
+    reject_unknown(
+        map,
+        &[
+            "execution_id",
+            "artifact_hash",
+            "engine_format_version",
+            "language_semantics_version",
+            "revision",
+            "status",
+            "frames",
+            "stack",
+            "pending",
+            "result",
+            "try_stack",
+            "join",
+            "reentries",
+        ],
+        "continuation",
+    )?;
     Ok(Continuation {
         execution_id: Json::get(map, "execution_id")?.as_str()?.to_string(),
         artifact: ArtifactId {
@@ -201,7 +230,303 @@ fn json_to_continuation(json: &Json) -> Result<Continuation, StateError> {
                 .map(json_to_try_handler)
                 .collect::<Result<_, _>>()?,
         },
+        join: match map.get("join") {
+            None | Some(Json::Null) => None,
+            Some(other) => Some(json_to_join(other)?),
+        },
+        reentries: match map.get("reentries") {
+            None | Some(Json::Null) => Vec::new(),
+            Some(other) => other
+                .as_array()?
+                .iter()
+                .map(json_to_reentry)
+                .collect::<Result<_, _>>()?,
+        },
     })
+}
+
+fn reject_unknown(
+    map: &BTreeMap<String, Json>,
+    known: &[&str],
+    what: &str,
+) -> Result<(), StateError> {
+    for key in map.keys() {
+        if !known.contains(&key.as_str()) {
+            return Err(StateError::InvalidEncoding(format!(
+                "unknown {what} field `{key}`"
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn join_to_json(join: &JoinState) -> Json {
+    let mut map = BTreeMap::new();
+    map.insert(
+        "kind".to_string(),
+        Json::String(join_kind_name(join.kind).to_string()),
+    );
+    map.insert("site".to_string(), Json::Number(join.site as f64));
+    map.insert("reentry".to_string(), Json::Number(join.reentry as f64));
+    map.insert("join_pc".to_string(), Json::Number(join.join_pc as f64));
+    map.insert(
+        "state".to_string(),
+        Json::String(join_status_name(join.state).to_string()),
+    );
+    map.insert(
+        "winner_branch".to_string(),
+        match join.winner_branch {
+            Some(index) => Json::Number(index as f64),
+            None => Json::Null,
+        },
+    );
+    map.insert(
+        "failure_branch".to_string(),
+        match join.failure_branch {
+            Some(index) => Json::Number(index as f64),
+            None => Json::Null,
+        },
+    );
+    map.insert(
+        "branches".to_string(),
+        Json::Array(join.branches.iter().map(branch_to_json).collect()),
+    );
+    Json::Object(map)
+}
+
+pub(crate) fn json_to_join(json: &Json) -> Result<JoinState, StateError> {
+    let map = json.as_object()?;
+    reject_unknown(
+        map,
+        &[
+            "kind",
+            "site",
+            "reentry",
+            "join_pc",
+            "state",
+            "winner_branch",
+            "failure_branch",
+            "branches",
+        ],
+        "join",
+    )?;
+    Ok(JoinState {
+        kind: parse_join_kind(Json::get(map, "kind")?.as_str()?)?,
+        site: Json::get(map, "site")?.as_u32()?,
+        reentry: Json::get(map, "reentry")?.as_u32()?,
+        join_pc: Json::get(map, "join_pc")?.as_u32()?,
+        state: parse_join_status(Json::get(map, "state")?.as_str()?)?,
+        winner_branch: match Json::get(map, "winner_branch")? {
+            Json::Null => None,
+            other => Some(other.as_u32()?),
+        },
+        failure_branch: match Json::get(map, "failure_branch")? {
+            Json::Null => None,
+            other => Some(other.as_u32()?),
+        },
+        branches: Json::get(map, "branches")?
+            .as_array()?
+            .iter()
+            .map(json_to_branch)
+            .collect::<Result<_, _>>()?,
+    })
+}
+
+fn branch_to_json(branch: &JoinBranch) -> Json {
+    let mut map = BTreeMap::new();
+    map.insert("index".to_string(), Json::Number(branch.index as f64));
+    map.insert(
+        "branch_id".to_string(),
+        Json::String(branch.branch_id.clone()),
+    );
+    map.insert(
+        "op".to_string(),
+        match &branch.op {
+            Some(op) => branch_op_to_json(op),
+            None => Json::Null,
+        },
+    );
+    map.insert(
+        "phase".to_string(),
+        Json::String(phase_name(branch.phase).to_string()),
+    );
+    map.insert(
+        "result".to_string(),
+        match &branch.result {
+            Some(value) => value_to_json(value),
+            None => Json::Null,
+        },
+    );
+    map.insert(
+        "error".to_string(),
+        match &branch.error {
+            Some(text) => Json::String(text.clone()),
+            None => Json::Null,
+        },
+    );
+    Json::Object(map)
+}
+
+fn json_to_branch(json: &Json) -> Result<JoinBranch, StateError> {
+    let map = json.as_object()?;
+    reject_unknown(
+        map,
+        &["index", "branch_id", "op", "phase", "result", "error"],
+        "join branch",
+    )?;
+    Ok(JoinBranch {
+        index: Json::get(map, "index")?.as_u32()?,
+        branch_id: Json::get(map, "branch_id")?.as_str()?.to_string(),
+        op: match Json::get(map, "op")? {
+            Json::Null => None,
+            other => Some(json_to_branch_op(other)?),
+        },
+        phase: parse_phase(Json::get(map, "phase")?.as_str()?)?,
+        result: match Json::get(map, "result")? {
+            Json::Null => None,
+            other => Some(json_to_value(other)?),
+        },
+        error: match Json::get(map, "error")? {
+            Json::Null => None,
+            other => Some(other.as_str()?.to_string()),
+        },
+    })
+}
+
+fn branch_op_to_json(op: &BranchOp) -> Json {
+    let mut map = BTreeMap::new();
+    match op {
+        BranchOp::Effect { key } => {
+            map.insert("type".to_string(), Json::String("effect".to_string()));
+            map.insert("key".to_string(), Json::String(key.clone()));
+        }
+        BranchOp::Timer { resume_at_ms } => {
+            map.insert("type".to_string(), Json::String("timer".to_string()));
+            map.insert(
+                "resume_at_ms".to_string(),
+                Json::Number(*resume_at_ms as f64),
+            );
+        }
+        BranchOp::Event { event_name } => {
+            map.insert("type".to_string(), Json::String("event".to_string()));
+            map.insert("event_name".to_string(), Json::String(event_name.clone()));
+        }
+        BranchOp::Child {
+            program_name,
+            invoke_id,
+            child_execution_id,
+        } => {
+            map.insert("type".to_string(), Json::String("child".to_string()));
+            map.insert(
+                "program_name".to_string(),
+                Json::String(program_name.clone()),
+            );
+            map.insert("invoke_id".to_string(), Json::String(invoke_id.clone()));
+            map.insert(
+                "child_execution_id".to_string(),
+                Json::String(child_execution_id.clone()),
+            );
+        }
+    }
+    Json::Object(map)
+}
+
+fn json_to_branch_op(json: &Json) -> Result<BranchOp, StateError> {
+    let map = json.as_object()?;
+    match Json::get(map, "type")?.as_str()? {
+        "effect" => Ok(BranchOp::Effect {
+            key: Json::get(map, "key")?.as_str()?.to_string(),
+        }),
+        "timer" => Ok(BranchOp::Timer {
+            resume_at_ms: Json::get(map, "resume_at_ms")?.as_u64()?,
+        }),
+        "event" => Ok(BranchOp::Event {
+            event_name: Json::get(map, "event_name")?.as_str()?.to_string(),
+        }),
+        "child" => Ok(BranchOp::Child {
+            program_name: Json::get(map, "program_name")?.as_str()?.to_string(),
+            invoke_id: Json::get(map, "invoke_id")?.as_str()?.to_string(),
+            child_execution_id: Json::get(map, "child_execution_id")?.as_str()?.to_string(),
+        }),
+        other => Err(StateError::InvalidEncoding(format!(
+            "unknown branch op `{other}`"
+        ))),
+    }
+}
+
+fn reentry_to_json(reentry: &JoinReentry) -> Json {
+    let mut map = BTreeMap::new();
+    map.insert("site".to_string(), Json::Number(reentry.site as f64));
+    map.insert("next".to_string(), Json::Number(reentry.next as f64));
+    Json::Object(map)
+}
+
+fn json_to_reentry(json: &Json) -> Result<JoinReentry, StateError> {
+    let map = json.as_object()?;
+    reject_unknown(map, &["site", "next"], "reentry")?;
+    Ok(JoinReentry {
+        site: Json::get(map, "site")?.as_u32()?,
+        next: Json::get(map, "next")?.as_u32()?,
+    })
+}
+
+fn join_kind_name(kind: JoinKind) -> &'static str {
+    match kind {
+        JoinKind::All => "all",
+        JoinKind::Any => "any",
+    }
+}
+
+fn parse_join_kind(name: &str) -> Result<JoinKind, StateError> {
+    match name {
+        "all" => Ok(JoinKind::All),
+        "any" => Ok(JoinKind::Any),
+        other => Err(StateError::InvalidEncoding(format!(
+            "unknown join kind `{other}`"
+        ))),
+    }
+}
+
+fn join_status_name(status: JoinStatus) -> &'static str {
+    match status {
+        JoinStatus::Active => "active",
+        JoinStatus::Succeeded => "succeeded",
+        JoinStatus::Failed => "failed",
+    }
+}
+
+fn parse_join_status(name: &str) -> Result<JoinStatus, StateError> {
+    match name {
+        "active" => Ok(JoinStatus::Active),
+        "succeeded" => Ok(JoinStatus::Succeeded),
+        "failed" => Ok(JoinStatus::Failed),
+        other => Err(StateError::InvalidEncoding(format!(
+            "unknown join state `{other}`"
+        ))),
+    }
+}
+
+fn phase_name(phase: BranchPhase) -> &'static str {
+    match phase {
+        BranchPhase::Planned => "planned",
+        BranchPhase::Registered => "registered",
+        BranchPhase::Completed => "completed",
+        BranchPhase::Failed => "failed",
+        BranchPhase::Detached => "detached",
+    }
+}
+
+fn parse_phase(name: &str) -> Result<BranchPhase, StateError> {
+    match name {
+        "planned" => Ok(BranchPhase::Planned),
+        "registered" => Ok(BranchPhase::Registered),
+        "completed" => Ok(BranchPhase::Completed),
+        "failed" => Ok(BranchPhase::Failed),
+        "detached" => Ok(BranchPhase::Detached),
+        other => Err(StateError::InvalidEncoding(format!(
+            "unknown branch phase `{other}`"
+        ))),
+    }
 }
 
 pub(crate) fn try_handler_to_json(handler: &TryHandler) -> Json {

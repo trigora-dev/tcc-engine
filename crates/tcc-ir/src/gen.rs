@@ -70,6 +70,9 @@ fn envelope(hash: String, instructions: &[Instruction]) -> Envelope {
                 add_engine(EngineFeature::DURABLE_INVOKE);
                 add_host(HostCapability::CHILD);
             }
+            Instruction::Fork { .. } | Instruction::JoinAll | Instruction::JoinAny => {
+                add_engine(EngineFeature::DURABLE_CONCURRENT_GROUP);
+            }
             Instruction::Throw | Instruction::PushTry { .. } | Instruction::PopTry => {
                 add_engine(EngineFeature::EXCEPTIONS);
             }

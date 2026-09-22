@@ -81,6 +81,8 @@ export type ContinuationJson = {
   pending: unknown;
   result: unknown;
   try_stack: unknown[];
+  join?: unknown;
+  reentries?: unknown;
 };
 
 export type ContinuationDelta = {
@@ -94,6 +96,8 @@ export type ContinuationDelta = {
   status?: string;
   result?: unknown;
   try_stack?: unknown[];
+  join?: unknown;
+  reentries?: unknown;
 };
 
 export function persistModeFromEnv(): PersistMode {
@@ -140,6 +144,12 @@ export function applyDelta(base: ContinuationJson, delta: ContinuationDelta): Co
   }
   if (Object.prototype.hasOwnProperty.call(delta, "try_stack")) {
     next.try_stack = delta.try_stack ?? [];
+  }
+  if (Object.prototype.hasOwnProperty.call(delta, "join")) {
+    next.join = delta.join ?? null;
+  }
+  if (Object.prototype.hasOwnProperty.call(delta, "reentries")) {
+    next.reentries = delta.reentries ?? [];
   }
   return next;
 }

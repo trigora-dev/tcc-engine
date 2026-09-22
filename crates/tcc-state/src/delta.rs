@@ -6,10 +6,12 @@
 
 use std::collections::BTreeMap;
 
-use crate::continuation::{Continuation, ContinuationStatus, PendingOp, TryHandler};
+use crate::continuation::{
+    Continuation, ContinuationStatus, JoinReentry, JoinState, PendingOp, TryHandler,
+};
 use crate::encode::{
-    json_to_pending, json_to_try_handler, json_to_value, parse_status, pending_to_json,
-    status_name, try_handler_to_json, value_to_json,
+    join_to_json, json_to_join, json_to_pending, json_to_try_handler, json_to_value, parse_status,
+    pending_to_json, status_name, try_handler_to_json, value_to_json,
 };
 use crate::error::StateError;
 use crate::json::Json;
@@ -64,6 +66,8 @@ pub struct ContinuationDelta {
     pub status: Option<ContinuationStatus>,
     pub result: Option<Option<Value>>,
     pub try_stack: Option<Vec<TryHandler>>,
+    pub join: Option<Option<JoinState>>,
+    pub reentries: Option<Vec<JoinReentry>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -164,6 +168,16 @@ pub fn diff_continuation(base: &Continuation, current: &Continuation) -> Option<
         } else {
             Some(current.try_stack.clone())
         },
+        join: if base.join == current.join {
+            None
+        } else {
+            Some(current.join.clone())
+        },
+        reentries: if base.reentries == current.reentries {
+            None
+        } else {
+            Some(current.reentries.clone())
+        },
     })
 }
 
@@ -208,6 +222,12 @@ pub fn apply_continuation_delta(
     }
     if let Some(try_stack) = &delta.try_stack {
         base.try_stack = try_stack.clone();
+    }
+    if let Some(join) = &delta.join {
+        base.join = join.clone();
+    }
+    if let Some(reentries) = &delta.reentries {
+        base.reentries = reentries.clone();
     }
     Ok(base)
 }
@@ -256,7 +276,37 @@ pub fn continuation_delta_to_json(delta: &ContinuationDelta) -> Json {
             Json::Array(try_stack.iter().map(try_handler_to_json).collect()),
         );
     }
+    if let Some(join) = &delta.join {
+        map.insert(
+            "join".to_string(),
+            match join {
+                Some(value) => join_to_json(value),
+                None => Json::Null,
+            },
+        );
+    }
+    if let Some(reentries) = &delta.reentries {
+        map.insert(
+            "reentries".to_string(),
+            Json::Array(reentries.iter().map(reentry_delta_to_json).collect()),
+        );
+    }
     Json::Object(map)
+}
+
+fn reentry_delta_to_json(reentry: &JoinReentry) -> Json {
+    let mut map = BTreeMap::new();
+    map.insert("site".to_string(), Json::Number(reentry.site as f64));
+    map.insert("next".to_string(), Json::Number(reentry.next as f64));
+    Json::Object(map)
+}
+
+fn json_to_reentry_delta(json: &Json) -> Result<JoinReentry, StateError> {
+    let map = json.as_object()?;
+    Ok(JoinReentry {
+        site: Json::get(map, "site")?.as_u32()?,
+        next: Json::get(map, "next")?.as_u32()?,
+    })
 }
 
 pub fn json_to_continuation_delta(json: &Json) -> Result<ContinuationDelta, StateError> {
@@ -301,6 +351,22 @@ pub fn json_to_continuation_delta(json: &Json) -> Result<ContinuationDelta, Stat
                     .as_array()?
                     .iter()
                     .map(json_to_try_handler)
+                    .collect::<Result<_, _>>()?,
+            ),
+        },
+        join: match map.get("join") {
+            None => None,
+            Some(Json::Null) => Some(None),
+            Some(value) => Some(Some(json_to_join(value)?)),
+        },
+        reentries: match map.get("reentries") {
+            None => None,
+            Some(Json::Null) => Some(Vec::new()),
+            Some(value) => Some(
+                value
+                    .as_array()?
+                    .iter()
+                    .map(json_to_reentry_delta)
                     .collect::<Result<_, _>>()?,
             ),
         },
@@ -395,6 +461,16 @@ fn delta_units(delta: &ContinuationDelta) -> usize {
         + usize::from(delta.status.is_some())
         + usize::from(delta.result.is_some())
         + usize::from(delta.try_stack.is_some())
+        + delta
+            .join
+            .as_ref()
+            .map(|join| {
+                join.as_ref()
+                    .map(|state| state.branches.len().max(1))
+                    .unwrap_or(1)
+            })
+            .unwrap_or(0)
+        + usize::from(delta.reentries.is_some())
 }
 
 #[cfg(test)]

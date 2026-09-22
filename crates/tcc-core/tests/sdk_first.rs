@@ -48,6 +48,7 @@ fn sdk_first_example_completes_with_object_result() {
     engine
         .apply_host_response(HostResponse::EventPayload {
             value: Value::String("ok".into()),
+            branch: None,
         })
         .unwrap();
     expect_host(engine.run_until_host(32));
@@ -83,6 +84,7 @@ fn resume_after_wait_checkpoint_does_not_replay_effect() {
     resumed
         .apply_host_response(HostResponse::EventPayload {
             value: Value::String("ok".into()),
+            branch: None,
         })
         .unwrap();
     expect_host(resumed.run_until_host(32));

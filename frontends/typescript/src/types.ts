@@ -5,6 +5,7 @@ export type EngineFeature =
   | "durable.sleep"
   | "durable.wait_for_event"
   | "durable.invoke"
+  | "durable.concurrent_group"
   | "ts.exceptions"
   | (string & {});
 
@@ -52,6 +53,10 @@ export type Instruction =
   | { op: "Sleep" }
   | { op: "WaitForEvent" }
   | { op: "Invoke" }
+  | { op: "Fork"; count: number; join_pc: number }
+  | { op: "JoinAll" }
+  | { op: "JoinAny" }
+  | { op: "ArrayIndex"; index: number }
   | { op: "Throw" }
   | { op: "PushTry"; catch: number; finally: number | null }
   | { op: "PopTry" };

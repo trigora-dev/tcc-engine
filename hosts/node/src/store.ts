@@ -229,9 +229,11 @@ export class Store {
         consumed INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE IF NOT EXISTS timers (
-        execution_id TEXT PRIMARY KEY,
+        execution_id TEXT NOT NULL,
+        branch_id TEXT NOT NULL DEFAULT '',
         resume_at_ms INTEGER NOT NULL,
-        status TEXT NOT NULL
+        status TEXT NOT NULL,
+        PRIMARY KEY (execution_id, branch_id)
       );
       CREATE TABLE IF NOT EXISTS children (
         invoke_id TEXT PRIMARY KEY,
@@ -817,7 +819,9 @@ export class Store {
 
   pendingWait(executionId: string): WaitRow | undefined {
     return this.db
-      .prepare("SELECT * FROM waits WHERE execution_id = ? AND status = 'pending' LIMIT 1")
+      .prepare(
+        "SELECT * FROM waits WHERE execution_id = ? AND status = 'pending' ORDER BY rowid LIMIT 1",
+      )
       .get(executionId) as WaitRow | undefined;
   }
 
@@ -844,24 +848,28 @@ export class Store {
     return row;
   }
 
-  upsertTimer(executionId: string, resumeAtMs: number): void {
+  upsertTimer(executionId: string, resumeAtMs: number, branchId = ""): void {
     this.db
       .prepare(
-        `INSERT INTO timers(execution_id, resume_at_ms, status)
-         VALUES (?, ?, 'pending')
-         ON CONFLICT(execution_id) DO NOTHING`,
+        `INSERT INTO timers(execution_id, branch_id, resume_at_ms, status)
+         VALUES (?, ?, ?, 'pending')
+         ON CONFLICT(execution_id, branch_id) DO NOTHING`,
       )
-      .run(executionId, resumeAtMs);
+      .run(executionId, branchId, resumeAtMs);
   }
 
-  pendingTimer(executionId: string): { resume_at_ms: number; status: string } | undefined {
+  pendingTimer(executionId: string, branchId = ""): { branch_id: string; resume_at_ms: number; status: string } | undefined {
     return this.db
-      .prepare("SELECT resume_at_ms, status FROM timers WHERE execution_id = ?")
-      .get(executionId) as { resume_at_ms: number; status: string } | undefined;
+      .prepare(
+        "SELECT branch_id, resume_at_ms, status FROM timers WHERE execution_id = ? AND branch_id = ? AND status = 'pending'",
+      )
+      .get(executionId, branchId) as { branch_id: string; resume_at_ms: number; status: string } | undefined;
   }
 
-  resolveTimer(executionId: string): void {
-    this.db.prepare("UPDATE timers SET status = 'resolved' WHERE execution_id = ?").run(executionId);
+  resolveTimer(executionId: string, branchId = ""): void {
+    this.db
+      .prepare("UPDATE timers SET status = 'resolved' WHERE execution_id = ? AND branch_id = ?")
+      .run(executionId, branchId);
   }
 
   private applyCreateChild(op: CreateChildOp): void {

@@ -47,6 +47,7 @@ def start_execution(
     lease_ms: int = 60_000,
     budget: int = 256,
     auto_deliver_event: bool = True,
+    completion_order: str = "source",
     effect_log_path: str | None = None,
     fail_counts: dict[str, int] | None = None,
     child_artifacts: dict[str, str] | None = None,
@@ -78,6 +79,7 @@ def start_execution(
             lease_ms=lease_ms,
             budget=budget,
             auto_deliver_event=auto_deliver_event,
+            completion_order=completion_order,
             effect_log_path=effect_log_path,
             fail_counts=fail_counts,
             child_artifacts=child_artifacts,
@@ -101,6 +103,7 @@ def run_on_store(
     lease_ms: int = 60_000,
     budget: int = 256,
     auto_deliver_event: bool = True,
+    completion_order: str = "source",
     effect_log_path: str | None = None,
     fail_counts: dict[str, int] | None = None,
     child_artifacts: dict[str, str] | None = None,
@@ -121,6 +124,7 @@ def run_on_store(
         lease_ms=lease_ms,
         budget=budget,
         auto_deliver_event=auto_deliver_event,
+        completion_order=completion_order,
         effect_log_path=effect_log_path,
         fail_counts=fail_counts,
         child_artifacts=child_artifacts,
@@ -220,6 +224,7 @@ def resume_execution(
     lease_ms: int = 60_000,
     budget: int = 256,
     auto_deliver_event: bool = True,
+    completion_order: str = "source",
     effect_log_path: str | None = None,
     fail_counts: dict[str, int] | None = None,
     child_artifacts: dict[str, str] | None = None,
@@ -277,6 +282,7 @@ def resume_execution(
                 "event_payload": event_payload,
                 "budget": budget,
                 "auto_deliver_event": auto_deliver_event,
+                "completion_order": completion_order,
                 "effect_log_path": effect_log_path,
                 "lease_ms": lease_ms,
                 "fail_counts": fail_counts,
@@ -338,7 +344,11 @@ def handle_outcome(
         if rtype == "persist_checkpoint":
             return persist_checkpoint(store, state["engine"], request, options, crash, defer_checkpoint)
         if rtype == "register_timer":
-            store.upsert_timer(options["execution_id"], int(request.get("resume_at_ms") or 0))
+            store.upsert_timer(
+                options["execution_id"],
+                int(request.get("resume_at_ms") or 0),
+                request.get("branch") or "",
+            )
             crash("after_register_timer", None)
             state["engine"].apply_response(json.dumps({"type": "ack"}))
             return "continue"
@@ -420,7 +430,11 @@ def execute_effect(
         return execute_effect(store, engine, request, run_effect, fail_counts, options)
     if options.get("effect_log_path"):
         Path(options["effect_log_path"]).open("a", encoding="utf-8").write(f"{key}\n")
-    value = encode_value(run_effect(key))
+    produced = run_effect(key)
+    if produced == "__fail__":
+        engine.apply_response(json.dumps({"type": "effect_failed", "message": "failed"}))
+        return "continue"
+    value = encode_value(produced)
     crash("after_effect_provider", None)
     engine.apply_response(json.dumps({"type": "effect_result", "value": value}))
     return "continue"
@@ -503,19 +517,56 @@ def deliver_wake(
         state["engine"].apply_response(json.dumps({"type": "cancel"}))
         return "continue"
     continuation = json.loads(state["engine"].continuation_json())
+    join = continuation.get("join")
+    if join and join.get("state") == "active" and not continuation.get("pending"):
+        return deliver_join(store, state, options, join, defer_checkpoint)
     wait_kind = ((continuation.get("pending") or {}).get("kind") or {}).get("type")
     if wait_kind == "timer":
         timer = store.pending_timer(options["execution_id"])
         if timer is None or timer["status"] != "pending":
             return snapshot(store, options["execution_id"], "suspended", None)
         crash("before_timer_fired", None)
-        store.resolve_timer(options["execution_id"])
-        state["engine"].apply_response(json.dumps({"type": "timer_fired"}))
+        branch_id = timer["branch_id"] or ""
+        store.resolve_timer(options["execution_id"], branch_id)
+        payload = {"type": "timer_fired"}
+        if branch_id:
+            payload["branch"] = branch_id
+        state["engine"].apply_response(json.dumps(payload))
         return "continue"
     if wait_kind == "child":
         invoke_id = ((continuation.get("pending") or {}).get("kind") or {}).get("invoke_id")
         return deliver_child(store, state, options, invoke_id, defer_checkpoint)
     return deliver_event(store, state["engine"], options)
+
+
+def deliver_join(
+    store: Store,
+    state: dict[str, EngineBinding],
+    options: dict[str, Any],
+    join: dict[str, Any],
+    defer_checkpoint: bool = False,
+) -> Any:
+    branches = [branch for branch in (join.get("branches") or []) if branch.get("phase") == "registered"]
+    branches.sort(key=lambda branch: branch.get("index", 0))
+    if options.get("completion_order") == "reverse":
+        branches.reverse()
+    if not branches:
+        return snapshot(store, options["execution_id"], "suspended", None)
+    branch = branches[0]
+    op = (branch.get("op") or {}).get("type")
+    branch_id = branch["branch_id"]
+    crash = _crash(options)
+    if op == "timer":
+        timer = store.pending_timer(options["execution_id"], branch_id)
+        if timer is None or timer["status"] != "pending":
+            return snapshot(store, options["execution_id"], "suspended", None)
+        crash("before_timer_fired", None)
+        store.resolve_timer(options["execution_id"], branch_id)
+        state["engine"].apply_response(json.dumps({"type": "timer_fired", "branch": branch_id}))
+        return "continue"
+    if op == "child":
+        return deliver_child(store, state, options, branch_id, defer_checkpoint, branch_id)
+    return deliver_event(store, state["engine"], options, branch_id)
 
 
 def deliver_child(
@@ -524,6 +575,7 @@ def deliver_child(
     options: dict[str, Any],
     invoke_id: str | None,
     defer_checkpoint: bool = False,
+    branch: str | None = None,
 ) -> Any:
     crash = _crash(options)
     if not invoke_id:
@@ -533,9 +585,10 @@ def deliver_child(
         return snapshot(store, options["execution_id"], "suspended", None)
     if child["status"] == "completed" and child["result_json"]:
         crash("before_child_result", None)
-        state["engine"].apply_response(
-            json.dumps({"type": "child_result", "value": json.loads(child["result_json"])})
-        )
+        payload = {"type": "child_result", "value": json.loads(child["result_json"])}
+        if branch:
+            payload["branch"] = branch
+        state["engine"].apply_response(json.dumps(payload))
         return "continue"
     if store.is_grouping() or defer_checkpoint:
         return {"activateChild": True}
@@ -568,13 +621,16 @@ def deliver_child(
     )
     store.complete_child(invoke_id, json.dumps(child_result.get("result") or {"t": "undefined"}))
     crash("before_child_result", None)
-    state["engine"].apply_response(json.dumps({"type": "child_result", "value": child_result.get("result")}))
+    payload = {"type": "child_result", "value": child_result.get("result")}
+    if branch:
+        payload["branch"] = branch
+    state["engine"].apply_response(json.dumps(payload))
     return "continue"
 
 
-def deliver_event(store: Store, engine: EngineBinding, options: dict[str, Any]) -> Any:
+def deliver_event(store: Store, engine: EngineBinding, options: dict[str, Any], wait_id: str | None = None) -> Any:
     crash = _crash(options)
-    wait = store.pending_wait(options["execution_id"])
+    wait = store.get_wait(wait_id) if wait_id else store.pending_wait(options["execution_id"])
     if wait is None or wait["status"] != "pending":
         return snapshot(store, options["execution_id"], "suspended", None)
     crash("before_event_payload", None)
@@ -590,7 +646,10 @@ def deliver_event(store: Store, engine: EngineBinding, options: dict[str, Any]) 
         return snapshot(store, options["execution_id"], "suspended", None)
     store.resolve_wait(wait["wait_id"])
     crash("after_event_persist", None)
-    engine.apply_response(json.dumps({"type": "event_payload", "value": json.loads(payload_json)}))
+    payload = {"type": "event_payload", "value": json.loads(payload_json)}
+    if wait_id:
+        payload["branch"] = wait_id
+    engine.apply_response(json.dumps(payload))
     return "continue"
 
 

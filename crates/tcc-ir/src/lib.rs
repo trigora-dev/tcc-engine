@@ -28,6 +28,6 @@ pub use features::{
 pub use instruction::{ConstValue, Instruction};
 pub use liveness::{analyze_function, analyze_program, FunctionLiveness, LiveSet};
 pub use validate::{
-    validate, EngineCaps, MAX_FUNCTIONS, MAX_INSTRUCTIONS_PER_FUNCTION, MAX_LOCALS,
-    MAX_STRING_BYTES,
+    validate, EngineCaps, MAX_FUNCTIONS, MAX_INSTRUCTIONS_PER_FUNCTION, MAX_JOIN_BRANCHES,
+    MAX_LOCALS, MAX_STRING_BYTES,
 };

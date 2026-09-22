@@ -13,7 +13,8 @@ pub mod json;
 pub mod value;
 
 pub use continuation::{
-    ArtifactId, Continuation, ContinuationStatus, Frame, PendingOp, TryHandler, WaitKind,
+    ArtifactId, BranchOp, BranchPhase, Continuation, ContinuationStatus, Frame, JoinBranch,
+    JoinKind, JoinReentry, JoinState, JoinStatus, PendingOp, TryHandler, WaitKind,
 };
 pub use delta::{
     apply_continuation_delta, continuation_delta_to_json, decode_continuation_delta,

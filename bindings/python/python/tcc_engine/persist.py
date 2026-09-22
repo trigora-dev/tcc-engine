@@ -88,6 +88,10 @@ def apply_delta(base: Continuation, delta: ContinuationDelta) -> Continuation:
         next_["result"] = delta["result"]
     if "try_stack" in delta:
         next_["try_stack"] = delta["try_stack"] or []
+    if "join" in delta:
+        next_["join"] = delta["join"]
+    if "reentries" in delta:
+        next_["reentries"] = delta["reentries"] or []
     return next_
 
 

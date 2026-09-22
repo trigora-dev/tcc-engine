@@ -125,9 +125,15 @@ fn request_to_json(request: &HostRequest) -> Result<Json, CoreError> {
                 },
             );
         }
-        HostRequest::RegisterTimer { resume_at_ms } => {
+        HostRequest::RegisterTimer {
+            resume_at_ms,
+            branch,
+        } => {
             map.insert("type".into(), Json::String("register_timer".into()));
             map.insert("resume_at_ms".into(), Json::Number(*resume_at_ms as f64));
+            if let Some(branch) = branch {
+                map.insert("branch".into(), Json::String(branch.clone()));
+            }
         }
         HostRequest::RegisterWait { wait } => {
             map.insert("type".into(), Json::String("register_wait".into()));
@@ -194,6 +200,15 @@ fn require_host_protocol_version(
     }
 }
 
+fn optional_branch(
+    map: &std::collections::BTreeMap<String, Json>,
+) -> Result<Option<String>, CoreError> {
+    match map.get("branch") {
+        None | Some(Json::Null) => Ok(None),
+        Some(value) => Ok(Some(value.as_str().map_err(core_state)?.to_string())),
+    }
+}
+
 fn json_to_response(json: &Json) -> Result<HostResponse, CoreError> {
     let map = json.as_object().map_err(core_state)?;
     require_host_protocol_version(map)?;
@@ -221,10 +236,14 @@ fn json_to_response(json: &Json) -> Result<HostResponse, CoreError> {
         }),
         "event_payload" => Ok(HostResponse::EventPayload {
             value: json_value(Json::get(map, "value").map_err(core_state)?)?,
+            branch: optional_branch(map)?,
         }),
-        "timer_fired" => Ok(HostResponse::TimerFired),
+        "timer_fired" => Ok(HostResponse::TimerFired {
+            branch: optional_branch(map)?,
+        }),
         "child_result" => Ok(HostResponse::ChildResult {
             value: json_value(Json::get(map, "value").map_err(core_state)?)?,
+            branch: optional_branch(map)?,
         }),
         "cancel" => Ok(HostResponse::Cancel),
         "artifact" => Ok(HostResponse::Artifact {

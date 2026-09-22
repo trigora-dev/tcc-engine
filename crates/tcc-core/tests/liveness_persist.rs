@@ -118,6 +118,7 @@ fn persist_after_last_use_patches_dead_slot_to_undefined() {
     engine
         .apply_host_response(HostResponse::EventPayload {
             value: Value::String("ok".into()),
+            branch: None,
         })
         .unwrap();
     confirm_persist(&mut engine, 2);

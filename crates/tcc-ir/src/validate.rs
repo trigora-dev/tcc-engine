@@ -10,6 +10,7 @@ pub const MAX_FUNCTIONS: usize = 1_024;
 pub const MAX_INSTRUCTIONS_PER_FUNCTION: usize = 100_000;
 pub const MAX_LOCALS: u32 = 4_096;
 pub const MAX_STRING_BYTES: usize = 1_048_576;
+pub const MAX_JOIN_BRANCHES: usize = 32;
 
 /// What this engine build can execute and what a host is willing to provide.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +146,36 @@ pub fn validate(artifact: &Artifact, caps: &EngineCaps) -> Result<(), IrError> {
                         count: function.local_count,
                     });
                 }
+            }
+            if let Instruction::Fork { count, .. } = instruction {
+                if *count == 0 || *count as usize > MAX_JOIN_BRANCHES {
+                    return Err(IrError::LimitsExceeded {
+                        what: "join branches",
+                        got: *count as usize,
+                        max: MAX_JOIN_BRANCHES,
+                    });
+                }
+                if !artifact
+                    .envelope
+                    .required_engine_features
+                    .iter()
+                    .any(|feature| feature.0 == EngineFeature::DURABLE_CONCURRENT_GROUP)
+                {
+                    return Err(IrError::InvalidEncoding(
+                        "Fork requires durable.concurrent_group".into(),
+                    ));
+                }
+            }
+            if matches!(instruction, Instruction::JoinAll | Instruction::JoinAny)
+                && !artifact
+                    .envelope
+                    .required_engine_features
+                    .iter()
+                    .any(|feature| feature.0 == EngineFeature::DURABLE_CONCURRENT_GROUP)
+            {
+                return Err(IrError::InvalidEncoding(
+                    "JoinAll or JoinAny requires durable.concurrent_group".into(),
+                ));
             }
             match instruction {
                 Instruction::LoadConst {

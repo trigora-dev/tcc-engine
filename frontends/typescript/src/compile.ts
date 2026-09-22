@@ -413,6 +413,10 @@ class Lowerer {
       throw new CompileError("declare one local per statement");
     }
     const declaration = list.declarations[0]!;
+    if (ts.isArrayBindingPattern(declaration.name)) {
+      this.destructurePromiseAll(list, declaration);
+      return;
+    }
     if (!ts.isIdentifier(declaration.name)) {
       throw new CompileError("locals must be simple identifiers");
     }
@@ -603,6 +607,18 @@ class Lowerer {
       }
       return;
     }
+    if (ts.isCallExpression(expression)) {
+      const method = promiseMethod(expression);
+      if (method === "all") {
+        throw new CompileError("await Promise.all directly; do not store the promise");
+      }
+      if (method === "race") {
+        throw new CompileError("await Promise.race directly; do not store the promise");
+      }
+      if (method) {
+        throw new CompileError(`Promise.${method} is not supported`);
+      }
+    }
     if (ts.isPropertyAccessExpression(expression)) {
       this.expression(expression.expression);
       if (!ts.isIdentifier(expression.name)) {
@@ -650,19 +666,106 @@ class Lowerer {
     }
   }
 
+  destructurePromiseAll(list: ts.VariableDeclarationList, declaration: ts.VariableDeclaration): void {
+    if (!declaration.initializer || !isAwaitPromiseAll(declaration.initializer)) {
+      throw new CompileError("array destructuring is only supported for await Promise.all");
+    }
+    if (!ts.isArrayBindingPattern(declaration.name)) {
+      throw new CompileError("array destructuring is only supported for await Promise.all");
+    }
+    const kind = (list.flags & ts.NodeFlags.Const) !== 0 ? "const" : "let";
+    const slots: number[] = [];
+    for (const element of declaration.name.elements) {
+      if (
+        !ts.isBindingElement(element) ||
+        element.dotDotDotToken ||
+        !ts.isIdentifier(element.name)
+      ) {
+        throw new CompileError("Promise.all bindings must be simple identifiers");
+      }
+      slots.push(this.declare(element.name.text, kind));
+    }
+    this.expression(declaration.initializer);
+    slots.forEach((slot, index) => {
+      this.emit({ op: "ArrayIndex", index }, declaration);
+      this.emit({ op: "StoreLocal", local: slot }, declaration);
+    });
+    this.emit({ op: "Pop" }, declaration);
+  }
+
   durable(expression: ts.AwaitExpression): void {
-    if (!ts.isCallExpression(expression.expression)) {
+    const inner = unwrap(expression.expression);
+    if (ts.isCallExpression(inner)) {
+      const method = promiseMethod(inner);
+      if (method === "all" || method === "race") {
+        this.promiseJoin(expression, inner, method);
+        return;
+      }
+      if (method) {
+        throw new CompileError(`Promise.${method} is not supported`);
+      }
+    }
+    if (!ts.isCallExpression(inner)) {
       throw new CompileError("await a durable operation");
     }
-    const call = expression.expression;
+    this.emitDurableCall(inner, expression);
+  }
+
+  promiseJoin(
+    expression: ts.AwaitExpression,
+    call: ts.CallExpression,
+    method: "all" | "race",
+  ): void {
+    const label = method === "all" ? "Promise.all" : "Promise.race";
+    if (call.arguments.length !== 1) {
+      throw new CompileError(`await ${label} of one array literal`);
+    }
+    const argument = unwrap(call.arguments[0]!);
+    if (!ts.isArrayLiteralExpression(argument)) {
+      throw new CompileError(`${label} argument must be an array literal`);
+    }
+    if (argument.elements.length === 0 || argument.elements.length > 32) {
+      throw new CompileError(`${label} supports 1 to 32 branches`);
+    }
+    const fork = this.emit({ op: "Fork", count: argument.elements.length, join_pc: 0 }, expression);
+    for (const element of argument.elements) {
+      if (ts.isSpreadElement(element)) {
+        throw new CompileError(`spread is not supported in ${label}`);
+      }
+      this.branchExpression(unwrap(element), label);
+    }
+    const joinPc = this.pc();
+    const forkInstruction = this.instructions[fork];
+    if (!forkInstruction || forkInstruction.op !== "Fork") {
+      throw new CompileError("internal: fork missing");
+    }
+    forkInstruction.join_pc = joinPc;
+    this.emit({ op: method === "all" ? "JoinAll" : "JoinAny" }, expression);
+  }
+
+  branchExpression(expression: ts.Expression, label = "Promise.all"): void {
+    let callTarget = expression;
+    if (ts.isAwaitExpression(callTarget)) {
+      callTarget = unwrap(callTarget.expression);
+    }
+    if (!ts.isCallExpression(callTarget)) {
+      throw new CompileError(`${label} branches must be durable calls`);
+    }
+    if (promiseMethod(callTarget)) {
+      throw new CompileError(`${label} branches must be effect, waitForEvent, sleep, or invoke`);
+    }
+    this.emitDurableCall(callTarget, expression);
+  }
+
+  emitDurableCall(call: ts.CallExpression, node: ts.Node): void {
     const durable = resolveDurable(call.expression, this.checker);
     if (durable === "effect") {
       if (call.arguments.length !== 2) {
         throw new CompileError("`effect` takes a key and a callback");
       }
       const key = stringLiteral(call.arguments[0]!, "effect key");
-      this.emit({ op: "LoadConst", value: { t: "string", v: key } }, call);
-      this.emit({ op: "Effect" }, call);
+      this.emit({ op: "LoadConst", value: { t: "string", v: key } }, node);
+      this.emit({ op: "Effect" }, node);
       return;
     }
     if (durable === "waitForEvent") {
@@ -670,8 +773,8 @@ class Lowerer {
         throw new CompileError("`waitForEvent` takes an event name");
       }
       const name = stringLiteral(call.arguments[0]!, "event name");
-      this.emit({ op: "LoadConst", value: { t: "string", v: name } }, call);
-      this.emit({ op: "WaitForEvent" }, call);
+      this.emit({ op: "LoadConst", value: { t: "string", v: name } }, node);
+      this.emit({ op: "WaitForEvent" }, node);
       return;
     }
     if (durable === "sleep") {
@@ -679,7 +782,7 @@ class Lowerer {
         throw new CompileError("`sleep` takes a duration in milliseconds");
       }
       this.expression(call.arguments[0]!);
-      this.emit({ op: "Sleep" }, call);
+      this.emit({ op: "Sleep" }, node);
       return;
     }
     if (durable === "invoke") {
@@ -687,8 +790,8 @@ class Lowerer {
         throw new CompileError("`invoke` takes a flow name");
       }
       const name = stringLiteral(call.arguments[0]!, "invoke name");
-      this.emit({ op: "LoadConst", value: { t: "string", v: name } }, call);
-      this.emit({ op: "Invoke" }, call);
+      this.emit({ op: "LoadConst", value: { t: "string", v: name } }, node);
+      this.emit({ op: "Invoke" }, node);
       return;
     }
     throw new CompileError("call is not a resolved durable operation");
@@ -777,6 +880,11 @@ function requiredFrom(instructions: Instruction[]): {
         addEngine("durable.invoke");
         addHost("host.child");
         break;
+      case "Fork":
+      case "JoinAll":
+      case "JoinAny":
+        addEngine("durable.concurrent_group");
+        break;
       case "Throw":
       case "PushTry":
       case "PopTry":
@@ -787,6 +895,26 @@ function requiredFrom(instructions: Instruction[]): {
     }
   }
   return { engine, host };
+}
+
+function promiseMethod(call: ts.CallExpression): string | undefined {
+  const expression = unwrap(call.expression);
+  if (!ts.isPropertyAccessExpression(expression) || !ts.isIdentifier(expression.name)) {
+    return undefined;
+  }
+  const base = unwrap(expression.expression);
+  if (!ts.isIdentifier(base) || base.text !== "Promise") {
+    return undefined;
+  }
+  return expression.name.text;
+}
+
+function isAwaitPromiseAll(expression: ts.Expression): boolean {
+  const inner = unwrap(expression);
+  if (!ts.isAwaitExpression(inner) || !ts.isCallExpression(unwrap(inner.expression))) {
+    return false;
+  }
+  return promiseMethod(unwrap(inner.expression) as ts.CallExpression) === "all";
 }
 
 function resolveDurable(

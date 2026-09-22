@@ -7,8 +7,8 @@ The engine executes a validated artifact against a continuation. It does not own
 1. Load a validated artifact and a continuation.
 2. Read the instruction at the top frame's program counter.
 3. Execute pure instructions in the engine (`Jump`, locals, constants, `Return`).
-4. At a durable operation, emit a `HostRequest` and stop.
-5. Apply the host's `HostResponse`, then continue or suspend.
+4. At a durable operation, emit a `HostRequest` and stop. `Fork` / `JoinAll` / `JoinAny` ([concurrency.md](concurrency.md)) register branches one durable transition at a time. `JoinAll` suspends while any branch is still outstanding. `JoinAny` registers every branch before it settles.
+5. Apply the host's `HostResponse`, then continue or suspend. A delivery into a concurrent group must name `branch`.
 
 Host requests are issued at durable boundaries, not for every instruction. An in-memory transition is not committed until the host confirms the corresponding persist request.
 

@@ -53,6 +53,7 @@ pub enum HostRequest {
     },
     RegisterTimer {
         resume_at_ms: u64,
+        branch: Option<String>,
     },
     RegisterWait {
         wait: WaitRegistration,
@@ -68,14 +69,30 @@ pub enum HostRequest {
 #[derive(Debug, Clone, PartialEq)]
 pub enum HostResponse {
     Ack,
-    PersistConfirmed { revision: u64 },
-    EffectResult { value: Value },
-    EffectFailed { message: String },
-    EventPayload { value: Value },
-    TimerFired,
-    ChildResult { value: Value },
+    PersistConfirmed {
+        revision: u64,
+    },
+    EffectResult {
+        value: Value,
+    },
+    EffectFailed {
+        message: String,
+    },
+    EventPayload {
+        value: Value,
+        branch: Option<String>,
+    },
+    TimerFired {
+        branch: Option<String>,
+    },
+    ChildResult {
+        value: Value,
+        branch: Option<String>,
+    },
     Cancel,
-    Artifact { hash: String },
+    Artifact {
+        hash: String,
+    },
 }
 
 impl HostResponse {
@@ -86,7 +103,7 @@ impl HostResponse {
             HostResponse::EffectResult { .. } => "effect_result",
             HostResponse::EffectFailed { .. } => "effect_failed",
             HostResponse::EventPayload { .. } => "event_payload",
-            HostResponse::TimerFired => "timer_fired",
+            HostResponse::TimerFired { .. } => "timer_fired",
             HostResponse::ChildResult { .. } => "child_result",
             HostResponse::Cancel => "cancel",
             HostResponse::Artifact { .. } => "artifact",
