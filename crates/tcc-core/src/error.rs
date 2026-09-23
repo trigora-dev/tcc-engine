@@ -23,7 +23,6 @@ pub enum CoreError {
         found: String,
     },
     InvalidContinuation(String),
-    Terminal(&'static str),
     UnexpectedHostResponse {
         expected: &'static str,
         got: &'static str,
@@ -61,7 +60,6 @@ impl fmt::Display for CoreError {
                 "continuation language_semantics_version `{found}` does not match artifact `{expected}`"
             ),
             CoreError::InvalidContinuation(message) => write!(f, "{message}"),
-            CoreError::Terminal(status) => write!(f, "execution has already {status}"),
             CoreError::UnexpectedHostResponse { expected, got } => write!(
                 f,
                 "host response `{got}` does not match outstanding request `{expected}`"

@@ -115,12 +115,6 @@ impl Engine {
         let mut continuation = continuation;
         absorb_continuation(&mut continuation);
         validate_resume_frames(&artifact, &continuation)?;
-        match continuation.status {
-            ContinuationStatus::Completed => return Err(CoreError::Terminal("completed")),
-            ContinuationStatus::Failed => return Err(CoreError::Terminal("failed")),
-            ContinuationStatus::Cancelled => return Err(CoreError::Terminal("cancelled")),
-            _ => {}
-        }
         let liveness = analyze_program(&artifact.program);
         Ok(Self {
             artifact,

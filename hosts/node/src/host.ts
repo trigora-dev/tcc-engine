@@ -230,15 +230,6 @@ export async function resumeExecution(options: ResumeOptions): Promise<RunResult
     if (!artifactJson) {
       throw new Error(`missing artifact \`${execution.artifact_hash}\``);
     }
-    if ((execution.status === "completed" || execution.status === "cancelled" || execution.status === "failed") && saved) {
-      const parsed = JSON.parse(saved.json) as { result: unknown };
-      return {
-        status: execution.status,
-        result: parsed.result,
-        continuationJson: saved.json,
-        revision: saved.revision,
-      };
-    }
     const engine = saved
       ? EngineBinding.resume(artifactJson, saved.json)
       : new EngineBinding(artifactJson, executionId);
