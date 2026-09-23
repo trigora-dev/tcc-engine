@@ -146,6 +146,8 @@ struct Compiler {
     next_func: u32,
     entry: bool,
     expected: Option<Ty>,
+    /// Local name of an imported durable operation, mapped to its canonical name.
+    durables: HashMap<String, String>,
 }
 
 struct FnState {
@@ -275,6 +277,7 @@ impl Compiler {
             next_func: 1,
             entry: false,
             expected: None,
+            durables: HashMap::new(),
         };
         compiler.ty_f64 = compiler.intern(TyKind::F64);
         compiler.ty_bool = compiler.intern(TyKind::Bool);
@@ -496,6 +499,7 @@ impl Compiler {
     }
 
     fn collect(&mut self, file: &File) -> Result<(), CompileError> {
+        self.collect_uses(file)?;
         for item in &file.items {
             match item {
                 Item::Struct(item) => self.declare_struct(item)?,
@@ -687,6 +691,7 @@ impl Compiler {
             }
             let (params, ret) = self.signature(func)?;
             let name = func.sig.ident.to_string();
+            self.reject_shadow(&name, func.span())?;
             if self.helpers.contains_key(&name) {
                 return Err(CompileError::at("duplicate helper", func.span()));
             }
@@ -708,6 +713,7 @@ impl Compiler {
                 compiler.compile_fn_body(func, helper.ret, false)
             })?;
         }
+        self.reject_shadow("run", run.span())?;
         let ret = self.signature(run)?.1;
         self.entry = true;
         self.compile_fn_body(run, ret, true)
@@ -775,7 +781,12 @@ impl Compiler {
                 ));
             }
             let ty = self.ty(&pat.ty)?;
-            self.bind(ident.ident.to_string(), ty, ident.mutability.is_some());
+            self.bind(
+                ident.ident.to_string(),
+                ty,
+                ident.mutability.is_some(),
+                ident.span(),
+            )?;
         }
         self.param_count = self.next_local;
         let produced = self.block(&func.block, true)?;
@@ -906,11 +917,125 @@ impl Compiler {
         })
     }
 
-    fn bind(&mut self, name: String, ty: Ty, mutable: bool) -> u32 {
+    fn bind(
+        &mut self,
+        name: String,
+        ty: Ty,
+        mutable: bool,
+        span: proc_macro2::Span,
+    ) -> Result<u32, CompileError> {
+        self.reject_shadow(&name, span)?;
         let id = self.next_local;
         self.next_local += 1;
         self.names.insert(name, Slot { id, ty, mutable });
-        id
+        Ok(id)
+    }
+
+    fn reject_shadow(&self, name: &str, span: proc_macro2::Span) -> Result<(), CompileError> {
+        if self.durables.contains_key(name) {
+            return Err(CompileError::at(
+                format!("imported durable name `{name}` cannot be shadowed"),
+                span,
+            ));
+        }
+        Ok(())
+    }
+
+    fn collect_uses(&mut self, file: &File) -> Result<(), CompileError> {
+        for item in &file.items {
+            let Item::Use(item) = item else {
+                continue;
+            };
+            self.reject_attrs(&item.attrs)?;
+            self.walk_use(&item.tree, &[])?;
+        }
+        Ok(())
+    }
+
+    fn walk_use(&mut self, tree: &syn::UseTree, prefix: &[String]) -> Result<(), CompileError> {
+        match tree {
+            syn::UseTree::Path(path) => {
+                let mut next = prefix.to_vec();
+                next.push(path.ident.to_string());
+                self.walk_use(&path.tree, &next)
+            }
+            syn::UseTree::Name(name) => self.import_name(
+                prefix,
+                &name.ident.to_string(),
+                &name.ident.to_string(),
+                name.span(),
+            ),
+            syn::UseTree::Rename(rename) => self.import_name(
+                prefix,
+                &rename.ident.to_string(),
+                &rename.rename.to_string(),
+                rename.span(),
+            ),
+            syn::UseTree::Glob(glob) => {
+                if is_durable_module(prefix) {
+                    Err(CompileError::at(
+                        "glob imports are outside this subset",
+                        glob.span(),
+                    ))
+                } else {
+                    Err(CompileError::at(
+                        "imports other than `trigora` and `tcc_rust_prelude` are outside this subset",
+                        glob.span(),
+                    ))
+                }
+            }
+            syn::UseTree::Group(group) => {
+                for item in &group.items {
+                    self.walk_use(item, prefix)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn import_name(
+        &mut self,
+        prefix: &[String],
+        imported: &str,
+        local: &str,
+        span: proc_macro2::Span,
+    ) -> Result<(), CompileError> {
+        if !is_durable_module(prefix) {
+            return Err(CompileError::at(
+                "imports other than `trigora` and `tcc_rust_prelude` are outside this subset",
+                span,
+            ));
+        }
+        if !is_durable_op(imported) {
+            return Ok(());
+        }
+        if self.durables.contains_key(local) {
+            return Err(CompileError::at(
+                format!("duplicate import of `{local}`"),
+                span,
+            ));
+        }
+        self.durables
+            .insert(local.to_string(), imported.to_string());
+        Ok(())
+    }
+
+    /// `Some` is the canonical durable operation. A qualified path into a durable module is an error.
+    pub(super) fn resolve_durable(&self, path: &syn::Path) -> Result<Option<String>, CompileError> {
+        if let Some(name) = single_ident(path) {
+            return Ok(self.durables.get(&name).cloned());
+        }
+        let root = path
+            .segments
+            .first()
+            .map(|segment| segment.ident.to_string());
+        if root.as_deref().is_some_and(is_durable_module_name) {
+            return Err(CompileError::at(
+                "import durable operations from `trigora` or `tcc_rust_prelude`",
+                path.span(),
+            ));
+        }
+        Ok(None)
     }
 
     fn fresh(&mut self) -> u32 {
@@ -1027,7 +1152,7 @@ impl Compiler {
                             })?;
                             self.closure_sigs.insert(name.clone(), sig);
                         }
-                        let id = self.bind(name, ty, mutable);
+                        let id = self.bind(name, ty, mutable, local.span())?;
                         self.store(id);
                         if let Some((source_name, source)) = moved_from {
                             self.clear(source);
@@ -1538,6 +1663,12 @@ impl Compiler {
         let Expr::Path(path) = &*call.func else {
             return Err(CompileError::at("unsupported call", call.span()));
         };
+        if self.resolve_durable(&path.path)?.is_some() {
+            return Err(CompileError::at(
+                "await a durable operation with ?",
+                call.span(),
+            ));
+        }
         if let Some(name) = single_ident(&path.path) {
             if let Some(slot) = self.names.get(&name).cloned() {
                 if slot.ty == self.ty_closure {
@@ -1546,15 +1677,6 @@ impl Compiler {
             }
             if self.helpers.contains_key(&name) {
                 return self.call_helper(call, &name);
-            }
-            if matches!(
-                name.as_str(),
-                "wait_for_event" | "effect" | "sleep" | "invoke" | "join" | "race"
-            ) {
-                return Err(CompileError::at(
-                    "await a durable operation with ?",
-                    call.span(),
-                ));
             }
         }
         if path_string(&path.path) == "Vec::new" {
@@ -1927,7 +2049,7 @@ impl Compiler {
             for (name, key, ty) in bindings {
                 self.load(scrutinee.id);
                 self.emit(Instruction::GetProp { key: key.clone() });
-                let id = self.bind(name, ty, false);
+                let id = self.bind(name, ty, false, arm.span())?;
                 self.store(id);
                 if self.moves(ty) {
                     self.load(scrutinee.id);
@@ -2230,6 +2352,21 @@ fn generic_args(segment: &syn::PathSegment, count: usize) -> Result<Vec<Type>, C
     Ok(types)
 }
 
+fn is_durable_module(prefix: &[String]) -> bool {
+    prefix.len() == 1 && is_durable_module_name(&prefix[0])
+}
+
+fn is_durable_module_name(name: &str) -> bool {
+    name == "trigora" || name == "tcc_rust_prelude"
+}
+
+fn is_durable_op(name: &str) -> bool {
+    matches!(
+        name,
+        "effect" | "sleep" | "wait_for_event" | "invoke" | "join" | "race"
+    )
+}
+
 fn single_ident(path: &syn::Path) -> Option<String> {
     if path.segments.len() == 1 && path.segments[0].arguments.is_empty() {
         Some(path.segments[0].ident.to_string())
@@ -2308,7 +2445,7 @@ fn required_features(functions: &[Function]) -> (Vec<EngineFeature>, Vec<HostCap
     for function in functions {
         for instruction in &function.instructions {
             match instruction {
-                Instruction::Effect => effect = true,
+                Instruction::Effect { .. } => effect = true,
                 Instruction::Sleep => sleep = true,
                 Instruction::WaitForEvent => wait = true,
                 Instruction::Invoke { .. } => invoke = true,

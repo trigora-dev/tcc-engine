@@ -49,6 +49,19 @@ pub fn decode_request(text: &str) -> Result<HostRequest, CoreError> {
         .as_str()
         .map_err(core_state)?
     {
+        "run_effect" => {
+            let input = match map.get("input") {
+                None => {
+                    return Err(CoreError::TypeError("missing run_effect.input".into()));
+                }
+                Some(json) => json_value(json)?,
+            };
+            Ok(HostRequest::RunEffect {
+                key: field_string(map, "key")?,
+                idempotency_key: field_string(map, "idempotency_key")?,
+                input,
+            })
+        }
         "create_child" => Ok(HostRequest::CreateChild {
             child: crate::protocol::ChildSpec {
                 invoke_id: field_string(map, "invoke_id")?,
@@ -147,6 +160,7 @@ fn request_to_json(request: &HostRequest) -> Result<Json, CoreError> {
         HostRequest::RunEffect {
             key,
             idempotency_key,
+            input,
         } => {
             map.insert("type".into(), Json::String("run_effect".into()));
             map.insert("key".into(), Json::String(key.clone()));
@@ -154,6 +168,7 @@ fn request_to_json(request: &HostRequest) -> Result<Json, CoreError> {
                 "idempotency_key".into(),
                 Json::String(idempotency_key.clone()),
             );
+            map.insert("input".into(), value_json(input)?);
         }
         HostRequest::PersistEffect { record } => {
             map.insert("type".into(), Json::String("persist_effect".into()));
@@ -374,6 +389,33 @@ mod tests {
             decode_response(&stamped).unwrap_err(),
             CoreError::UnsupportedHostProtocol { got: 2, .. }
         ));
+    }
+
+    #[test]
+    fn run_effect_requires_input_and_writes_an_empty_object() {
+        let encoded = encode_request(&HostRequest::RunEffect {
+            key: "search".into(),
+            idempotency_key: "exec:search".into(),
+            input: Value::Object(std::collections::BTreeMap::new()),
+        })
+        .unwrap();
+        assert!(encoded.contains("\"input\""));
+        match decode_request(&encoded).unwrap() {
+            HostRequest::RunEffect { input, .. } => {
+                assert_eq!(input, Value::Object(std::collections::BTreeMap::new()));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        let missing = decode_request(
+            r#"{"idempotency_key":"exec:search","key":"search","type":"run_effect"}"#,
+        )
+        .unwrap_err();
+        assert_eq!(missing.to_string(), "missing run_effect.input");
+        let bad_value = decode_request(
+            r#"{"idempotency_key":"exec:search","input":1,"key":"search","type":"run_effect"}"#,
+        )
+        .unwrap_err();
+        assert_ne!(bad_value.to_string(), "missing run_effect.input");
     }
 
     #[test]

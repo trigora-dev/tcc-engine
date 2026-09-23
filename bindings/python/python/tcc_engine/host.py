@@ -6,16 +6,17 @@ from pathlib import Path
 from typing import Any, Optional
 
 from tcc_engine._engine import EngineBinding
+from tcc_engine.canonical import canonical_stringify
 from tcc_engine.store import Store
 
 FakeEffects = dict[str, Any]
-EffectRunner = Callable[[str], Any]
+EffectRunner = Callable[[str, Any], Any]
 CrashHook = Callable[[str, Optional[str]], None]
 _UNSET = object()
 
 
 def map_effects(effects: FakeEffects) -> EffectRunner:
-    def run(key: str) -> Any:
+    def run(key: str, _input: Any) -> Any:
         if key not in effects:
             raise RuntimeError(f"no effect for `{key}`")
         return effects[key]
@@ -459,13 +460,19 @@ def execute_effect(
     crash = _crash(options)
     key = str(request["key"])
     idempotency_key = str(request["idempotency_key"])
+    if "input" not in request:
+        raise RuntimeError("missing run_effect.input")
+    effect_input = request["input"]
+    input_json = canonical_effect_input(effect_input)
     crash("before_effect_provider", None)
     existing = store.get_effect(options["execution_id"], key)
+    if existing is not None and effect_input_json(existing["input_json"]) != input_json:
+        raise RuntimeError(f"effect {options['execution_id']}:{key} input mismatch")
     if existing is not None and existing["status"] == "completed" and existing["result_json"]:
         store.observe({"type": "effect.journal_hit", "executionId": options["execution_id"]})
         engine.apply_response(json.dumps({"type": "effect_result", "value": json.loads(existing["result_json"])}))
         return "continue"
-    store.mark_effect_started(options["execution_id"], key, idempotency_key)
+    store.mark_effect_started(options["execution_id"], key, idempotency_key, input_json)
     if fail_counts.get(key, 0) > 0:
         fail_counts[key] = fail_counts.get(key, 0) - 1
         if options.get("effect_log_path"):
@@ -475,12 +482,13 @@ def execute_effect(
             key,
             idempotency_key,
             json.dumps({"t": "string", "v": "failed"}),
+            input_json,
         )
         crash("after_persist_effect", key)
         return execute_effect(store, engine, request, run_effect, fail_counts, options)
     if options.get("effect_log_path"):
         Path(options["effect_log_path"]).open("a", encoding="utf-8").write(f"{key}\n")
-    produced = run_effect(key)
+    produced = run_effect(key, plain_effect_input(effect_input))
     if produced == "__fail__":
         engine.apply_response(json.dumps({"type": "effect_failed", "message": "failed"}))
         return "continue"
@@ -497,10 +505,13 @@ def persist_effect(
     key = str(request["key"])
     idempotency_key = str(request.get("idempotency_key") or f"{execution_id}:{key}")
     result_json = json.dumps(request.get("result"))
+    existing = store.get_effect(execution_id, key)
+    stored = None if existing is None else existing["input_json"]
+    input_json = effect_input_json(stored)
     if request.get("status") == "failed":
-        store.fail_effect(execution_id, key, idempotency_key, result_json)
+        store.fail_effect(execution_id, key, idempotency_key, result_json, input_json)
     else:
-        store.complete_effect(execution_id, key, idempotency_key, result_json)
+        store.complete_effect(execution_id, key, idempotency_key, result_json, input_json)
     crash("after_persist_effect", key)
     engine.apply_response(json.dumps({"type": "ack"}))
     return "continue"
@@ -711,6 +722,40 @@ def snapshot(store: Store, execution_id: str, status: str, result: Any) -> dict[
         "continuationJson": None if saved is None else saved["json"],
         "revision": 0 if saved is None else saved["revision"],
     }
+
+
+def canonical_effect_input(value: Any) -> str:
+    if not isinstance(value, dict):
+        raise RuntimeError("unsupported effect input")
+    return canonical_stringify(value)
+
+
+def effect_input_json(stored: str | None) -> str:
+    if stored is None:
+        raise RuntimeError("effect input_json is required")
+    return canonical_effect_input(json.loads(stored))
+
+
+def plain_effect_input(value: Any) -> Any:
+    if not isinstance(value, dict):
+        raise RuntimeError("unsupported effect input")
+    return _plain_tagged(value)
+
+
+def _plain_tagged(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return {}
+    kind = value.get("t")
+    payload = value.get("v")
+    if kind in {"bool", "number", "string"}:
+        return payload
+    if kind in {"null", "undefined"}:
+        return None
+    if kind == "array":
+        return [_plain_tagged(item) for item in payload or []]
+    if kind == "object":
+        return {key: _plain_tagged(item) for key, item in (payload or {}).items()}
+    return {}
 
 
 def encode_value(value: Any) -> dict[str, Any]:

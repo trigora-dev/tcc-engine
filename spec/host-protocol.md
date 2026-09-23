@@ -23,7 +23,7 @@ Host conformance for this protocol is the named kit in [host-conformance-v1.md](
 | Request | Host action |
 |---|---|
 | `persist_checkpoint` | Commit continuation state. Reply with `persist_confirmed` (including `revision`) or `ack` |
-| `run_effect` | Perform the external operation using the supplied identity |
+| `run_effect` | Perform the external operation using the supplied identity. `input` is required. Encode always writes it. A missing field is `missing run_effect.input`. A no-payload effect sends `{}` |
 | `persist_effect` | Persist the effect journal record |
 | `register_timer` | Arrange a wake at `resume_at_ms`. Inside a join, `branch` is the timer id |
 | `register_wait` | Persist the event wait. Wake on a matching event or timeout |
@@ -52,6 +52,8 @@ A host may commit each persist individually or coordinate several transition rec
 Related records of one logical transition must become durable consistently even on a host that never groups unrelated executions. For `invoke`, that unit is the parent wait checkpoint, the engine-stable child identity, the child execution row, and the parent–child edge. `create_child` `ack` is not a commit. Retry before that commit finds no child; retry after it finds the same child.
 
 A child invocation identity permanently binds to its first committed argument vector. Re-creation with the same vector is idempotent. Re-creation with a different vector leaves that row unchanged and fails as an invariant mismatch. Reference hosts store `[]` as SQL `NULL` and never as the text `[]`. A non-empty vector is a JSON array. `[{"t":"null"}]` is one explicit null.
+
+An effect identity permanently binds to its first committed input. The same canonical input is a journal hit and does not call the provider again. A different canonical input fails as an invariant mismatch, including a `started` row, and does not reuse the stored result. Reference hosts store the canonical tagged object in `effects.input_json TEXT NOT NULL`. A no-payload effect stores `{}`. Key order is not part of equality. The runner receives the untagged value. A joined effect is the same `run_effect` request, with that branch's own input.
 
 Top-level start passes the same vector. The caller supplies the ordered arguments. The invoked program's `language_semantics_version` determines how that vector binds: TypeScript leaves missing parameters `undefined` and ignores extras; Python requires an exact count. Binding happens on a fresh start, not on resume. An out-of-tree client follows that contract, for example `client.executions.start(program, { args })`. This repository's Node `RunOptions.args` and Python `start_execution(program_args=...)` are that option. Absent means `[]`.
 

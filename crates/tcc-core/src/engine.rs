@@ -189,6 +189,7 @@ impl Engine {
                 HostRequest::RunEffect {
                     key,
                     idempotency_key,
+                    ..
                 },
                 HostResponse::EffectResult { value },
             ) => {
@@ -212,6 +213,7 @@ impl Engine {
                 HostRequest::RunEffect {
                     key,
                     idempotency_key,
+                    ..
                 },
                 HostResponse::EffectFailed { message },
             ) => {
@@ -623,9 +625,9 @@ impl Engine {
                     Ok(None)
                 }
             }
-            Instruction::Effect => {
+            Instruction::Effect { has_input } => {
                 self.require_entry_frame()?;
-                self.yield_effect()
+                self.yield_effect(has_input)
             }
             Instruction::Sleep => {
                 self.require_entry_frame()?;
@@ -703,8 +705,14 @@ impl Engine {
         }
     }
 
-    fn yield_effect(&mut self) -> Result<Option<EngineOutcome>, CoreError> {
+    fn yield_effect(&mut self, has_input: bool) -> Result<Option<EngineOutcome>, CoreError> {
         let key = expect_string(self.pop()?)?;
+        let input = if has_input {
+            let value = self.pop()?;
+            export_value(&self.continuation.heap, &value).unwrap_or(value)
+        } else {
+            Value::Object(std::collections::BTreeMap::new())
+        };
         if self.join_is_active() {
             self.bind_planned_branch(BranchOp::Effect { key: key.clone() })?;
         }
@@ -717,6 +725,7 @@ impl Engine {
         let request = HostRequest::RunEffect {
             key,
             idempotency_key,
+            input,
         };
         self.outstanding = Some(request.clone());
         Ok(Some(EngineOutcome::Host(request)))

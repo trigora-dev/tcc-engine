@@ -39,7 +39,7 @@ fn first_example() -> Artifact {
                     Instruction::LoadConst {
                         value: ConstValue::String("charge".into()),
                     },
-                    Instruction::Effect,
+                    Instruction::Effect { has_input: false },
                     Instruction::StoreLocal { local: LocalId(0) },
                     Instruction::LoadConst {
                         value: ConstValue::String("approved".into()),
@@ -76,6 +76,7 @@ fn first_example_runs_effect_wait_and_completes() {
         HostRequest::RunEffect {
             key: "charge".into(),
             idempotency_key: "first:charge".into(),
+            input: Value::Object(std::collections::BTreeMap::new()),
         }
     );
     assert_eq!(engine.continuation().revision, 0);

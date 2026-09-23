@@ -650,7 +650,13 @@ test("host onEvent reports persist restore journal and child without blocking", 
   try {
     journalStore.putArtifact(hash, first);
     journalStore.createExecution("obs-journal", hash, "owner-1", Date.now() + 60_000);
-    journalStore.completeEffect("obs-journal", "generate", "k", JSON.stringify({ t: "number", v: 42 }));
+    journalStore.completeEffect(
+      "obs-journal",
+      "generate",
+      "k",
+      JSON.stringify({ t: "number", v: 42 }),
+      JSON.stringify({ t: "object", v: {} }),
+    );
     const journaled = runOnStore(journalStore, {
       dbPath: "unused",
       artifactJson: first,

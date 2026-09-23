@@ -115,6 +115,7 @@ class Store:
               idempotency_key TEXT NOT NULL,
               status TEXT NOT NULL,
               result_json TEXT,
+              input_json TEXT NOT NULL,
               PRIMARY KEY (execution_id, key)
             );
             CREATE TABLE IF NOT EXISTS waits (
@@ -148,6 +149,26 @@ class Store:
             );
             """
         )
+        self._ensure_effect_input_column()
+
+    def _ensure_effect_input_column(self) -> None:
+        columns = list(self.db.execute("PRAGMA table_info(effects)"))
+        input_column = next((row for row in columns if row[1] == "input_json"), None)
+        if input_column is not None and input_column[3] == 1:
+            return
+        self.db.execute("DROP TABLE effects")
+        self.db.execute(
+            """CREATE TABLE effects (
+              execution_id TEXT NOT NULL,
+              key TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL,
+              status TEXT NOT NULL,
+              result_json TEXT,
+              input_json TEXT NOT NULL,
+              PRIMARY KEY (execution_id, key)
+            )"""
+        )
+        self.db.commit()
 
     def close(self) -> None:
         self.db.close()
@@ -597,39 +618,48 @@ class Store:
             "SELECT * FROM effects WHERE execution_id = ? AND key = ?", (execution_id, key)
         ).fetchone()
 
-    def mark_effect_started(self, execution_id: str, key: str, idempotency_key: str) -> None:
+    def mark_effect_started(
+        self, execution_id: str, key: str, idempotency_key: str, input_json: str
+    ) -> None:
         self.db.execute(
-            """INSERT INTO effects(execution_id, key, idempotency_key, status, result_json)
-               VALUES (?, ?, ?, 'started', NULL)
+            """INSERT INTO effects(execution_id, key, idempotency_key, status, result_json, input_json)
+               VALUES (?, ?, ?, 'started', NULL, ?)
                ON CONFLICT(execution_id, key) DO UPDATE SET
-                 idempotency_key = excluded.idempotency_key
+                 idempotency_key = excluded.idempotency_key,
+                 input_json = excluded.input_json
                WHERE effects.status != 'completed'""",
-            (execution_id, key, idempotency_key),
+            (execution_id, key, idempotency_key, input_json),
         )
         self.db.commit()
 
-    def complete_effect(self, execution_id: str, key: str, idempotency_key: str, result_json: str) -> None:
+    def complete_effect(
+        self, execution_id: str, key: str, idempotency_key: str, result_json: str, input_json: str
+    ) -> None:
         self.db.execute(
-            """INSERT INTO effects(execution_id, key, idempotency_key, status, result_json)
-               VALUES (?, ?, ?, 'completed', ?)
+            """INSERT INTO effects(execution_id, key, idempotency_key, status, result_json, input_json)
+               VALUES (?, ?, ?, 'completed', ?, ?)
                ON CONFLICT(execution_id, key) DO UPDATE SET
                  status = 'completed',
                  idempotency_key = excluded.idempotency_key,
-                 result_json = excluded.result_json""",
-            (execution_id, key, idempotency_key, result_json),
+                 result_json = excluded.result_json,
+                 input_json = effects.input_json""",
+            (execution_id, key, idempotency_key, result_json, input_json),
         )
         self.db.commit()
 
-    def fail_effect(self, execution_id: str, key: str, idempotency_key: str, result_json: str) -> None:
+    def fail_effect(
+        self, execution_id: str, key: str, idempotency_key: str, result_json: str, input_json: str
+    ) -> None:
         self.db.execute(
-            """INSERT INTO effects(execution_id, key, idempotency_key, status, result_json)
-               VALUES (?, ?, ?, 'failed', ?)
+            """INSERT INTO effects(execution_id, key, idempotency_key, status, result_json, input_json)
+               VALUES (?, ?, ?, 'failed', ?, ?)
                ON CONFLICT(execution_id, key) DO UPDATE SET
                  status = 'failed',
                  idempotency_key = excluded.idempotency_key,
-                 result_json = excluded.result_json
+                 result_json = excluded.result_json,
+                 input_json = effects.input_json
                WHERE effects.status != 'completed'""",
-            (execution_id, key, idempotency_key, result_json),
+            (execution_id, key, idempotency_key, result_json, input_json),
         )
         self.db.commit()
 

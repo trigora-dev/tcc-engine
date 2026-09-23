@@ -277,8 +277,11 @@ fn instruction_to_json(instruction: &Instruction) -> Json {
             map.insert("func".to_string(), Json::Number(func.0 as f64));
             map.insert("argc".to_string(), Json::Number(*argc as f64));
         }
-        Instruction::Effect => {
+        Instruction::Effect { has_input } => {
             map.insert("op".to_string(), Json::String("Effect".to_string()));
+            if *has_input {
+                map.insert("has_input".to_string(), Json::Bool(true));
+            }
         }
         Instruction::Sleep => {
             map.insert("op".to_string(), Json::String("Sleep".to_string()));
@@ -576,7 +579,18 @@ fn json_to_instruction(json: &Json) -> Result<Instruction, IrError> {
             func: FuncId(Json::get(map, "func")?.as_u32()?),
             argc: Json::get(map, "argc")?.as_u32()?,
         }),
-        "Effect" => Ok(Instruction::Effect),
+        "Effect" => {
+            let has_input = match map.get("has_input") {
+                None => false,
+                Some(Json::Bool(flag)) => *flag,
+                Some(_) => {
+                    return Err(IrError::InvalidEncoding(
+                        "Effect has_input must be a boolean".to_string(),
+                    ))
+                }
+            };
+            Ok(Instruction::Effect { has_input })
+        }
         "Sleep" => Ok(Instruction::Sleep),
         "WaitForEvent" => Ok(Instruction::WaitForEvent),
         "Invoke" => Ok(Instruction::Invoke {
@@ -692,6 +706,24 @@ mod tests {
             result.unwrap(),
             Err(IrError::InvalidEncoding(message)) if message.contains("Nope")
         ));
+    }
+
+    #[test]
+    fn effect_omits_has_input_unless_a_value_is_popped() {
+        let plain = instruction_to_json(&Instruction::Effect { has_input: false });
+        let text = plain.stringify();
+        assert!(text.contains("\"op\":\"Effect\""));
+        assert!(!text.contains("has_input"));
+        assert_eq!(
+            json_to_instruction(&Json::parse(r#"{"op":"Effect"}"#).unwrap()).unwrap(),
+            Instruction::Effect { has_input: false }
+        );
+        let with_input = instruction_to_json(&Instruction::Effect { has_input: true });
+        assert!(with_input.stringify().contains("\"has_input\":true"));
+        assert_eq!(
+            json_to_instruction(&with_input).unwrap(),
+            Instruction::Effect { has_input: true }
+        );
     }
 
     #[test]

@@ -54,7 +54,7 @@ fn envelope(hash: String, instructions: &[Instruction]) -> Envelope {
     };
     for instruction in instructions {
         match instruction {
-            Instruction::Effect => {
+            Instruction::Effect { .. } => {
                 add_engine(EngineFeature::DURABLE_EFFECT);
                 add_host(HostCapability::EFFECT);
             }
@@ -122,7 +122,7 @@ fn effect_then_wait(seed: u64, locals: u32) -> Artifact {
         locals,
         vec![
             load_string("generate"),
-            Instruction::Effect,
+            Instruction::Effect { has_input: false },
             Instruction::StoreLocal { local: LocalId(0) },
             load_string("approved"),
             Instruction::WaitForEvent,
@@ -140,17 +140,17 @@ fn branched_effects(seed: u64) -> Artifact {
         2,
         vec![
             load_string("generate"),
-            Instruction::Effect,
+            Instruction::Effect { has_input: false },
             Instruction::StoreLocal { local: LocalId(0) },
             Instruction::LoadLocal { local: LocalId(0) },
             Instruction::JumpIfFalse { target: Pc(10) },
             load_string("taken"),
-            Instruction::Effect,
+            Instruction::Effect { has_input: false },
             Instruction::StoreLocal { local: LocalId(1) },
             Instruction::Jump { target: Pc(13) },
             Instruction::Nop,
             load_string("skipped"),
-            Instruction::Effect,
+            Instruction::Effect { has_input: false },
             Instruction::StoreLocal { local: LocalId(1) },
             Instruction::LoadLocal { local: LocalId(1) },
             Instruction::Return,
@@ -171,7 +171,7 @@ fn loop_effect(seed: u64) -> Artifact {
             Instruction::LoadLocal { local: LocalId(0) },
             Instruction::JumpIfFalse { target: Pc(12) },
             load_string("generate"),
-            Instruction::Effect,
+            Instruction::Effect { has_input: false },
             Instruction::StoreLocal { local: LocalId(1) },
             Instruction::LoadConst {
                 value: ConstValue::Number(0.0),
@@ -206,7 +206,7 @@ fn try_finally_wait(seed: u64) -> Artifact {
             Instruction::Pop,
             Instruction::PopTry,
             load_string("generate"),
-            Instruction::Effect,
+            Instruction::Effect { has_input: false },
             Instruction::StoreLocal { local: LocalId(0) },
             Instruction::LoadLocal { local: LocalId(0) },
             Instruction::Return,
@@ -260,7 +260,7 @@ fn sleep_then_effect(seed: u64) -> Artifact {
             Instruction::Sleep,
             Instruction::Pop,
             load_string("generate"),
-            Instruction::Effect,
+            Instruction::Effect { has_input: false },
             Instruction::StoreLocal { local: LocalId(0) },
             Instruction::LoadLocal { local: LocalId(0) },
             Instruction::Return,

@@ -298,7 +298,7 @@ impl Compiler {
         let Expr::Path(path) = &*call.func else {
             return Err(CompileError::at("await a durable call", call.span()));
         };
-        let Some(name) = single_ident(&path.path) else {
+        let Some(name) = self.resolve_durable(&path.path)? else {
             return Err(CompileError::at("await a durable call", call.span()));
         };
         match name.as_str() {
@@ -345,10 +345,52 @@ impl Compiler {
                 closure.span(),
             ));
         }
+        if !closure.inputs.is_empty() {
+            return Err(CompileError::at(
+                "effect callbacks take no parameters",
+                closure.span(),
+            ));
+        }
+        let captures = self.find_captures(&closure.body, &HashSet::new());
+        if !captures.is_empty() && closure.capture.is_none() {
+            return Err(CompileError::at(
+                "the move keyword is required when a closure captures",
+                closure.span(),
+            ));
+        }
         let ty = self.type_discarded(&closure.body)?;
+        self.emit(Instruction::NewObject);
+        for (name, _) in &captures {
+            self.capture_input(name, closure.span())?;
+        }
         self.string(&key);
-        self.emit(Instruction::Effect);
+        self.emit(Instruction::Effect { has_input: true });
         Ok(ty)
+    }
+
+    pub(super) fn capture_input(
+        &mut self,
+        name: &str,
+        span: proc_macro2::Span,
+    ) -> Result<(), CompileError> {
+        if self.moved.contains_key(name) {
+            return Err(CompileError::at(
+                format!("use of moved value `{name}`"),
+                span,
+            ));
+        }
+        let Some(slot) = self.names.get(name).cloned() else {
+            return Err(CompileError::at(format!("unknown name `{name}`"), span));
+        };
+        self.load(slot.id);
+        if self.moves(slot.ty) {
+            self.clear(slot.id);
+            self.moved.insert(name.to_string(), ());
+        }
+        self.emit(Instruction::SetProp {
+            key: name.to_string(),
+        });
+        Ok(())
     }
 
     pub(super) fn op_sleep(&mut self, call: &syn::ExprCall) -> Result<Ty, CompileError> {
@@ -453,7 +495,7 @@ impl Compiler {
                 expr.span(),
             ));
         };
-        let Some(name) = single_ident(&path.path) else {
+        let Some(name) = self.resolve_durable(&path.path)? else {
             return Err(CompileError::at(
                 "join branches must be durable calls",
                 expr.span(),
@@ -511,7 +553,7 @@ impl Compiler {
         if start_ty != self.ty_f64 {
             return Err(CompileError::at("range bounds are f64", range.span()));
         }
-        let index = self.bind(name.to_string(), self.ty_f64, true);
+        let index = self.bind(name.to_string(), self.ty_f64, true, range.span())?;
         self.store(index);
         let end_ty = self.expr(end)?;
         if end_ty != self.ty_f64 {
@@ -594,7 +636,7 @@ impl Compiler {
         self.load(vec);
         self.load(index);
         self.emit(Instruction::GetIndex);
-        let binding = self.bind(name.to_string(), elem, false);
+        let binding = self.bind(name.to_string(), elem, false, collection.span())?;
         self.store(binding);
         self.moved.remove(name);
         if self.moves(elem) {
@@ -771,7 +813,7 @@ impl Compiler {
                 compiler.captures.insert(name.clone(), (index as u32, *ty));
             }
             for (name, ty) in &params {
-                compiler.bind(name.clone(), *ty, false);
+                compiler.bind(name.clone(), *ty, false, expr.span())?;
             }
             if let Some(ret) = annotated {
                 compiler.ret = ret;

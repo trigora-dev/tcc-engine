@@ -68,7 +68,7 @@ Locals and constants:
 
 Durable operations:
 
-- `Effect`
+- `Effect`. `has_input: false` encodes as `{"op":"Effect"}`; a missing field decodes as false. That omission is the encoding of false. `has_input: true` encodes as `{"op":"Effect","has_input":true}` and pops one value under the key, including `{}`. False pops only the key, and the host input is `{}`. A non-boolean `has_input` is invalid. TypeScript and Python emit `{"op":"Effect"}`. Rust always emits `{"op":"Effect","has_input":true}`
 - `Sleep`
 - `WaitForEvent`
 - `Invoke`. Optional `arg_count`. Omitted or zero pops only the program name. A positive count pops that many values underneath the name, in reverse, and restores source order. Encode omits `arg_count` when it is zero; a missing field decodes as zero

@@ -580,7 +580,13 @@ def test_host_on_event_reports_persist_restore_journal_and_child_without_blockin
     try:
         journal_store.put_artifact(hash_, first)
         journal_store.create_execution("obs-journal", hash_, "owner-1", 1_000_000)
-        journal_store.complete_effect("obs-journal", "generate", "k", json.dumps({"t": "number", "v": 42}))
+        journal_store.complete_effect(
+            "obs-journal",
+            "generate",
+            "k",
+            json.dumps({"t": "number", "v": 42}),
+            json.dumps({"t": "object", "v": {}}),
+        )
         journaled = run_on_store(
             journal_store,
             artifact_json=first,
@@ -954,4 +960,103 @@ def test_adaptive_extra_snapshots_keep_suffix_bound():
     store.close()
     assert plan is not None
     assert plan["suffix_length"] <= MATERIALIZE_EVERY
+
+
+def test_effect_input_is_canonical_and_a_mismatch_is_rejected():
+    import sqlite3
+
+    from tcc_engine.host import canonical_effect_input, effect_input_json
+
+    unsorted = {
+        "v": {"z": {"t": "number", "v": 1}, "a": {"t": "string", "v": "q"}},
+        "t": "object",
+    }
+    sorted_same = {
+        "t": "object",
+        "v": {"a": {"t": "string", "v": "q"}, "z": {"t": "number", "v": 1}},
+    }
+    assert canonical_effect_input(unsorted) == canonical_effect_input(sorted_same)
+    assert effect_input_json(json.dumps(unsorted)) == canonical_effect_input(sorted_same)
+    try:
+        effect_input_json(None)
+    except RuntimeError as err:
+        assert "effect input_json is required" in str(err)
+    else:
+        raise AssertionError("expected a required input_json")
+    try:
+        canonical_effect_input(None)
+    except RuntimeError as err:
+        assert str(err) == "unsupported effect input"
+    else:
+        raise AssertionError("expected an unsupported effect input")
+
+    db_path = _db()
+    store = Store(db_path)
+    columns = list(store.db.execute("PRAGMA table_info(effects)"))
+    store.close()
+    input_column = next(row for row in columns if row[1] == "input_json")
+    assert input_column[3] == 1
+
+    legacy = _db()
+    db = sqlite3.connect(legacy)
+    db.execute(
+        """CREATE TABLE effects (
+             execution_id TEXT NOT NULL,
+             key TEXT NOT NULL,
+             idempotency_key TEXT NOT NULL,
+             status TEXT NOT NULL,
+             result_json TEXT,
+             input_json TEXT,
+             PRIMARY KEY (execution_id, key)
+           )"""
+    )
+    db.execute(
+        """INSERT INTO effects(execution_id, key, idempotency_key, status, input_json)
+           VALUES ('old', 'generate', 'old:generate', 'completed', NULL)"""
+    )
+    db.commit()
+    db.close()
+    rebuilt = Store(legacy)
+    rebuilt_columns = list(rebuilt.db.execute("PRAGMA table_info(effects)"))
+    assert next(row for row in rebuilt_columns if row[1] == "input_json")[3] == 1
+    assert rebuilt.get_effect("old", "generate") is None
+    rebuilt.close()
+
+    db_path = _db()
+    store = Store(db_path)
+    store.close()
+    db = sqlite3.connect(db_path)
+    db.execute(
+        """INSERT INTO effects(execution_id, key, idempotency_key, status, result_json, input_json)
+           VALUES ('first', 'generate', 'first:generate', 'completed', ?, ?)""",
+        (json.dumps({"t": "number", "v": 7}), json.dumps({"v": {}, "t": "object"})),
+    )
+    db.commit()
+    db.close()
+    log = str(Path(db_path).parent / "effects.log")
+    result = start_execution(
+        db_path=db_path,
+        artifact_json=_artifact(),
+        auto_deliver_event=False,
+        effect_log_path=log,
+    )
+    assert result["status"] == "suspended"
+    assert not Path(log).exists()
+
+    mismatch = _db()
+    store = Store(mismatch)
+    store.complete_effect(
+        "first",
+        "generate",
+        "first:generate",
+        json.dumps({"t": "number", "v": 7}),
+        canonical_effect_input({"t": "object", "v": {"query": {"t": "string", "v": "hello"}}}),
+    )
+    store.close()
+    try:
+        start_execution(db_path=mismatch, artifact_json=_artifact(), auto_deliver_event=False)
+    except RuntimeError as err:
+        assert "input mismatch" in str(err)
+    else:
+        raise AssertionError("expected an effect input mismatch")
 

@@ -41,7 +41,7 @@ db = tempfile.mkdtemp() + "/tcc.db"
 result = start_execution(
     db_path=db,
     artifact_json=artifact_json(artifact),
-    run_effect=lambda key: 42 if key == "generate" else (_ for _ in ()).throw(RuntimeError(key)),
+    run_effect=lambda key, _input: 42 if key == "generate" else (_ for _ in ()).throw(RuntimeError(key)),
 )
 assert result["status"] == "completed", result
 assert result["result"]["v"]["result"]["v"] == 42

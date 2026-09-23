@@ -47,6 +47,7 @@ pub enum HostRequest {
     RunEffect {
         key: String,
         idempotency_key: String,
+        input: Value,
     },
     PersistEffect {
         record: EffectRecord,

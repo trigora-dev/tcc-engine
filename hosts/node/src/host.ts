@@ -6,7 +6,7 @@ import { Store, type PackingThresholds, type PersistMode, type PersistPacking } 
 import type { HostObserver } from "./observe.ts";
 
 export type FakeEffects = Record<string, unknown>;
-export type EffectRunner = (key: string) => unknown;
+export type EffectRunner = (key: string, input: unknown) => unknown;
 
 export async function ensureEngineLoaded(wasmPath?: string): Promise<void> {
   await loadEngine(wasmPath);
@@ -67,7 +67,7 @@ export type RunResult = {
 };
 
 export function mapEffects(effects: FakeEffects): EffectRunner {
-  return (key) => {
+  return (key, _input) => {
     if (!(key in effects)) {
       throw new Error(`no effect for \`${key}\``);
     }
@@ -395,8 +395,13 @@ function executeEffect(
 ): "continue" {
   const key = String(request.key);
   const idempotencyKey = String(request.idempotency_key);
+  const input = requireEffectInput(request);
+  const inputJson = canonicalEffectInput(input);
   maybeCrash("before_effect_provider");
   const existing = store.getEffect(options.executionId, key);
+  if (existing && effectInputJson(existing.input_json) !== inputJson) {
+    throw new Error(`effect ${options.executionId}:${key} input mismatch`);
+  }
   if (existing?.status === "completed" && existing.result_json) {
     store.observe({ type: "effect.journal_hit", executionId: options.executionId });
     engine.applyHostResponse({
@@ -405,20 +410,26 @@ function executeEffect(
     });
     return "continue";
   }
-  store.markEffectStarted(options.executionId, key, idempotencyKey);
+  store.markEffectStarted(options.executionId, key, idempotencyKey, inputJson);
   if ((failCounts[key] ?? 0) > 0) {
     failCounts[key] = (failCounts[key] ?? 0) - 1;
     if (options.effectLogPath) {
       appendFileSync(options.effectLogPath, `${key}\n`);
     }
-    store.failEffect(options.executionId, key, idempotencyKey, JSON.stringify({ t: "string", v: "failed" }));
+    store.failEffect(
+      options.executionId,
+      key,
+      idempotencyKey,
+      JSON.stringify({ t: "string", v: "failed" }),
+      inputJson,
+    );
     maybeCrash("after_persist_effect", key);
     return executeEffect(store, engine, request, runEffect, failCounts, options);
   }
   if (options.effectLogPath) {
     appendFileSync(options.effectLogPath, `${key}\n`);
   }
-  const produced = runEffect(key);
+  const produced = runEffect(key, plainEffectInput(input));
   if (produced === "__fail__") {
     engine.applyHostResponse({ type: "effect_failed", message: "failed" });
     return "continue";
@@ -439,10 +450,11 @@ function persistEffect(
   const key = String(request.key);
   const idempotencyKey = String(request.idempotency_key ?? `${executionId}:${key}`);
   const resultJson = JSON.stringify(request.result ?? null);
+  const inputJson = effectInputJson(store.getEffect(executionId, key)?.input_json ?? null);
   if (request.status === "failed") {
-    store.failEffect(executionId, key, idempotencyKey, resultJson);
+    store.failEffect(executionId, key, idempotencyKey, resultJson, inputJson);
   } else {
-    store.completeEffect(executionId, key, idempotencyKey, resultJson);
+    store.completeEffect(executionId, key, idempotencyKey, resultJson, inputJson);
   }
   maybeCrash("after_persist_effect", key);
   engine.applyHostResponse({ type: "ack" });
@@ -730,6 +742,79 @@ function snapshot(
     continuationJson: saved?.json ?? null,
     revision: saved?.revision ?? 0,
   };
+}
+
+function requireEffectInput(request: Record<string, unknown>): unknown {
+  if (!Object.hasOwn(request, "input")) {
+    throw new Error("missing run_effect.input");
+  }
+  return request.input;
+}
+
+/** Canonical tagged JSON. Key order is not part of equality. */
+export function canonicalEffectInput(value: unknown): string {
+  if (value == null || typeof value !== "object") {
+    throw new Error("unsupported effect input");
+  }
+  return JSON.stringify(sortJson(value));
+}
+
+export function effectInputJson(stored: string | null): string {
+  if (stored == null) {
+    throw new Error("effect input_json is required");
+  }
+  return canonicalEffectInput(JSON.parse(stored));
+}
+
+export function plainEffectInput(value: unknown): unknown {
+  if (value == null || typeof value !== "object") {
+    throw new Error("unsupported effect input");
+  }
+  return plainTagged(value);
+}
+
+function sortJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sortJson);
+  }
+  if (value && typeof value === "object") {
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(value).sort()) {
+      sorted[key] = sortJson((value as Record<string, unknown>)[key]);
+    }
+    return sorted;
+  }
+  return value;
+}
+
+function plainTagged(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  const tagged = value as { t?: string; v?: unknown };
+  switch (tagged.t) {
+    case "undefined":
+      return undefined;
+    case "null":
+      return null;
+    case "bool":
+    case "number":
+    case "string":
+      return tagged.v;
+    case "array":
+      return Array.isArray(tagged.v) ? tagged.v.map(plainTagged) : [];
+    case "object": {
+      const plain: Record<string, unknown> = {};
+      if (tagged.v && typeof tagged.v === "object") {
+        for (const [key, item] of Object.entries(tagged.v as Record<string, unknown>)) {
+          plain[key] = plainTagged(item);
+        }
+      }
+      return plain;
+    }
+    default:
+      return {};
+  }
 }
 
 export function encodeValue(value: unknown): { t: string; v?: unknown } {

@@ -385,11 +385,11 @@ mod tests {
             Instruction::LoadConst {
                 value: ConstValue::String("a".into()),
             },
-            Instruction::Effect,
+            Instruction::Effect { has_input: false },
             Instruction::LoadConst {
                 value: ConstValue::String("b".into()),
             },
-            Instruction::Effect,
+            Instruction::Effect { has_input: false },
             Instruction::JoinAll,
             Instruction::Return,
         ];
@@ -439,11 +439,11 @@ mod tests {
             Instruction::LoadConst {
                 value: ConstValue::String("a".into()),
             },
-            Instruction::Effect,
+            Instruction::Effect { has_input: false },
             Instruction::LoadConst {
                 value: ConstValue::String("b".into()),
             },
-            Instruction::Effect,
+            Instruction::Effect { has_input: false },
             Instruction::JoinAny,
             Instruction::Return,
         ];

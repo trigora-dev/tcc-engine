@@ -144,21 +144,21 @@ fn if_else_skips_untaken_effect() {
             Instruction::LoadConst {
                 value: ConstValue::String("flag".into()),
             },
-            Instruction::Effect,
+            Instruction::Effect { has_input: false },
             Instruction::StoreLocal { local: LocalId(0) },
             Instruction::LoadLocal { local: LocalId(0) },
             Instruction::JumpIfFalse { target: Pc(10) },
             Instruction::LoadConst {
                 value: ConstValue::String("taken".into()),
             },
-            Instruction::Effect,
+            Instruction::Effect { has_input: false },
             Instruction::StoreLocal { local: LocalId(1) },
             Instruction::LoadLocal { local: LocalId(1) },
             Instruction::Return,
             Instruction::LoadConst {
                 value: ConstValue::String("skipped".into()),
             },
-            Instruction::Effect,
+            Instruction::Effect { has_input: false },
             Instruction::StoreLocal { local: LocalId(1) },
             Instruction::LoadLocal { local: LocalId(1) },
             Instruction::Return,
@@ -205,7 +205,7 @@ fn comparisons_and_arrays() {
             Instruction::LoadConst {
                 value: ConstValue::String("n".into()),
             },
-            Instruction::Effect,
+            Instruction::Effect { has_input: false },
             Instruction::StoreLocal { local: LocalId(0) },
             Instruction::LoadLocal { local: LocalId(0) },
             Instruction::LoadConst {

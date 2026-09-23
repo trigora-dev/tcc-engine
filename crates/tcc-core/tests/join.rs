@@ -123,6 +123,97 @@ fn drive_to_result(engine: &mut Engine, events: &mut Vec<(String, Value)>) -> Va
 }
 
 #[test]
+fn joined_effects_carry_branch_input_on_run_effect() {
+    let instructions = vec![
+        Instruction::Fork {
+            count: 2,
+            join_pc: Pc(11),
+        },
+        Instruction::NewObject,
+        Instruction::LoadConst {
+            value: ConstValue::String("left".into()),
+        },
+        Instruction::SetProp { key: "side".into() },
+        load("a"),
+        Instruction::Effect { has_input: true },
+        Instruction::NewObject,
+        Instruction::LoadConst {
+            value: ConstValue::String("right".into()),
+        },
+        Instruction::SetProp { key: "side".into() },
+        load("b"),
+        Instruction::Effect { has_input: true },
+        Instruction::JoinAll,
+        Instruction::Return,
+    ];
+    let mut engine = Engine::start(artifact(instructions), "exec", &EngineCaps::current()).unwrap();
+    let mut inputs = Vec::new();
+    let result = loop {
+        match engine.run_until_host(64) {
+            EngineOutcome::Completed { result } => break result,
+            EngineOutcome::Host(HostRequest::RunEffect { key, input, .. }) => {
+                inputs.push((key, input));
+                engine
+                    .apply_host_response(HostResponse::EffectResult {
+                        value: Value::Number(1.0),
+                    })
+                    .unwrap();
+            }
+            EngineOutcome::Host(_) => ack(&mut engine),
+            other => panic!("unexpected {other:?}"),
+        }
+    };
+    assert_eq!(
+        inputs,
+        vec![
+            (
+                "a".into(),
+                Value::Object(BTreeMap::from([(
+                    "side".into(),
+                    Value::String("left".into())
+                )]))
+            ),
+            (
+                "b".into(),
+                Value::Object(BTreeMap::from([(
+                    "side".into(),
+                    Value::String("right".into())
+                )]))
+            ),
+        ]
+    );
+    assert_eq!(
+        result,
+        Value::Array(vec![Value::Number(1.0), Value::Number(1.0)])
+    );
+}
+
+#[test]
+fn effect_without_input_pops_only_the_key() {
+    let instructions = vec![
+        Instruction::LoadConst {
+            value: ConstValue::Number(7.0),
+        },
+        load("generate"),
+        Instruction::Effect { has_input: false },
+        Instruction::Return,
+    ];
+    let mut engine = Engine::start(artifact(instructions), "exec", &EngineCaps::current()).unwrap();
+    match engine.run_until_host(64) {
+        EngineOutcome::Host(HostRequest::RunEffect { key, input, .. }) => {
+            assert_eq!(key, "generate");
+            assert_eq!(input, Value::Object(BTreeMap::new()));
+            assert_eq!(
+                engine.continuation().stack,
+                vec![Value::Number(7.0)],
+                "a false has_input flag leaves the value under the key on the stack"
+            );
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[test]
 fn promise_all_effects_return_input_order() {
     let instructions = vec![
         Instruction::Fork {
@@ -130,9 +221,9 @@ fn promise_all_effects_return_input_order() {
             join_pc: Pc(5),
         },
         load("a"),
-        Instruction::Effect,
+        Instruction::Effect { has_input: false },
         load("b"),
-        Instruction::Effect,
+        Instruction::Effect { has_input: false },
         Instruction::JoinAll,
         Instruction::Return,
     ];
@@ -264,7 +355,7 @@ fn failure_is_persisted_before_the_throw_and_stale_delivery_is_ignored() {
             join_pc: Pc(5),
         },
         load("bad"),
-        Instruction::Effect,
+        Instruction::Effect { has_input: false },
         load("later"),
         Instruction::WaitForEvent,
         Instruction::JoinAll,
@@ -331,7 +422,7 @@ fn reentry_does_not_alias_branch_ids() {
             join_pc: Pc(3),
         },
         load("a"),
-        Instruction::Effect,
+        Instruction::Effect { has_input: false },
         Instruction::JoinAll,
         Instruction::Jump { target: Pc(0) },
     ];
@@ -374,7 +465,7 @@ fn race_effects(keys: &[&str]) -> Vec<Instruction> {
     }];
     for key in keys {
         instructions.push(load(key));
-        instructions.push(Instruction::Effect);
+        instructions.push(Instruction::Effect { has_input: false });
     }
     let join_pc = Pc(instructions.len() as u32);
     instructions.push(Instruction::JoinAny);
@@ -636,9 +727,9 @@ fn race_effect_failure_wins_and_catch_runs_once_across_resume() {
             join_pc: Pc(6),
         },
         load("bad"),
-        Instruction::Effect,
+        Instruction::Effect { has_input: false },
         load("slow"),
-        Instruction::Effect,
+        Instruction::Effect { has_input: false },
         Instruction::JoinAny,
         Instruction::PopTry,
         Instruction::Jump { target: Pc(12) },
@@ -724,7 +815,7 @@ fn race_reentry_does_not_alias_branch_ids() {
             join_pc: Pc(3),
         },
         load("a"),
-        Instruction::Effect,
+        Instruction::Effect { has_input: false },
         Instruction::JoinAny,
         Instruction::Jump { target: Pc(0) },
     ];

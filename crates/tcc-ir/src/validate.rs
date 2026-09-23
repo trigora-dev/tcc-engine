@@ -294,7 +294,7 @@ impl Artifact {
                         Instruction::LoadConst {
                             value: ConstValue::String("generate".to_string()),
                         },
-                        Instruction::Effect,
+                        Instruction::Effect { has_input: false },
                         Instruction::StoreLocal { local: LocalId(0) },
                         Instruction::LoadConst {
                             value: ConstValue::String("approved".to_string()),
@@ -322,7 +322,7 @@ impl Artifact {
 fn is_durable_instruction(instruction: &Instruction) -> bool {
     matches!(
         instruction,
-        Instruction::Effect
+        Instruction::Effect { .. }
             | Instruction::Sleep
             | Instruction::WaitForEvent
             | Instruction::Invoke { .. }

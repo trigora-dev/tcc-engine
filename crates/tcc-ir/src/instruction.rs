@@ -56,7 +56,11 @@ pub enum Instruction {
         func: FuncId,
         argc: u32,
     },
-    Effect,
+    /// Pop the key. When `has_input` is set, pop one value under that key first.
+    /// Encoding omits `has_input` when it is false.
+    Effect {
+        has_input: bool,
+    },
     Sleep,
     WaitForEvent,
     /// Pops `arg_count` values under the program name. Zero is omitted when encoded.

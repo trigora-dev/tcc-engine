@@ -4,7 +4,7 @@
 
 `engine_format_version` stays 1. This frontend adds no opcodes, heap tags, or durability rules.
 
-Authoring imports durable operations from `tcc_rust_prelude`. The prelude exists so `cargo check` can typecheck the source. The lowerer recognizes the same call syntax and does not execute the prelude bodies.
+Authoring imports durable operations from `trigora` or `tcc_rust_prelude`. The prelude exists so `cargo check` can typecheck the source. The lowerer does not execute the prelude bodies. A name is durable only when that import resolved it, including an alias (`use trigora::effect as fx`). `use trigora::*` is rejected. `trigora::effect(...)` is rejected. A helper, parameter, local, or pattern binding that reuses an imported durable name is rejected. A local `fn effect` that was not imported stays an ordinary helper. An imported durable name that is not awaited is rejected.
 
 ## Move rule
 
@@ -28,7 +28,7 @@ Frontend tests run `cargo check` before `compile`. A fixture `cargo check` rejec
 - `?` on a subset `Result`: a tag test plus `return Err(e)`. It does not emit `Throw`. Durable operations still produce `Result<T, String>`
 - `Vec::new` needs a type ascription or a turbofish. `push` and `len` work for every `Vec<T>`. `for` consumes the vector and moves each element into the binding. `xs[i]` copies `f64` and `bool` only. Indexing a moving element would borrow, so it is rejected. `String` is an owned value with no mutation method
 - `move` closures for ordinary computation, through the existing cell, environment, and `CallClosure` instructions. Capturing by reference is rejected. The `move` keyword is required when a closure captures
-- Durable intrinsics, entry frame only. Names are string literals (`"approved"`). The prelude types those parameters as `&'static str`. That is not general borrow support: `&` and `&mut` anywhere else, including `&T` and `&mut T` in user code, are rejected. An effect closure is typechecked and omitted from the artifact. The host supplies the result. `wait_for_event` and `invoke` take their result type from the ascription
+- Durable intrinsics, entry frame only, and only through a resolved import. Names are string literals (`"approved"`). The prelude types those parameters as `&'static str`. That is not general borrow support: `&` and `&mut` anywhere else, including `&T` and `&mut T` in user code, are rejected. An effect closure is typechecked and omitted from the artifact. The host supplies the result. Rust always emits `Effect` with `has_input: true`, including a closure that captures nothing: an empty object, then the key. Each `move` capture is stored under its binding name, in first-seen source order. `f64` and `bool` copy. `String`, structs, enums, `Option`, `Result`, and `Vec` move and clear the local. A capture without `move` is rejected. Those names are the Rust effect-bundle ABI shared by this frontend and the effect harness. They are not TCC object semantics and not a stable engine layout. `wait_for_event` and `invoke` take their result type from the ascription
 
 ## Operators
 
@@ -48,4 +48,4 @@ No `**`. No `String` concatenation. Structs and enums are compared only by `matc
 
 ## Rejected
 
-With a span diagnostic: `&` / `&mut` outside the durable-name literal, lifetimes, user generics, traits, `impl`, macros, derives, iterator adapters, async helpers, generators, threads, `unsafe`, `Drop`, integer types, recursive types, indexing a moving `Vec` element, tuple variants with more than one payload, and imports other than the prelude. Integer types are outside this subset even though they are ordinary Rust: every number is `f64`.
+With a span diagnostic: `&` / `&mut` outside the durable-name literal, lifetimes, user generics, traits, `impl`, macros, derives, iterator adapters, async helpers, generators, threads, `unsafe`, `Drop`, integer types, recursive types, indexing a moving `Vec` element, tuple variants with more than one payload, nested patterns, glob imports, qualified durable calls, shadowing an imported durable name, and imports other than `trigora` and `tcc_rust_prelude`. Integer types are outside this subset even though they are ordinary Rust: every number is `f64`. Nested patterns stay rejected.

@@ -1,13 +1,20 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { canonicalStringify } from "../../../frontends/typescript/src/canonical.ts";
 import { compile } from "../../../frontends/typescript/src/compile.ts";
-import { deliverDuplicateEvent, resumeExecution, startExecution } from "./host.ts";
+import {
+  canonicalEffectInput,
+  deliverDuplicateEvent,
+  effectInputJson,
+  resumeExecution,
+  startExecution,
+} from "./host.ts";
 import { Store } from "./store.ts";
 
 const SOURCE = `
@@ -260,5 +267,125 @@ test("a second worker cannot take a live lease", async () => {
         leaseMs: 60_000,
       }),
     /owned by another worker/,
+  );
+});
+
+test("effect input comparison is canonical", () => {
+  const unsorted = {
+    v: { z: { t: "number", v: 1 }, a: { t: "string", v: "q" } },
+    t: "object",
+  };
+  const sorted = {
+    t: "object",
+    v: { a: { t: "string", v: "q" }, z: { t: "number", v: 1 } },
+  };
+  assert.equal(canonicalEffectInput(unsorted), canonicalEffectInput(sorted));
+  assert.equal(effectInputJson(JSON.stringify(unsorted)), canonicalEffectInput(sorted));
+  assert.throws(() => effectInputJson(null), /effect input_json is required/);
+  assert.throws(() => canonicalEffectInput(undefined), /unsupported effect input/);
+});
+
+test("a fresh store requires effect input and recreates a nullable column", () => {
+  const fresh = new Store(dbFile());
+  const freshColumns = fresh.db.prepare("PRAGMA table_info(effects)").all() as {
+    name: string;
+    notnull: number;
+  }[];
+  fresh.close();
+  assert.equal(freshColumns.find((column) => column.name === "input_json")?.notnull, 1);
+
+  const dbPath = dbFile();
+  const legacy = new DatabaseSync(dbPath);
+  legacy.exec(`
+    CREATE TABLE effects (
+      execution_id TEXT NOT NULL,
+      key TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      status TEXT NOT NULL,
+      result_json TEXT,
+      input_json TEXT,
+      PRIMARY KEY (execution_id, key)
+    );
+  `);
+  legacy
+    .prepare(
+      `INSERT INTO effects(execution_id, key, idempotency_key, status, input_json)
+       VALUES ('old', 'generate', 'old:generate', 'completed', NULL)`,
+    )
+    .run();
+  legacy.close();
+  const rebuilt = new Store(dbPath);
+  const columns = rebuilt.db.prepare("PRAGMA table_info(effects)").all() as {
+    name: string;
+    notnull: number;
+  }[];
+  assert.equal(columns.find((column) => column.name === "input_json")?.notnull, 1);
+  assert.equal(rebuilt.getEffect("old", "generate"), undefined);
+  rebuilt.close();
+
+  const missingPath = dbFile();
+  const missing = new DatabaseSync(missingPath);
+  missing.exec(`
+    CREATE TABLE effects (
+      execution_id TEXT NOT NULL,
+      key TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      status TEXT NOT NULL,
+      result_json TEXT,
+      PRIMARY KEY (execution_id, key)
+    );
+  `);
+  missing.close();
+  const added = new Store(missingPath);
+  const addedColumns = added.db.prepare("PRAGMA table_info(effects)").all() as { name: string; notnull: number }[];
+  assert.equal(addedColumns.find((column) => column.name === "input_json")?.notnull, 1);
+  added.close();
+});
+
+test("a reordered empty effect input is a journal hit", async () => {
+  const dbPath = dbFile();
+  const store = new Store(dbPath);
+  store.close();
+  const db = new DatabaseSync(dbPath);
+  db.prepare(
+    `INSERT INTO effects(execution_id, key, idempotency_key, status, result_json, input_json)
+     VALUES ('first', 'generate', 'first:generate', 'completed', ?, ?)`,
+  ).run(JSON.stringify({ t: "number", v: 7 }), JSON.stringify({ v: {}, t: "object" }));
+  db.close();
+  const logPath = path.join(path.dirname(dbPath), "effects.log");
+  const result = await startExecution({
+    dbPath,
+    wasmPath,
+    artifactJson: artifactJson(),
+    autoDeliverEvent: false,
+    effectLogPath: logPath,
+  });
+  assert.equal(result.status, "suspended");
+  assert.equal(existsSync(logPath), false);
+});
+
+test("a different effect input is an invariant error", async () => {
+  const dbPath = dbFile();
+  const store = new Store(dbPath);
+  store.completeEffect(
+    "first",
+    "generate",
+    "first:generate",
+    JSON.stringify({ t: "number", v: 7 }),
+    canonicalEffectInput({
+      t: "object",
+      v: { query: { t: "string", v: "hello" } },
+    }),
+  );
+  store.close();
+  await assert.rejects(
+    () =>
+      startExecution({
+        dbPath,
+        wasmPath,
+        artifactJson: artifactJson(),
+        autoDeliverEvent: false,
+      }),
+    /input mismatch/,
   );
 });

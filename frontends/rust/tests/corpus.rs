@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use tcc_core::{Engine, EngineOutcome, HostRequest, HostResponse};
-use tcc_ir::EngineCaps;
+use tcc_ir::{EngineCaps, Instruction};
 use tcc_rust_frontend::compile;
-use tcc_state::Value;
+use tcc_state::{decode_continuation, encode_continuation, Value};
 
 fn source(name: &str) -> String {
     let topic = match name {
@@ -362,6 +362,175 @@ fn diagnostics_reject_borrows_macros_generics_and_integers() {
     let pair =
         compile("enum State { Pair(String, f64) } async fn run() -> f64 { 1.0 }").unwrap_err();
     assert!(pair.message.contains("tuple"), "{pair}");
+    let local =
+        compile("fn effect(x: f64) -> f64 { x * 2.0 } async fn run() -> f64 { effect(3.0) }")
+            .unwrap();
+    assert!(
+        !local.program.functions.iter().any(|function| function
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Instruction::Effect { .. }))),
+        "a local effect helper is not a durable call"
+    );
+    let glob = compile("use tcc_rust_prelude::*; async fn run() -> f64 { 1.0 }").unwrap_err();
+    assert!(glob.message.contains("glob"), "{glob}");
+    let qualified = compile(
+        "async fn run() -> Result<f64, String> { trigora::effect(\"search\", || 1.0).await? }",
+    )
+    .unwrap_err();
+    assert!(qualified.message.contains("import"), "{qualified}");
+    let shadow =
+        compile("use tcc_rust_prelude::effect; async fn run(effect: f64) -> f64 { effect }")
+            .unwrap_err();
+    assert!(shadow.message.contains("shadow"), "{shadow}");
+    let local_shadow = compile(
+        "use tcc_rust_prelude::sleep; async fn run() -> Result<(), String> { let sleep = 1.0; sleep(sleep).await }",
+    )
+    .unwrap_err();
+    assert!(local_shadow.message.contains("shadow"), "{local_shadow}");
+    let bare_capture = compile(
+        "use tcc_rust_prelude::effect; async fn run(query: String) -> Result<String, String> { effect(\"search\", || query).await? }",
+    )
+    .unwrap_err();
+    assert!(bare_capture.message.contains("move"), "{bare_capture}");
+    let moved_again = compile(
+        "use tcc_rust_prelude::effect; async fn run() -> Result<String, String> { let query = String::from(\"hello\"); let found = effect(\"search\", move || query).await?; let _again = query; Ok(found) }",
+    )
+    .unwrap_err();
+    assert!(moved_again.message.contains("moved"), "{moved_again}");
+}
+
+#[test]
+fn rust_effects_are_imported_and_always_carry_input() {
+    let aliased = compile(
+        "use tcc_rust_prelude::effect as fx; async fn run() -> Result<f64, String> { let value = fx(\"search\", || 1.0).await?; Ok(value) }",
+    )
+    .unwrap();
+    assert!(aliased.program.functions[0]
+        .instructions
+        .iter()
+        .any(|instruction| matches!(instruction, Instruction::Effect { has_input: true })));
+    let empty = compile(
+        "use tcc_rust_prelude::effect; async fn run() -> Result<f64, String> { let value = effect(\"search\", || 1.0).await?; Ok(value) }",
+    )
+    .unwrap();
+    let instructions = &empty.program.functions[0].instructions;
+    let effect_at = instructions
+        .iter()
+        .position(|instruction| matches!(instruction, Instruction::Effect { has_input: true }))
+        .expect("zero-capture effect");
+    assert!(instructions[..effect_at]
+        .iter()
+        .any(|instruction| matches!(instruction, Instruction::NewObject)));
+    let copied = compile(
+        "use tcc_rust_prelude::effect; async fn run(limit: f64) -> Result<f64, String> { let value = effect(\"search\", move || limit).await?; Ok(value + limit) }",
+    )
+    .unwrap();
+    assert!(copied.program.functions[0]
+        .instructions
+        .iter()
+        .any(|instruction| {
+            matches!(instruction, Instruction::SetProp { key } if key == "limit")
+        }));
+}
+
+#[test]
+fn moved_effect_capture_survives_resume_after_the_effect_checkpoint() {
+    let source = r#"
+        use tcc_rust_prelude::effect;
+        async fn run() -> Result<String, String> {
+            let query = String::from("hello");
+            let found = effect("search", move || query).await?;
+            Ok(found)
+        }
+    "#;
+    let artifact = compile(source).unwrap();
+    let mut engine = Engine::start(artifact.clone(), "search", &EngineCaps::current()).unwrap();
+    let request = loop {
+        match engine.run_until_host(10_000) {
+            EngineOutcome::Host(HostRequest::RunEffect { key, input, .. }) => {
+                break HostRequest::RunEffect {
+                    key,
+                    input,
+                    idempotency_key: String::new(),
+                };
+            }
+            EngineOutcome::Host(HostRequest::PersistCheckpoint { revision, .. }) => {
+                engine
+                    .apply_host_response(HostResponse::PersistConfirmed { revision })
+                    .unwrap();
+            }
+            other => panic!("before effect: {other:?}"),
+        }
+    };
+    let HostRequest::RunEffect { key, input, .. } = request else {
+        unreachable!();
+    };
+    assert_eq!(key, "search");
+    assert_eq!(
+        input,
+        Value::Object(std::collections::BTreeMap::from([(
+            "query".into(),
+            Value::String("hello".into()),
+        )]))
+    );
+    assert_eq!(
+        engine.continuation().frames[0].locals[0],
+        Value::Undefined,
+        "the moved capture is dead at the yield"
+    );
+    engine
+        .apply_host_response(HostResponse::EffectResult {
+            value: Value::String("found".into()),
+        })
+        .unwrap();
+    loop {
+        match engine.run_until_host(10_000) {
+            EngineOutcome::Host(HostRequest::PersistEffect { .. }) => {
+                engine.apply_host_response(HostResponse::Ack).unwrap();
+            }
+            EngineOutcome::Host(HostRequest::PersistCheckpoint { revision, .. }) => {
+                engine
+                    .apply_host_response(HostResponse::PersistConfirmed { revision })
+                    .unwrap();
+                break;
+            }
+            other => panic!("checkpoint: {other:?}"),
+        }
+    }
+    assert_eq!(engine.continuation().frames[0].locals[0], Value::Undefined);
+    let saved = encode_continuation(engine.continuation()).unwrap();
+    let mut resumed = Engine::resume(
+        artifact,
+        decode_continuation(&saved).unwrap(),
+        &EngineCaps::current(),
+    )
+    .unwrap();
+    let mut effects = 0;
+    let result = loop {
+        match resumed.run_until_host(10_000) {
+            EngineOutcome::Host(HostRequest::RunEffect { .. }) => effects += 1,
+            EngineOutcome::Host(HostRequest::PersistCheckpoint { revision, .. }) => {
+                resumed
+                    .apply_host_response(HostResponse::PersistConfirmed { revision })
+                    .unwrap();
+            }
+            EngineOutcome::Host(HostRequest::PersistEffect { .. }) => {
+                resumed.apply_host_response(HostResponse::Ack).unwrap();
+            }
+            EngineOutcome::Completed { result } => break result,
+            other => panic!("resume: {other:?}"),
+        }
+    };
+    assert_eq!(effects, 0, "a completed effect is not requested again");
+    assert_eq!(
+        result,
+        Value::Object(std::collections::BTreeMap::from([
+            ("$tag".into(), Value::String("Ok".into())),
+            ("$0".into(), Value::String("found".into())),
+        ]))
+    );
+    assert!(resumed.continuation().frames.is_empty());
 }
 
 #[test]

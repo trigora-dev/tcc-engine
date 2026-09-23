@@ -89,6 +89,7 @@ export type EffectRow = {
   idempotency_key: string;
   status: string;
   result_json: string | null;
+  input_json: string | null;
 };
 
 export type ExecutionRow = {
@@ -216,6 +217,7 @@ export class Store {
         idempotency_key TEXT NOT NULL,
         status TEXT NOT NULL,
         result_json TEXT,
+        input_json TEXT NOT NULL,
         PRIMARY KEY (execution_id, key)
       );
       CREATE TABLE IF NOT EXISTS waits (
@@ -246,6 +248,30 @@ export class Store {
         status TEXT NOT NULL,
         result_json TEXT,
         args_json TEXT
+      );
+    `);
+    this.ensureEffectInputColumn();
+  }
+
+  private ensureEffectInputColumn(): void {
+    const columns = this.db.prepare("PRAGMA table_info(effects)").all() as {
+      name: string;
+      notnull: number;
+    }[];
+    const input = columns.find((column) => column.name === "input_json");
+    if (input?.notnull === 1) {
+      return;
+    }
+    this.db.exec("DROP TABLE effects");
+    this.db.exec(`
+      CREATE TABLE effects (
+        execution_id TEXT NOT NULL,
+        key TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        status TEXT NOT NULL,
+        result_json TEXT,
+        input_json TEXT NOT NULL,
+        PRIMARY KEY (execution_id, key)
       );
     `);
   }
@@ -768,43 +794,58 @@ export class Store {
       .get(executionId, key) as EffectRow | undefined;
   }
 
-  markEffectStarted(executionId: string, key: string, idempotencyKey: string): void {
+  markEffectStarted(executionId: string, key: string, idempotencyKey: string, inputJson: string): void {
     this.db
       .prepare(
-        `INSERT INTO effects(execution_id, key, idempotency_key, status, result_json)
-         VALUES (?, ?, ?, 'started', NULL)
+        `INSERT INTO effects(execution_id, key, idempotency_key, status, result_json, input_json)
+         VALUES (?, ?, ?, 'started', NULL, ?)
          ON CONFLICT(execution_id, key) DO UPDATE SET
-           idempotency_key = excluded.idempotency_key
+           idempotency_key = excluded.idempotency_key,
+           input_json = excluded.input_json
          WHERE effects.status != 'completed'`,
       )
-      .run(executionId, key, idempotencyKey);
+      .run(executionId, key, idempotencyKey, inputJson);
   }
 
-  completeEffect(executionId: string, key: string, idempotencyKey: string, resultJson: string): void {
+  completeEffect(
+    executionId: string,
+    key: string,
+    idempotencyKey: string,
+    resultJson: string,
+    inputJson: string,
+  ): void {
     this.db
       .prepare(
-        `INSERT INTO effects(execution_id, key, idempotency_key, status, result_json)
-         VALUES (?, ?, ?, 'completed', ?)
+        `INSERT INTO effects(execution_id, key, idempotency_key, status, result_json, input_json)
+         VALUES (?, ?, ?, 'completed', ?, ?)
          ON CONFLICT(execution_id, key) DO UPDATE SET
            status = 'completed',
            idempotency_key = excluded.idempotency_key,
-           result_json = excluded.result_json`,
+           result_json = excluded.result_json,
+           input_json = effects.input_json`,
       )
-      .run(executionId, key, idempotencyKey, resultJson);
+      .run(executionId, key, idempotencyKey, resultJson, inputJson);
   }
 
-  failEffect(executionId: string, key: string, idempotencyKey: string, resultJson: string): void {
+  failEffect(
+    executionId: string,
+    key: string,
+    idempotencyKey: string,
+    resultJson: string,
+    inputJson: string,
+  ): void {
     this.db
       .prepare(
-        `INSERT INTO effects(execution_id, key, idempotency_key, status, result_json)
-         VALUES (?, ?, ?, 'failed', ?)
+        `INSERT INTO effects(execution_id, key, idempotency_key, status, result_json, input_json)
+         VALUES (?, ?, ?, 'failed', ?, ?)
          ON CONFLICT(execution_id, key) DO UPDATE SET
            status = 'failed',
            idempotency_key = excluded.idempotency_key,
-           result_json = excluded.result_json
+           result_json = excluded.result_json,
+           input_json = effects.input_json
          WHERE effects.status != 'completed'`,
       )
-      .run(executionId, key, idempotencyKey, resultJson);
+      .run(executionId, key, idempotencyKey, resultJson, inputJson);
   }
 
   upsertWait(waitId: string, executionId: string, eventName: string): void {
