@@ -113,5 +113,29 @@ path = "src/bin/ord_join_pair.rs"
 name = "ord_race_pair"
 path = "src/bin/ord_race_pair.rs"
 
+[[bin]]
+name = "ord_construct_job"
+path = "src/bin/ord_construct_job.rs"
+
+[[bin]]
+name = "ord_vec_jobs"
+path = "src/bin/ord_vec_jobs.rs"
+
+[[bin]]
+name = "ord_vec_strings"
+path = "src/bin/ord_vec_strings.rs"
+
+[[bin]]
+name = "ord_owned_enums"
+path = "src/bin/ord_owned_enums.rs"
+
+[[bin]]
+name = "ord_result_job"
+path = "src/bin/ord_result_job.rs"
+
+[[bin]]
+name = "ord_join_strings"
+path = "src/bin/ord_join_strings.rs"
+
 [dependencies]
 tcc-rust-prelude = { path = "../prelude" }

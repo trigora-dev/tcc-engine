@@ -994,6 +994,102 @@
           }
         }
       }
+    },
+    {
+      "id": "rust-construct-job",
+      "rust": "rust/structs/construct_job.rs",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 42
+      }
+    },
+    {
+      "id": "rust-vec-jobs",
+      "rust": "rust/collections/vec_jobs.rs",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 10
+      }
+    },
+    {
+      "id": "rust-vec-strings",
+      "rust": "rust/collections/vec_strings.rs",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 1
+      }
+    },
+    {
+      "id": "rust-owned-enums",
+      "rust": "rust/matching/owned_enums.rs",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 43
+      }
+    },
+    {
+      "id": "rust-result-job",
+      "rust": "rust/matching/result_job.rs",
+      "args": [
+        {
+          "t": "number",
+          "v": 42
+        }
+      ],
+      "expected": {
+        "t": "object",
+        "v": {
+          "$tag": {
+            "t": "string",
+            "v": "Ok"
+          },
+          "$0": {
+            "t": "number",
+            "v": 42
+          }
+        }
+      }
+    },
+    {
+      "id": "rust-join-strings",
+      "rust": "rust/durability/join_strings.rs",
+      "args": [],
+      "effects": {
+        "a": {
+          "t": "string",
+          "v": "left"
+        },
+        "b": {
+          "t": "string",
+          "v": "right"
+        }
+      },
+      "expected": {
+        "t": "object",
+        "v": {
+          "$tag": {
+            "t": "string",
+            "v": "Ok"
+          },
+          "$0": {
+            "t": "array",
+            "v": [
+              {
+                "t": "string",
+                "v": "left"
+              },
+              {
+                "t": "string",
+                "v": "right"
+              }
+            ]
+          }
+        }
+      }
     }
   ]
 }

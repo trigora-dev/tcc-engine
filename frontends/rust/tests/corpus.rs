@@ -12,13 +12,18 @@ fn source(name: &str) -> String {
             "ownership"
         }
         "copy_f64.rs" => "values",
-        "update_struct.rs" => "structs",
-        "match_enum.rs" | "match_option.rs" | "result_question.rs" => "matching",
-        "vec_values.rs" => "collections",
+        "update_struct.rs" | "construct_job.rs" => "structs",
+        "match_enum.rs" | "match_option.rs" | "result_question.rs" | "owned_enums.rs"
+        | "result_job.rs" => "matching",
+        "vec_values.rs" | "vec_jobs.rs" | "vec_strings.rs" => "collections",
         "range_for.rs" | "while_loop.rs" => "iteration",
         "helper_call.rs" => "helpers",
         "closure_move.rs" => "closures",
-        "effect_then_wait.rs" | "invoke_args.rs" | "join_pair.rs" | "race_pair.rs" => "durability",
+        "effect_then_wait.rs"
+        | "invoke_args.rs"
+        | "join_pair.rs"
+        | "race_pair.rs"
+        | "join_strings.rs" => "durability",
         other => panic!("no topic for {other}"),
     };
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -255,6 +260,55 @@ fn ordinary_rust_programs_match_their_results() {
         ),
         ok_number(1.0)
     );
+    assert_eq!(
+        run("construct_job.rs", &[], &[], None, None),
+        Value::Number(42.0)
+    );
+    assert_eq!(
+        run("vec_jobs.rs", &[], &[], None, None),
+        Value::Number(10.0)
+    );
+    assert_eq!(
+        run("vec_strings.rs", &[], &[], None, None),
+        Value::Number(1.0)
+    );
+    assert_eq!(
+        run("owned_enums.rs", &[], &[], None, None),
+        Value::Number(43.0)
+    );
+    assert_eq!(
+        run("result_job.rs", &[Value::Number(42.0)], &[], None, None),
+        ok_number(42.0)
+    );
+    assert_eq!(
+        run("result_job.rs", &[Value::Number(0.0)], &[], None, None),
+        object(vec![
+            ("$tag", Value::String("Err".into())),
+            ("$0", Value::String("missing".into())),
+        ])
+    );
+    assert_eq!(
+        run(
+            "join_strings.rs",
+            &[],
+            &[
+                ("a", Value::String("left".into())),
+                ("b", Value::String("right".into())),
+            ],
+            None,
+            None,
+        ),
+        object(vec![
+            ("$tag", Value::String("Ok".into())),
+            (
+                "$0",
+                Value::Array(vec![
+                    Value::String("left".into()),
+                    Value::String("right".into()),
+                ]),
+            ),
+        ])
+    );
 }
 
 #[test]
@@ -283,6 +337,31 @@ fn diagnostics_reject_borrows_macros_generics_and_integers() {
     let capture =
         compile("async fn run(name: String) -> String { let read = || name; read() }").unwrap_err();
     assert!(capture.message.contains("move"), "{capture}");
+    let direct = compile("struct A { a: A } async fn run() -> f64 { 1.0 }").unwrap_err();
+    assert!(direct.message.contains("recursive"), "{direct}");
+    let indirect = compile(
+        "struct A { xs: Vec<Option<Result<B, String>>> } struct B { a: A } async fn run() -> f64 { 1.0 }",
+    )
+    .unwrap_err();
+    assert!(indirect.message.contains("recursive"), "{indirect}");
+    let nested = compile(
+        "struct Job { count: f64 } async fn run(value: Option<Job>) -> f64 { match value { Some(Job { count }) => count, None => 0.0 } }",
+    )
+    .unwrap_err();
+    assert!(nested.message.contains("nested"), "{nested}");
+    let index = compile(
+        "async fn run() -> String { let mut xs: Vec<String> = Vec::new(); xs.push(String::from(\"a\")); xs[0.0] }",
+    )
+    .unwrap_err();
+    assert!(index.message.contains("borrow"), "{index}");
+    let again = compile(
+        "struct Job { name: String, score: f64 } async fn run() -> f64 { let job = Job { name: String::from(\"a\"), score: 1.0 }; let _name = job.name; let _again = job.name; job.score }",
+    )
+    .unwrap_err();
+    assert!(again.message.contains("moved"), "{again}");
+    let pair =
+        compile("enum State { Pair(String, f64) } async fn run() -> f64 { 1.0 }").unwrap_err();
+    assert!(pair.message.contains("tuple"), "{pair}");
 }
 
 #[test]
