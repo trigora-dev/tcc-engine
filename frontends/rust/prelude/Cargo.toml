@@ -1,0 +1,8 @@
+[package]
+name = "tcc-rust-prelude"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Type-checking prelude for the Rust subset. The lowerer does not call this crate."
+
+[dependencies]

@@ -1,0 +1,117 @@
+[package]
+name = "tcc-rust-fixtures"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "cargo check harness for the Rust subset."
+
+[features]
+negative = []
+
+[[bin]]
+name = "job"
+path = "src/bin/job.rs"
+
+[[bin]]
+name = "move_job"
+path = "src/bin/move_job.rs"
+
+[[bin]]
+name = "copy_f64"
+path = "src/bin/copy_f64.rs"
+
+[[bin]]
+name = "move_string"
+path = "src/bin/move_string.rs"
+
+[[bin]]
+name = "match_state"
+path = "src/bin/match_state.rs"
+
+[[bin]]
+name = "match_option"
+path = "src/bin/match_option.rs"
+
+[[bin]]
+name = "borrow"
+path = "src/bin/borrow.rs"
+
+[[bin]]
+name = "use_after_move"
+path = "src/bin/use_after_move.rs"
+required-features = ["negative"]
+
+[[bin]]
+name = "ord_move_struct"
+path = "src/bin/ord_move_struct.rs"
+
+[[bin]]
+name = "ord_copy_f64"
+path = "src/bin/ord_copy_f64.rs"
+
+[[bin]]
+name = "ord_move_string"
+path = "src/bin/ord_move_string.rs"
+
+[[bin]]
+name = "ord_update_struct"
+path = "src/bin/ord_update_struct.rs"
+
+[[bin]]
+name = "ord_match_enum"
+path = "src/bin/ord_match_enum.rs"
+
+[[bin]]
+name = "ord_match_option"
+path = "src/bin/ord_match_option.rs"
+
+[[bin]]
+name = "ord_result_question"
+path = "src/bin/ord_result_question.rs"
+
+[[bin]]
+name = "ord_vec_values"
+path = "src/bin/ord_vec_values.rs"
+
+[[bin]]
+name = "ord_range_for"
+path = "src/bin/ord_range_for.rs"
+
+[[bin]]
+name = "ord_while_loop"
+path = "src/bin/ord_while_loop.rs"
+
+[[bin]]
+name = "ord_helper_call"
+path = "src/bin/ord_helper_call.rs"
+
+[[bin]]
+name = "ord_helper_move"
+path = "src/bin/ord_helper_move.rs"
+
+[[bin]]
+name = "ord_closure_move"
+path = "src/bin/ord_closure_move.rs"
+
+[[bin]]
+name = "ord_closure_capture"
+path = "src/bin/ord_closure_capture.rs"
+
+[[bin]]
+name = "ord_effect_then_wait"
+path = "src/bin/ord_effect_then_wait.rs"
+
+[[bin]]
+name = "ord_invoke_args"
+path = "src/bin/ord_invoke_args.rs"
+
+[[bin]]
+name = "ord_join_pair"
+path = "src/bin/ord_join_pair.rs"
+
+[[bin]]
+name = "ord_race_pair"
+path = "src/bin/ord_race_pair.rs"
+
+[dependencies]
+tcc-rust-prelude = { path = "../prelude" }

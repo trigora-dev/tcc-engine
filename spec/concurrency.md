@@ -7,8 +7,11 @@ Python uses the same joins through compiler intrinsics, not through `asyncio`:
 ```text
 TypeScript Promise.all / Promise.race
 Python    gather / race
-Both      Fork + JoinAll / JoinAny, feature durable.concurrent_group
+Rust      join / race, exactly two direct durable calls
+All three Fork + JoinAll / JoinAny, feature durable.concurrent_group
 ```
+
+The engine cap is unchanged: 1 through 32 branches. Rust's two-argument spelling is a frontend limit. Rust has no varargs, and this subset has no varargs macro, so `join(a, b)` and `race(a, b)` are the v1 calls. A later spelling can pass more branches through without an engine change. `join` yields `Vec<T>` in input order. `race` yields the winning `T`. Both branches must share `T`. The calls are direct durable calls. They are not stored.
 
 `gather` and `race` are not runtime coroutine helpers. They cannot be passed around as ordinary functions. `asyncio.gather`, `asyncio.wait`, and `asyncio.FIRST_COMPLETED` are not lowered. `Promise.any` and `Promise.allSettled` are not specified as executable operations.
 

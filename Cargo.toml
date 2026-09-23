@@ -7,4 +7,7 @@ members = [
     "crates/tcc-host",
     "crates/tcc-wasm",
     "crates/tcc-python",
+    "frontends/rust",
+    "frontends/rust/prelude",
+    "frontends/rust/check",
 ]

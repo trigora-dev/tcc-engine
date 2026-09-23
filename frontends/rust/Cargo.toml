@@ -1,0 +1,20 @@
+[package]
+name = "tcc-rust-frontend"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Rust subset frontend."
+
+[[bin]]
+name = "tcc-rust-compile"
+path = "src/bin/tcc-rust-compile.rs"
+
+[dependencies]
+proc-macro2 = { version = "1", features = ["span-locations"] }
+sha2 = "0.10"
+syn = { version = "2", features = ["full", "visit"] }
+tcc-ir = { path = "../../crates/tcc-ir" }
+
+[dev-dependencies]
+tcc-core = { path = "../../crates/tcc-core" }
+tcc-state = { path = "../../crates/tcc-state" }

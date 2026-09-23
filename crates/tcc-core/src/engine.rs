@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use tcc_ir::{
     analyze_program, validate, Artifact, ConstValue, EngineCaps, FuncId, FunctionLiveness,
-    Instruction, Pc, ENGINE_FORMAT_VERSION, LANGUAGE_SEMANTICS_PY, LANGUAGE_SEMANTICS_TS,
-    MAX_JOIN_BRANCHES,
+    Instruction, Pc, ENGINE_FORMAT_VERSION, LANGUAGE_SEMANTICS_PY, LANGUAGE_SEMANTICS_RUST,
+    LANGUAGE_SEMANTICS_TS, MAX_JOIN_BRANCHES,
 };
 use tcc_state::{
     absorb_continuation, absorb_value, export_value, gc_heap, persist_intent, structural_eq,
@@ -1872,7 +1872,7 @@ fn bind_program_args(
             }
             Ok(())
         }
-        LANGUAGE_SEMANTICS_PY => {
+        LANGUAGE_SEMANTICS_PY | LANGUAGE_SEMANTICS_RUST => {
             let given = args.len();
             if given > expected {
                 return Err(CoreError::TypeError(format!(
