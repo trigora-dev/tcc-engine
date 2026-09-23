@@ -55,8 +55,10 @@ test("memory host completes the first example on WASM", async () => {
   assert.equal(result.hostRequests[3]?.wait_id, "first:approved::4");
   const continuation = JSON.parse(result.continuationJson) as {
     status: string;
-    result: unknown;
+    result: { t: string; v: number };
+    heap: unknown[];
   };
   assert.equal(continuation.status, "completed");
-  assert.deepEqual(continuation.result, result.result);
+  assert.equal(continuation.result.t, "ref");
+  assert.deepEqual(continuation.heap[continuation.result.v], result.result);
 });

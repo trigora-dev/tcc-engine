@@ -129,26 +129,17 @@ async def run():
         compile(source)
 
 
-def test_rejects_for():
+def test_rejects_for_else():
     source = """
-from trigora import effect
-
 async def run():
-    xs = await effect("xs", lambda: 1)
-    for x in xs:
+    for x in [1]:
         return x
-    return 0
+    else:
+        return 0
 """
     with pytest.raises(CompileError) as err:
         compile(source)
-    assert "for" in str(err.value)
-    assert err.value.span is not None
-    assert err.value.span["start_line"] >= 1
-    assert err.value.why == "it cannot cross a durable checkpoint in the current Python subset"
-    assert err.value.alternative == "use `while`"
-    assert err.value.frontend_id == FRONTEND_IDENTITY
-    assert err.value.frontend_version == PACKAGE_VERSION
-    assert err.value.language_semantics_version == LANGUAGE_SEMANTICS_VERSION
+    assert "for/else" in str(err.value)
 
 
 FIRST_PRIMITIVES = """
@@ -445,8 +436,9 @@ async def run():
         if instruction["op"] == "Invoke"
     )
     assert "arg_count" not in plain_invoke
+    none_default = compile("async def run(input=None):\n    return input\n", filename="default.py")
+    assert none_default["program"]["functions"][0]["param_defaults"] == [{"t": "null"}]
     for source in (
-        "async def run(input=None):\n    return input\n",
         "async def run(*items):\n    return 1\n",
         "async def run(a, /, b):\n    return a\n",
     ):
