@@ -48,6 +48,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: cargo build -p tcc-wasm --target wasm32-unknown-unknown --release
+      - run: cargo build -p tcc-rust-frontend --release
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @tcc-engine/bindings-javascript build
       - run: pnpm --filter @tcc-engine/bindings-javascript typecheck
@@ -74,6 +75,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: cargo build -p tcc-wasm --target wasm32-unknown-unknown --release
       - run: cargo build -p tcc-core --bin tcc-drive --release
+      - run: cargo test -p tcc-rust-frontend
+      - run: cargo build -p tcc-rust-frontend --release
       - run: python -m venv .venv
       - run: .venv/bin/pip install maturin
       - run: ${{ github.workspace }}/.venv/bin/maturin develop
@@ -83,6 +86,11 @@ jobs:
         env:
           PATH: ${{ github.workspace }}/.venv/bin:${{ env.PATH }}
         run: node --experimental-strip-types conformance/ordinary/score.ts
+      - name: cross-language invoke
+        working-directory: ${{ github.workspace }}
+        env:
+          PATH: ${{ github.workspace }}/.venv/bin:${{ env.PATH }}
+        run: node --experimental-strip-types conformance/cross-language.ts
 
   python:
     runs-on: ubuntu-latest
@@ -101,6 +109,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: cargo build -p tcc-wasm --target wasm32-unknown-unknown --release
+      - run: cargo build -p tcc-rust-frontend --release
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @tcc-engine/bindings-javascript build
       - run: python -m venv .venv

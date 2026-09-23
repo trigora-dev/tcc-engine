@@ -2,9 +2,9 @@
 
 Named kit for hosts that speak TCC host protocol version 1. Spec: [`spec/host-conformance-v1.md`](../spec/host-conformance-v1.md). Case index: [`cases.json`](cases.json).
 
-Ordinary-computation compatibility is a separate suite with a frozen baseline list and a growing suite list: [`ordinary/`](ordinary/).
+Ordinary-computation compatibility is a separate suite, organized by language and topic: [`ordinary/`](ordinary/).
 
-The runner asserts observable TCC semantics. A driver operates a specific host. Reconstruct goldens live in [`spec/fixtures/persist/`](../spec/fixtures/persist/). Semantic sources live under [`cases/typescript/`](cases/typescript/) and [`cases/python/`](cases/python/).
+The runner asserts observable TCC semantics. A driver operates a specific host. Reconstruct goldens live in [`spec/fixtures/persist/`](../spec/fixtures/persist/). Semantic sources live under [`cases/typescript/`](cases/typescript/), [`cases/python/`](cases/python/), and [`cases/rust/`](cases/rust/). Cross-language invoke (TypeScript calls Rust, Rust calls Python, Python calls Rust) is [`cross-language.ts`](cross-language.ts).
 
 ## Run
 
@@ -35,6 +35,7 @@ conformance/
   cases/
     typescript/           # TypeScript host-kit sources
     python/               # Python host-kit sources
+    rust/                 # Rust host-kit sources
   runner.ts               # Node executor
   run.py                  # Python executor over the same JSON
   drivers/
