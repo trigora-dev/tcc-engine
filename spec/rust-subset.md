@@ -1,6 +1,6 @@
 # Rust subset
 
-`language_semantics_version` `rust.subset.v1`. Rust is a launch language beside TypeScript and Python. A construct is supported only when it compiles, runs natively and through WASM, and recovers from a single-frame resume at every durable boundary with the same observable result.
+`language_semantics_version` `rust.subset.v1`. A construct is supported only when it compiles, runs natively and through WASM, and recovers from a single-frame resume at every durable boundary with the same observable result.
 
 `engine_format_version` stays 1. This frontend adds no opcodes, heap tags, or durability rules.
 
@@ -8,9 +8,9 @@ Authoring imports durable operations from `tcc_rust_prelude`. The prelude exists
 
 ## Move rule
 
-Compound values (`String`, structs, enums, `Vec`) move in the source. The continuation stores them as heap refs. A move stores the destination and then stores `undefined` into the source. The lowerer emits no later read of that source. A VM dump that still shows a ref in the destination is not source-level aliasing.
+The owned domain is `f64`, `bool`, `String`, structs, enums, `Option<T>`, `Result<T, E>`, and `Vec<T>`. `T` and `E` are that same domain. `f64` and `bool` copy. Every other owned value moves. Assignment copies `f64` and `bool`. Compound arithmetic assignment (`+=` and the rest) is only for numeric locals and numeric fields. A moving local is moved with `let`, not `name = other`.
 
-`f64` and `bool` copy.
+Compound values move in the source. The continuation stores them as heap refs. A move stores the destination and then stores `undefined` into the source. The lowerer emits no later read of that source. A field move is partial: `let name = job.name` stores `undefined` into `job.name` and leaves `job.score` readable. A second read of `job.name` is a moved-value error. A VM dump that still shows a ref in the destination is not source-level aliasing.
 
 `cargo check` against the prelude owns move checking, types, and `match` exhaustiveness. The lowerer is a separate `syn` walk. It does not call rustc and it does not resolve types that are not visible in the syntax. A value whose type is not written at the binding needs a type ascription (`let approved: bool = ...`). A construct that needs HIR or MIR is rejected.
 
@@ -21,11 +21,12 @@ Frontend tests run `cargo check` before `compile`. A fixture `cargo check` rejec
 - `async fn run` with plain owned parameters. Argument binding is exact arity with no defaults
 - Ordinary `fn` helpers. They are `Call`. They cannot await. A durable operation runs only while the entry frame is alone
 - `let` / `let mut`, assignment, and early `return`
-- `if` / `else`, `loop`, `while`, `for x in xs` over `Vec<f64>`, and `for i in 0..n` as a counted `f64` loop. `i32` and every other integer type written in the source are rejected. `as f64` is a no-op on that loop binding
-- One struct of named fields and one enum per file. Structs are objects keyed by field names. Enums, `Option`, and `Result` are objects with compiler-only `$tag` and `$0` keys. A struct variant stores its field names beside `$tag`
-- One-level struct, enum, and `Option` patterns. No guards, or-patterns, or rest. Nested patterns such as `Some(Job { count })` are a later gap
-- `?` on a subset `Result`: a tag test plus `return Err(e)`. It does not emit `Throw`
-- `Vec` push, len, and index. `String` is an owned value with no mutation method
+- `if` / `else`, `loop`, `while`, `for x in xs` over `Vec<T>`, and `for i in 0..n` as a counted `f64` loop. `i32` and every other integer type written in the source are rejected. `as f64` is a no-op on that loop binding
+- Any number of structs and enums in one file. A struct field or enum payload is any owned value above. Structs are objects keyed by field names. Enums, `Option`, and `Result` are objects with compiler-only `$tag` and `$0` keys. A named variant stores its field names beside `$tag`. A tuple variant carries one payload at `$0`. `State::Pair(String, f64)` is rejected; the named-field form is the multi-value spelling. `Option<T>` and `Result<T, E>` are built-in enums (`Some`/`None`, `Ok`/`Err`) and lower through that same path. A struct or enum that reaches itself through a field, payload, `Vec`, `Option`, or `Result` is rejected. There is no `Box`
+- Struct literals and variant constructors. Every field is required. `..rest` is rejected
+- One-level enum, `Option`, and `Result` patterns. No guards, or-patterns, or rest. Nested patterns such as `Some(Job { count })` are a later gap. Bind the payload, then read its fields from that local
+- `?` on a subset `Result`: a tag test plus `return Err(e)`. It does not emit `Throw`. Durable operations still produce `Result<T, String>`
+- `Vec::new` needs a type ascription or a turbofish. `push` and `len` work for every `Vec<T>`. `for` consumes the vector and moves each element into the binding. `xs[i]` copies `f64` and `bool` only. Indexing a moving element would borrow, so it is rejected. `String` is an owned value with no mutation method
 - `move` closures for ordinary computation, through the existing cell, environment, and `CallClosure` instructions. Capturing by reference is rejected. The `move` keyword is required when a closure captures
 - Durable intrinsics, entry frame only. Names are string literals (`"approved"`). The prelude types those parameters as `&'static str`. That is not general borrow support: `&` and `&mut` anywhere else, including `&T` and `&mut T` in user code, are rejected. An effect closure is typechecked and omitted from the artifact. The host supplies the result. `wait_for_event` and `invoke` take their result type from the ascription
 
@@ -47,4 +48,4 @@ No `**`. No `String` concatenation. Structs and enums are compared only by `matc
 
 ## Rejected
 
-With a span diagnostic: `&` / `&mut` outside the durable-name literal, lifetimes, user generics, traits, `impl`, macros, derives, iterator adapters, async helpers, generators, threads, `unsafe`, `Drop`, integer types, and imports other than the prelude.
+With a span diagnostic: `&` / `&mut` outside the durable-name literal, lifetimes, user generics, traits, `impl`, macros, derives, iterator adapters, async helpers, generators, threads, `unsafe`, `Drop`, integer types, recursive types, indexing a moving `Vec` element, tuple variants with more than one payload, and imports other than the prelude. Integer types are outside this subset even though they are ordinary Rust: every number is `f64`.

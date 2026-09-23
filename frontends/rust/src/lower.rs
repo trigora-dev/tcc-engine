@@ -44,44 +44,47 @@ impl std::fmt::Display for CompileError {
 
 impl std::error::Error for CompileError {}
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Ty {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct Ty(u32);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum TyKind {
     F64,
     Bool,
     String,
     Unit,
-    Struct,
-    Enum,
-    OptionF64,
-    ResultF64,
-    ResultBool,
-    ResultString,
-    ResultUnit,
-    ResultStruct,
-    ResultVec,
-    VecF64,
     Closure,
     /// A durable result whose payload type comes from a type ascription.
     Host,
     Never,
+    Vec(Ty),
+    Adt(u32),
 }
 
-impl Ty {
-    fn moves(self) -> bool {
-        !matches!(self, Ty::F64 | Ty::Bool | Ty::Unit | Ty::Host | Ty::Never)
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Form {
+    Struct,
+    Enum,
+    Option,
+    Result,
 }
 
-fn result_inner(ty: Ty) -> Option<Ty> {
-    match ty {
-        Ty::ResultF64 => Some(Ty::F64),
-        Ty::ResultBool => Some(Ty::Bool),
-        Ty::ResultString => Some(Ty::String),
-        Ty::ResultUnit => Some(Ty::Unit),
-        Ty::ResultStruct => Some(Ty::Struct),
-        Ty::ResultVec => Some(Ty::VecF64),
-        _ => None,
-    }
+type ArmBinding = (String, String, Ty);
+
+#[derive(Clone, Debug)]
+enum VariantFields {
+    Unit,
+    Tuple(Ty),
+    Named(Vec<(String, Ty)>),
+}
+
+struct Adt {
+    name: String,
+    form: Form,
+    line: u32,
+    column: u32,
+    fields: Vec<(String, Ty)>,
+    variants: Vec<(String, VariantFields)>,
 }
 
 #[derive(Clone, Copy)]
@@ -89,10 +92,6 @@ struct Slot {
     id: u32,
     ty: Ty,
     mutable: bool,
-}
-
-struct Variant {
-    fields: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -118,14 +117,25 @@ struct LoopFrame {
 struct Compiler {
     names: HashMap<String, Slot>,
     moved: HashMap<String, ()>,
+    moved_fields: HashSet<String>,
     instructions: Vec<Instruction>,
     next_local: u32,
     param_count: u32,
     ret: Ty,
-    struct_name: Option<String>,
-    struct_fields: Vec<String>,
-    enum_name: Option<String>,
-    variants: HashMap<String, Variant>,
+    kinds: Vec<TyKind>,
+    interned: HashMap<TyKind, Ty>,
+    adts: Vec<Adt>,
+    structs: HashMap<String, Ty>,
+    enums: HashMap<String, Ty>,
+    options: HashMap<Ty, Ty>,
+    results: HashMap<(Ty, Ty), Ty>,
+    ty_f64: Ty,
+    ty_bool: Ty,
+    ty_string: Ty,
+    ty_unit: Ty,
+    ty_closure: Ty,
+    ty_host: Ty,
+    ty_never: Ty,
     loop_binding: Option<String>,
     helpers: HashMap<String, HelperSig>,
     closure_sigs: HashMap<String, ClosureSig>,
@@ -151,6 +161,7 @@ struct FnState {
     entry: bool,
     expected: Option<Ty>,
     pending_closure: Option<ClosureSig>,
+    moved_fields: HashSet<String>,
 }
 
 pub fn lower(source: &str) -> Result<Artifact, CompileError> {
@@ -164,28 +175,7 @@ pub fn lower(source: &str) -> Result<Artifact, CompileError> {
     if let Some(error) = reject.error {
         return Err(error);
     }
-    let mut compiler = Compiler {
-        names: HashMap::new(),
-        moved: HashMap::new(),
-        instructions: Vec::new(),
-        next_local: 0,
-        param_count: 0,
-        ret: Ty::F64,
-        struct_name: None,
-        struct_fields: Vec::new(),
-        enum_name: None,
-        variants: HashMap::new(),
-        loop_binding: None,
-        helpers: HashMap::new(),
-        closure_sigs: HashMap::new(),
-        pending_closure: None,
-        captures: HashMap::new(),
-        loops: Vec::new(),
-        extras: Vec::new(),
-        next_func: 1,
-        entry: false,
-        expected: None,
-    };
+    let mut compiler = Compiler::new();
     compiler.collect(&file)?;
     compiler.compile_run(&file)?;
     compiler.finish()
@@ -252,105 +242,418 @@ impl Reject {
 }
 
 impl Compiler {
+    fn new() -> Self {
+        let mut compiler = Self {
+            names: HashMap::new(),
+            moved: HashMap::new(),
+            moved_fields: HashSet::new(),
+            instructions: Vec::new(),
+            next_local: 0,
+            param_count: 0,
+            ret: Ty(0),
+            kinds: Vec::new(),
+            interned: HashMap::new(),
+            adts: Vec::new(),
+            structs: HashMap::new(),
+            enums: HashMap::new(),
+            options: HashMap::new(),
+            results: HashMap::new(),
+            ty_f64: Ty(0),
+            ty_bool: Ty(0),
+            ty_string: Ty(0),
+            ty_unit: Ty(0),
+            ty_closure: Ty(0),
+            ty_host: Ty(0),
+            ty_never: Ty(0),
+            loop_binding: None,
+            helpers: HashMap::new(),
+            closure_sigs: HashMap::new(),
+            pending_closure: None,
+            captures: HashMap::new(),
+            loops: Vec::new(),
+            extras: Vec::new(),
+            next_func: 1,
+            entry: false,
+            expected: None,
+        };
+        compiler.ty_f64 = compiler.intern(TyKind::F64);
+        compiler.ty_bool = compiler.intern(TyKind::Bool);
+        compiler.ty_string = compiler.intern(TyKind::String);
+        compiler.ty_unit = compiler.intern(TyKind::Unit);
+        compiler.ty_closure = compiler.intern(TyKind::Closure);
+        compiler.ty_host = compiler.intern(TyKind::Host);
+        compiler.ty_never = compiler.intern(TyKind::Never);
+        compiler.ret = compiler.ty_f64;
+        compiler
+    }
+
+    fn intern(&mut self, kind: TyKind) -> Ty {
+        if let Some(ty) = self.interned.get(&kind).copied() {
+            return ty;
+        }
+        let ty = Ty(self.kinds.len() as u32);
+        self.kinds.push(kind);
+        self.interned.insert(kind, ty);
+        ty
+    }
+
+    fn kind(&self, ty: Ty) -> TyKind {
+        self.kinds[ty.0 as usize]
+    }
+
+    fn moves(&self, ty: Ty) -> bool {
+        !matches!(
+            self.kind(ty),
+            TyKind::F64 | TyKind::Bool | TyKind::Unit | TyKind::Host | TyKind::Never
+        )
+    }
+
+    fn adt(&self, ty: Ty) -> Option<&Adt> {
+        match self.kind(ty) {
+            TyKind::Adt(id) => Some(&self.adts[id as usize]),
+            _ => None,
+        }
+    }
+
+    fn is_struct(&self, ty: Ty) -> bool {
+        self.adt(ty).is_some_and(|adt| adt.form == Form::Struct)
+    }
+
+    fn is_enum(&self, ty: Ty) -> bool {
+        self.adt(ty).is_some_and(|adt| adt.form != Form::Struct)
+    }
+
+    fn vec_elem(&self, ty: Ty) -> Option<Ty> {
+        match self.kind(ty) {
+            TyKind::Vec(inner) => Some(inner),
+            _ => None,
+        }
+    }
+
+    fn vec_ty(&mut self, elem: Ty) -> Ty {
+        self.intern(TyKind::Vec(elem))
+    }
+
+    fn field_ty(&self, ty: Ty, name: &str) -> Option<Ty> {
+        self.adt(ty).and_then(|adt| {
+            if adt.form != Form::Struct {
+                return None;
+            }
+            adt.fields
+                .iter()
+                .find(|(field, _)| field == name)
+                .map(|(_, ty)| *ty)
+        })
+    }
+
+    fn variant(&self, ty: Ty, name: &str) -> Option<VariantFields> {
+        self.adt(ty).and_then(|adt| {
+            adt.variants
+                .iter()
+                .find(|(variant, _)| variant == name)
+                .map(|(_, fields)| fields.clone())
+        })
+    }
+
+    fn option_inner(&self, ty: Ty) -> Option<Ty> {
+        let adt = self.adt(ty)?;
+        if adt.form != Form::Option {
+            return None;
+        }
+        match self.variant(ty, "Some")? {
+            VariantFields::Tuple(inner) => Some(inner),
+            _ => None,
+        }
+    }
+
+    fn result_parts(&self, ty: Ty) -> Option<(Ty, Ty)> {
+        let adt = self.adt(ty)?;
+        if adt.form != Form::Result {
+            return None;
+        }
+        let ok = match self.variant(ty, "Ok")? {
+            VariantFields::Tuple(inner) => inner,
+            _ => return None,
+        };
+        let err = match self.variant(ty, "Err")? {
+            VariantFields::Tuple(inner) => inner,
+            _ => return None,
+        };
+        Some((ok, err))
+    }
+
+    fn option_ty(&mut self, inner: Ty) -> Ty {
+        if let Some(ty) = self.options.get(&inner).copied() {
+            return ty;
+        }
+        let ty = self.push_adt(Adt {
+            name: "Option".into(),
+            form: Form::Option,
+            line: 1,
+            column: 1,
+            fields: Vec::new(),
+            variants: vec![
+                ("None".into(), VariantFields::Unit),
+                ("Some".into(), VariantFields::Tuple(inner)),
+            ],
+        });
+        self.options.insert(inner, ty);
+        ty
+    }
+
+    fn result_ty(&mut self, ok: Ty, err: Ty) -> Ty {
+        if let Some(ty) = self.results.get(&(ok, err)).copied() {
+            return ty;
+        }
+        let ty = self.push_adt(Adt {
+            name: "Result".into(),
+            form: Form::Result,
+            line: 1,
+            column: 1,
+            fields: Vec::new(),
+            variants: vec![
+                ("Ok".into(), VariantFields::Tuple(ok)),
+                ("Err".into(), VariantFields::Tuple(err)),
+            ],
+        });
+        self.results.insert((ok, err), ty);
+        ty
+    }
+
+    fn push_adt(&mut self, adt: Adt) -> Ty {
+        let id = self.adts.len() as u32;
+        self.adts.push(adt);
+        self.intern(TyKind::Adt(id))
+    }
+
+    fn type_edges(&self, ty: Ty) -> Vec<Ty> {
+        match self.kind(ty) {
+            TyKind::Vec(inner) => vec![inner],
+            TyKind::Adt(id) => {
+                let adt = &self.adts[id as usize];
+                let mut edges: Vec<Ty> = adt.fields.iter().map(|(_, ty)| *ty).collect();
+                for (_, variant) in &adt.variants {
+                    match variant {
+                        VariantFields::Unit => {}
+                        VariantFields::Tuple(inner) => edges.push(*inner),
+                        VariantFields::Named(fields) => {
+                            edges.extend(fields.iter().map(|(_, ty)| *ty));
+                        }
+                    }
+                }
+                edges
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn check_cycles(&self) -> Result<(), CompileError> {
+        let mut color = HashMap::<u32, u8>::new();
+        for ty in self.structs.values().chain(self.enums.values()).copied() {
+            self.walk_type(ty, &mut color)?;
+        }
+        Ok(())
+    }
+
+    fn walk_type(&self, ty: Ty, color: &mut HashMap<u32, u8>) -> Result<(), CompileError> {
+        match color.get(&ty.0).copied().unwrap_or(0) {
+            1 => return Err(self.cycle_error(ty)),
+            2 => return Ok(()),
+            _ => {}
+        }
+        color.insert(ty.0, 1);
+        for edge in self.type_edges(ty) {
+            self.walk_type(edge, color)?;
+        }
+        color.insert(ty.0, 2);
+        Ok(())
+    }
+
+    fn cycle_error(&self, ty: Ty) -> CompileError {
+        if let Some(adt) = self.adt(ty) {
+            if matches!(adt.form, Form::Struct | Form::Enum) {
+                return CompileError {
+                    message: "recursive types are outside this subset".into(),
+                    line: adt.line,
+                    column: adt.column,
+                };
+            }
+        }
+        CompileError {
+            message: "recursive types are outside this subset".into(),
+            line: 1,
+            column: 1,
+        }
+    }
+
+    fn field_key(local: &str, field: &str) -> String {
+        format!("{local}.{field}")
+    }
+
+    fn has_moved_field(&self, local: &str) -> bool {
+        let prefix = format!("{local}.");
+        self.moved_fields.iter().any(|key| key.starts_with(&prefix))
+    }
+
     fn collect(&mut self, file: &File) -> Result<(), CompileError> {
         for item in &file.items {
             match item {
-                Item::Struct(item) => {
-                    if self.struct_name.is_some() {
-                        return Err(CompileError::at(
-                            "this subset accepts one struct",
-                            item.span(),
-                        ));
-                    }
-                    self.reject_attrs(&item.attrs)?;
-                    if !item.generics.params.is_empty() {
-                        return Err(CompileError::at(
-                            "generics are outside this subset",
-                            item.span(),
-                        ));
-                    }
-                    let Fields::Named(fields) = &item.fields else {
-                        return Err(CompileError::at(
-                            "struct fields must be named f64 fields",
-                            item.span(),
-                        ));
-                    };
-                    if fields.named.is_empty() {
-                        return Err(CompileError::at("struct needs an f64 field", item.span()));
-                    }
-                    for field in &fields.named {
-                        self.reject_attrs(&field.attrs)?;
-                        let name = field.ident.as_ref().unwrap();
-                        if self.ty(&field.ty)? != Ty::F64 {
-                            return Err(CompileError::at(
-                                "struct fields must be f64",
-                                field.span(),
-                            ));
-                        }
-                        self.struct_fields.push(name.to_string());
-                    }
-                    self.struct_name = Some(item.ident.to_string());
-                }
-                Item::Enum(item) => {
-                    if self.enum_name.is_some() {
-                        return Err(CompileError::at(
-                            "this subset accepts one enum",
-                            item.span(),
-                        ));
-                    }
-                    self.reject_attrs(&item.attrs)?;
-                    if !item.generics.params.is_empty() {
-                        return Err(CompileError::at(
-                            "generics are outside this subset",
-                            item.span(),
-                        ));
-                    }
-                    for variant in &item.variants {
-                        self.reject_attrs(&variant.attrs)?;
-                        if variant.discriminant.is_some() {
-                            return Err(CompileError::at(
-                                "enum discriminants are outside this subset",
-                                variant.span(),
-                            ));
-                        }
-                        let fields = match &variant.fields {
-                            Fields::Unit => Vec::new(),
-                            Fields::Named(named_fields) => {
-                                let mut names = Vec::new();
-                                for field in &named_fields.named {
-                                    let name = field.ident.as_ref().unwrap();
-                                    if self.ty(&field.ty)? != Ty::F64 {
-                                        return Err(CompileError::at(
-                                            "enum fields must be f64",
-                                            field.span(),
-                                        ));
-                                    }
-                                    names.push(name.to_string());
-                                }
-                                if names.is_empty() {
-                                    return Err(CompileError::at(
-                                        "the field-carrying variant needs an f64 field",
-                                        variant.span(),
-                                    ));
-                                }
-                                names
-                            }
-                            Fields::Unnamed(_) => {
-                                return Err(CompileError::at(
-                                    "tuple variants are outside this subset",
-                                    variant.span(),
-                                ));
-                            }
-                        };
-                        self.variants
-                            .insert(variant.ident.to_string(), Variant { fields });
-                    }
-                    self.enum_name = Some(item.ident.to_string());
-                }
+                Item::Struct(item) => self.declare_struct(item)?,
+                Item::Enum(item) => self.declare_enum(item)?,
                 Item::Use(_) | Item::Fn(_) => {}
                 _ => unreachable!("rejected before collect"),
             }
         }
+        for item in &file.items {
+            match item {
+                Item::Struct(item) => self.resolve_struct(item)?,
+                Item::Enum(item) => self.resolve_enum(item)?,
+                _ => {}
+            }
+        }
+        self.check_cycles()
+    }
+
+    fn reserved_name(name: &str) -> bool {
+        matches!(
+            name,
+            "Option" | "Result" | "Vec" | "String" | "f64" | "bool"
+        )
+    }
+
+    fn declare_struct(&mut self, item: &syn::ItemStruct) -> Result<(), CompileError> {
+        self.reject_attrs(&item.attrs)?;
+        if !item.generics.params.is_empty() {
+            return Err(CompileError::at(
+                "generics are outside this subset",
+                item.span(),
+            ));
+        }
+        let name = item.ident.to_string();
+        if Self::reserved_name(&name)
+            || self.structs.contains_key(&name)
+            || self.enums.contains_key(&name)
+        {
+            return Err(CompileError::at(
+                format!("duplicate or reserved type `{name}`"),
+                item.span(),
+            ));
+        }
+        let Fields::Named(fields) = &item.fields else {
+            return Err(CompileError::at("struct fields must be named", item.span()));
+        };
+        if fields.named.is_empty() {
+            return Err(CompileError::at("struct needs a field", item.span()));
+        }
+        let start = item.span().start();
+        let ty = self.push_adt(Adt {
+            name: name.clone(),
+            form: Form::Struct,
+            line: start.line as u32,
+            column: start.column as u32 + 1,
+            fields: Vec::new(),
+            variants: Vec::new(),
+        });
+        self.structs.insert(name, ty);
+        Ok(())
+    }
+
+    fn declare_enum(&mut self, item: &syn::ItemEnum) -> Result<(), CompileError> {
+        self.reject_attrs(&item.attrs)?;
+        if !item.generics.params.is_empty() {
+            return Err(CompileError::at(
+                "generics are outside this subset",
+                item.span(),
+            ));
+        }
+        let name = item.ident.to_string();
+        if Self::reserved_name(&name)
+            || self.structs.contains_key(&name)
+            || self.enums.contains_key(&name)
+        {
+            return Err(CompileError::at(
+                format!("duplicate or reserved type `{name}`"),
+                item.span(),
+            ));
+        }
+        if item.variants.is_empty() {
+            return Err(CompileError::at("enum needs a variant", item.span()));
+        }
+        let start = item.span().start();
+        let ty = self.push_adt(Adt {
+            name: name.clone(),
+            form: Form::Enum,
+            line: start.line as u32,
+            column: start.column as u32 + 1,
+            fields: Vec::new(),
+            variants: Vec::new(),
+        });
+        self.enums.insert(name, ty);
+        Ok(())
+    }
+
+    fn resolve_struct(&mut self, item: &syn::ItemStruct) -> Result<(), CompileError> {
+        let Fields::Named(named) = &item.fields else {
+            return Ok(());
+        };
+        let mut fields = Vec::new();
+        for field in &named.named {
+            self.reject_attrs(&field.attrs)?;
+            let name = field.ident.as_ref().unwrap().to_string();
+            fields.push((name, self.ty(&field.ty)?));
+        }
+        let ty = self.structs[&item.ident.to_string()];
+        let TyKind::Adt(id) = self.kind(ty) else {
+            unreachable!("struct type");
+        };
+        self.adts[id as usize].fields = fields;
+        Ok(())
+    }
+
+    fn resolve_enum(&mut self, item: &syn::ItemEnum) -> Result<(), CompileError> {
+        let mut variants = Vec::new();
+        for variant in &item.variants {
+            self.reject_attrs(&variant.attrs)?;
+            if variant.discriminant.is_some() {
+                return Err(CompileError::at(
+                    "enum discriminants are outside this subset",
+                    variant.span(),
+                ));
+            }
+            let fields = match &variant.fields {
+                Fields::Unit => VariantFields::Unit,
+                Fields::Unnamed(unnamed) => {
+                    if unnamed.unnamed.len() != 1 {
+                        return Err(CompileError::at(
+                            "tuple variants carry one value",
+                            variant.span(),
+                        ));
+                    }
+                    VariantFields::Tuple(self.ty(&unnamed.unnamed[0].ty)?)
+                }
+                Fields::Named(named) => {
+                    if named.named.is_empty() {
+                        return Err(CompileError::at(
+                            "the field-carrying variant needs a field",
+                            variant.span(),
+                        ));
+                    }
+                    let mut fields = Vec::new();
+                    for field in &named.named {
+                        self.reject_attrs(&field.attrs)?;
+                        let name = field.ident.as_ref().unwrap().to_string();
+                        fields.push((name, self.ty(&field.ty)?));
+                    }
+                    VariantFields::Named(fields)
+                }
+            };
+            variants.push((variant.ident.to_string(), fields));
+        }
+        let ty = self.enums[&item.ident.to_string()];
+        let TyKind::Adt(id) = self.kind(ty) else {
+            unreachable!("enum type");
+        };
+        self.adts[id as usize].variants = variants;
         Ok(())
     }
 
@@ -405,11 +708,12 @@ impl Compiler {
                 compiler.compile_fn_body(func, helper.ret, false)
             })?;
         }
+        let ret = self.signature(run)?.1;
         self.entry = true;
-        self.compile_fn_body(run, self.signature(run)?.1, true)
+        self.compile_fn_body(run, ret, true)
     }
 
-    fn signature(&self, func: &syn::ItemFn) -> Result<(Vec<Ty>, Ty), CompileError> {
+    fn signature(&mut self, func: &syn::ItemFn) -> Result<(Vec<Ty>, Ty), CompileError> {
         self.reject_attrs(&func.attrs)?;
         if !func.sig.generics.params.is_empty() || func.sig.generics.where_clause.is_some() {
             return Err(CompileError::at(
@@ -424,7 +728,7 @@ impl Compiler {
             ));
         };
         let ret = self.ty(ret_ty)?;
-        if matches!(ret, Ty::Host | Ty::Never | Ty::Closure) {
+        if ret == self.ty_host || ret == self.ty_never || ret == self.ty_closure {
             return Err(CompileError::at("unsupported return type", ret_ty.span()));
         }
         let mut params = Vec::new();
@@ -513,6 +817,7 @@ impl Compiler {
         FnState {
             names: std::mem::take(&mut self.names),
             moved: std::mem::take(&mut self.moved),
+            moved_fields: std::mem::take(&mut self.moved_fields),
             instructions: std::mem::take(&mut self.instructions),
             next_local: self.next_local,
             param_count: self.param_count,
@@ -529,6 +834,7 @@ impl Compiler {
     fn put_fn(&mut self, state: FnState) {
         self.names = state.names;
         self.moved = state.moved;
+        self.moved_fields = state.moved_fields;
         self.instructions = state.instructions;
         self.next_local = state.next_local;
         self.param_count = state.param_count;
@@ -544,10 +850,11 @@ impl Compiler {
     fn clear_fn(&mut self) {
         self.names.clear();
         self.moved.clear();
+        self.moved_fields.clear();
         self.instructions.clear();
         self.next_local = 0;
         self.param_count = 0;
-        self.ret = Ty::Unit;
+        self.ret = self.ty_unit;
         self.loop_binding = None;
         self.captures.clear();
         self.loops.clear();
@@ -689,12 +996,16 @@ impl Compiler {
                             self.expected = Some(ty);
                         }
                         let (mut ty, moved_from) = if let Expr::Path(path) = &*init.expr {
-                            self.load_local(path)?
+                            if single_ident(&path.path).is_some() {
+                                self.load_local(path)?
+                            } else {
+                                (self.expr(&init.expr)?, None)
+                            }
                         } else {
                             (self.expr(&init.expr)?, None)
                         };
                         self.expected = previous;
-                        if ty == Ty::Host {
+                        if ty == self.ty_host {
                             ty = ascribed.ok_or_else(|| {
                                 CompileError::at("this value needs a type ascription", local.span())
                             })?;
@@ -707,7 +1018,7 @@ impl Compiler {
                                 ));
                             }
                         }
-                        if ty == Ty::Closure {
+                        if ty == self.ty_closure {
                             let sig = self.pending_closure.take().ok_or_else(|| {
                                 CompileError::at(
                                     "internal: closure signature missing",
@@ -742,13 +1053,13 @@ impl Compiler {
                     return Ok(());
                 }
                 let ty = self.expr(expr)?;
-                if ty == Ty::Closure {
+                if ty == self.ty_closure {
                     return Err(CompileError::at(
                         "bind a closure before calling it",
                         expr.span(),
                     ));
                 }
-                if ty != Ty::Never {
+                if ty != self.ty_never {
                     self.emit(Instruction::Pop);
                 }
                 Ok(())
@@ -789,6 +1100,7 @@ impl Compiler {
             Expr::Paren(paren) => self.expr_move(&paren.expr, consume),
             Expr::Unary(unary) => self.unary(unary),
             Expr::Return(ret) => self.return_expr(ret),
+            Expr::Struct(expr) => self.struct_expr(expr),
             Expr::Closure(closure) => self.closure(closure),
             Expr::Index(index) => self.index(index),
             Expr::While(expr) => self.while_loop(expr),
@@ -824,7 +1136,7 @@ impl Compiler {
                     ));
                 }
                 self.number(number);
-                Ok(Ty::F64)
+                Ok(self.ty_f64)
             }
             Lit::Int(lit) => {
                 let number = lit.base10_parse::<i64>().map_err(|_| {
@@ -838,17 +1150,17 @@ impl Compiler {
                     ));
                 }
                 self.number(float);
-                Ok(Ty::F64)
+                Ok(self.ty_f64)
             }
             Lit::Bool(lit) => {
                 self.emit(Instruction::LoadConst {
                     value: ConstValue::Bool(lit.value),
                 });
-                Ok(Ty::Bool)
+                Ok(self.ty_bool)
             }
             Lit::Str(lit) => {
                 self.string(&lit.value());
-                Ok(Ty::String)
+                Ok(self.ty_string)
             }
             _ => Err(CompileError::at("outside this subset", lit.span())),
         }
@@ -878,7 +1190,7 @@ impl Compiler {
             ));
         };
         self.load(slot.id);
-        if slot.ty.moves() {
+        if self.moves(slot.ty) {
             Ok((slot.ty, Some((name, slot.id))))
         } else {
             Ok((slot.ty, None))
@@ -896,7 +1208,7 @@ impl Compiler {
             ));
         };
         if name == "None" {
-            return self.none_value();
+            return self.none_value(path.span());
         }
         if self.moved.contains_key(&name) {
             return Err(CompileError::at(
@@ -914,7 +1226,13 @@ impl Compiler {
             ));
         };
         self.load(slot.id);
-        if consume && slot.ty.moves() {
+        if consume && self.moves(slot.ty) {
+            if self.has_moved_field(&name) {
+                return Err(CompileError::at(
+                    format!("use of moved value `{name}`"),
+                    path.span(),
+                ));
+            }
             let tmp = self.fresh();
             self.store(tmp);
             self.clear(slot.id);
@@ -946,21 +1264,38 @@ impl Compiler {
                 field.span(),
             ));
         };
-        let ty = self.path_value(base, false)?;
-        if ty != Ty::Struct {
+        let Some(local) = single_ident(&base.path) else {
             return Err(CompileError::at(
-                "field access is only supported on the struct",
+                "field access must start from a local",
                 field.span(),
             ));
-        }
-        if !self.struct_fields.iter().any(|field| field == &name) {
+        };
+        let ty = self.path_value(base, false)?;
+        let Some(field_ty) = self.field_ty(ty, &name) else {
             return Err(CompileError::at(
                 format!("unknown field `{name}`"),
                 field.span(),
             ));
+        };
+        let moved = Self::field_key(&local, &name);
+        if self.moved_fields.contains(&moved) {
+            return Err(CompileError::at(
+                format!("use of moved value `{local}.{name}`"),
+                field.span(),
+            ));
         }
-        self.emit(Instruction::GetProp { key: name });
-        Ok(Ty::F64)
+        self.emit(Instruction::GetProp { key: name.clone() });
+        if self.moves(field_ty) {
+            let tmp = self.fresh();
+            self.store(tmp);
+            self.load(self.names[&local].id);
+            self.undefined();
+            self.emit(Instruction::SetProp { key: name });
+            self.emit(Instruction::Pop);
+            self.load(tmp);
+            self.moved_fields.insert(moved);
+        }
+        Ok(field_ty)
     }
 
     fn binary(&mut self, binary: &syn::ExprBinary) -> Result<Ty, CompileError> {
@@ -1002,11 +1337,11 @@ impl Compiler {
         let left = self.expr(&binary.left)?;
         let right = self.expr(&binary.right)?;
         if let Some(op) = arith {
-            if left != Ty::F64 || right != Ty::F64 {
+            if left != self.ty_f64 || right != self.ty_f64 {
                 return Err(CompileError::at("arithmetic requires f64", binary.span()));
             }
             self.emit(op);
-            return Ok(Ty::F64);
+            return Ok(self.ty_f64);
         }
         let op = match binary.op {
             BinOp::Eq(_) => Instruction::StrictEq,
@@ -1017,10 +1352,9 @@ impl Compiler {
             BinOp::Ge(_) => Instruction::Ge,
             _ => unreachable!("comparison operator"),
         };
-        let comparable = matches!(
-            (left, right),
-            (Ty::F64, Ty::F64) | (Ty::Bool, Ty::Bool) | (Ty::String, Ty::String)
-        );
+        let comparable = (left == self.ty_f64 && right == self.ty_f64)
+            || (left == self.ty_bool && right == self.ty_bool)
+            || (left == self.ty_string && right == self.ty_string);
         if !comparable {
             return Err(CompileError::at(
                 "compare f64, bool, or String; match structs and enums",
@@ -1028,7 +1362,7 @@ impl Compiler {
             ));
         }
         if !matches!(binary.op, BinOp::Eq(_) | BinOp::Ne(_))
-            && (left != Ty::F64 || right != Ty::F64)
+            && (left != self.ty_f64 || right != self.ty_f64)
         {
             return Err(CompileError::at(
                 "ordered comparison requires f64",
@@ -1036,7 +1370,7 @@ impl Compiler {
             ));
         }
         self.emit(op);
-        Ok(Ty::Bool)
+        Ok(self.ty_bool)
     }
 
     fn assign(
@@ -1065,9 +1399,15 @@ impl Compiler {
                         left.span(),
                     ));
                 }
-                if slot.ty != Ty::F64 {
+                if self.moves(slot.ty) {
                     return Err(CompileError::at(
-                        "assignment of a compound value is a move, written as let",
+                        "assignment of a moving value is written as let",
+                        left.span(),
+                    ));
+                }
+                if arith.is_some() && slot.ty != self.ty_f64 {
+                    return Err(CompileError::at(
+                        "compound assignment requires f64",
                         left.span(),
                     ));
                 }
@@ -1075,8 +1415,11 @@ impl Compiler {
                     self.load(slot.id);
                 }
                 let ty = self.expr(right)?;
-                if ty != Ty::F64 {
-                    return Err(CompileError::at("assignment requires f64", right.span()));
+                if ty != slot.ty {
+                    return Err(CompileError::at(
+                        "assignment does not match the local type",
+                        right.span(),
+                    ));
                 }
                 if let Some(op) = arith {
                     self.emit(op);
@@ -1085,7 +1428,7 @@ impl Compiler {
                 self.emit(Instruction::LoadConst {
                     value: ConstValue::Undefined,
                 });
-                Ok(Ty::F64)
+                Ok(slot.ty)
             }
             Expr::Field(field) => {
                 let key = match &field.member {
@@ -1115,15 +1458,21 @@ impl Compiler {
                         field.span(),
                     ));
                 };
-                if slot.ty != Ty::Struct || !slot.mutable {
+                if !self.is_struct(slot.ty) || !slot.mutable {
                     return Err(CompileError::at(
                         "field assignment requires a mutable struct local",
                         field.span(),
                     ));
                 }
-                if !self.struct_fields.iter().any(|field| field == &key) {
+                let Some(field_ty) = self.field_ty(slot.ty, &key) else {
                     return Err(CompileError::at(
                         format!("unknown field `{key}`"),
+                        field.span(),
+                    ));
+                };
+                if arith.is_some() && field_ty != self.ty_f64 {
+                    return Err(CompileError::at(
+                        "compound assignment requires f64",
                         field.span(),
                     ));
                 }
@@ -1131,10 +1480,10 @@ impl Compiler {
                     self.load(slot.id);
                     self.emit(Instruction::GetProp { key: key.clone() });
                 }
-                let ty = self.expr(right)?;
-                if ty != Ty::F64 {
+                let ty = self.expr_move(right, true)?;
+                if ty != field_ty {
                     return Err(CompileError::at(
-                        "field assignment requires f64",
+                        "field assignment does not match the field type",
                         right.span(),
                     ));
                 }
@@ -1145,8 +1494,9 @@ impl Compiler {
                 self.store(value);
                 self.load(slot.id);
                 self.load(value);
-                self.emit(Instruction::SetProp { key });
-                Ok(Ty::Struct)
+                self.emit(Instruction::SetProp { key: key.clone() });
+                self.moved_fields.remove(&Self::field_key(&name, &key));
+                Ok(slot.ty)
             }
             _ => Err(CompileError::at(
                 "assignment target must be a local or a struct field",
@@ -1156,7 +1506,7 @@ impl Compiler {
     }
 
     fn cast(&mut self, cast: &syn::ExprCast) -> Result<Ty, CompileError> {
-        if self.ty(&cast.ty)? != Ty::F64 {
+        if self.ty(&cast.ty)? != self.ty_f64 {
             return Err(CompileError::at("only `as f64` is supported", cast.span()));
         }
         let Expr::Path(path) = &*cast.expr else {
@@ -1183,14 +1533,14 @@ impl Compiler {
     fn call(&mut self, call: &syn::ExprCall) -> Result<Ty, CompileError> {
         if let Some(text) = string_from_call(call) {
             self.string(&text);
-            return Ok(Ty::String);
+            return Ok(self.ty_string);
         }
         let Expr::Path(path) = &*call.func else {
             return Err(CompileError::at("unsupported call", call.span()));
         };
         if let Some(name) = single_ident(&path.path) {
             if let Some(slot) = self.names.get(&name).cloned() {
-                if slot.ty == Ty::Closure {
+                if slot.ty == self.ty_closure {
                     return self.call_closure(call, &name, slot.id);
                 }
             }
@@ -1208,23 +1558,60 @@ impl Compiler {
             }
         }
         if path_string(&path.path) == "Vec::new" {
+            let elem = self.vec_new_elem(&path.path, call.span())?;
             self.emit(Instruction::NewArray);
-            return Ok(Ty::VecF64);
+            return Ok(self.vec_ty(elem));
+        }
+        if let Some((enum_name, variant)) = two_idents(&path.path) {
+            return self.construct_tuple(&enum_name, &variant, call);
         }
         let Some(name) = single_ident(&path.path) else {
             return Err(CompileError::at("unsupported call", call.span()));
         };
         if name == "Some" {
-            if call.args.len() != 1 {
-                return Err(CompileError::at("Some takes one argument", call.span()));
-            }
-            let payload = self.expr_move(&call.args[0], true)?;
-            if payload != Ty::F64 {
-                return Err(CompileError::at("only Some(f64) is supported", call.span()));
-            }
-            self.wrap("Some");
-            return Ok(Ty::OptionF64);
+            return self.construct_some(call);
         }
+        if name == "Ok" || name == "Err" {
+            return self.construct_result(name.as_str(), call);
+        }
+        Err(CompileError::at("unsupported call", call.span()))
+    }
+
+    fn vec_new_elem(
+        &mut self,
+        path: &syn::Path,
+        span: proc_macro2::Span,
+    ) -> Result<Ty, CompileError> {
+        if path.segments.len() == 2 {
+            if let syn::PathArguments::AngleBracketed(_) = &path.segments[0].arguments {
+                let args = generic_args(&path.segments[0], 1)?;
+                return self.ty(&args[0]);
+            }
+        }
+        if let Some(expected) = self.expected.and_then(|ty| self.vec_elem(ty)) {
+            return Ok(expected);
+        }
+        Err(CompileError::at("Vec::new needs a type ascription", span))
+    }
+
+    fn construct_some(&mut self, call: &syn::ExprCall) -> Result<Ty, CompileError> {
+        if call.args.len() != 1 {
+            return Err(CompileError::at("Some takes one argument", call.span()));
+        }
+        let payload = self.expr_move(&call.args[0], true)?;
+        if let Some(inner) = self.expected.and_then(|ty| self.option_inner(ty)) {
+            if payload != inner {
+                return Err(CompileError::at(
+                    "Some does not match Option's type",
+                    call.span(),
+                ));
+            }
+        }
+        self.wrap("Some");
+        Ok(self.option_ty(payload))
+    }
+
+    fn construct_result(&mut self, name: &str, call: &syn::ExprCall) -> Result<Ty, CompileError> {
         if call.args.len() != 1 {
             return Err(CompileError::at(
                 "Ok and Err take one argument",
@@ -1232,22 +1619,150 @@ impl Compiler {
             ));
         }
         let payload = self.expr_move(&call.args[0], true)?;
-        let inner = result_inner(self.ret);
-        match (name.as_str(), inner, payload) {
-            ("Ok", Some(expected), got) if expected == got => {
-                self.wrap("Ok");
-                Ok(self.ret)
-            }
-            ("Err", Some(_), Ty::String) => {
-                self.wrap("Err");
-                Ok(self.ret)
-            }
-            ("Ok" | "Err", _, _) => Err(CompileError::at(
+        let result = self
+            .expected
+            .filter(|ty| self.result_parts(*ty).is_some())
+            .filter(|ty| self.result_parts(*ty).is_some())
+            .unwrap_or(self.ret);
+        let Some((ok, err)) = self.result_parts(result) else {
+            return Err(CompileError::at(
                 "Ok and Err do not match the return type",
                 call.span(),
-            )),
-            _ => Err(CompileError::at("unsupported call", call.span())),
+            ));
+        };
+        let expected = if name == "Ok" { ok } else { err };
+        if payload != expected {
+            return Err(CompileError::at(
+                "Ok and Err do not match the return type",
+                call.span(),
+            ));
         }
+        self.wrap(name);
+        Ok(result)
+    }
+
+    fn construct_tuple(
+        &mut self,
+        enum_name: &str,
+        variant: &str,
+        call: &syn::ExprCall,
+    ) -> Result<Ty, CompileError> {
+        let Some(ty) = self.enums.get(enum_name).copied() else {
+            return Err(CompileError::at("unknown enum", call.span()));
+        };
+        let Some(fields) = self.variant(ty, variant) else {
+            return Err(CompileError::at(
+                format!("unknown variant `{variant}`"),
+                call.span(),
+            ));
+        };
+        let VariantFields::Tuple(expected) = fields else {
+            return Err(CompileError::at(
+                "construct this variant with its fields",
+                call.span(),
+            ));
+        };
+        if call.args.len() != 1 {
+            return Err(CompileError::at(
+                "tuple variants carry one value",
+                call.span(),
+            ));
+        }
+        let got = self.expr_move(&call.args[0], true)?;
+        if got != expected {
+            return Err(CompileError::at(
+                "variant payload does not match its type",
+                call.span(),
+            ));
+        }
+        self.wrap(variant);
+        Ok(ty)
+    }
+
+    fn struct_expr(&mut self, expr: &syn::ExprStruct) -> Result<Ty, CompileError> {
+        if expr.rest.is_some() {
+            return Err(CompileError::at(
+                "struct update syntax is outside this subset",
+                expr.span(),
+            ));
+        }
+        if let Some((enum_name, variant)) = two_idents(&expr.path) {
+            return self.construct_named(&enum_name, &variant, expr);
+        }
+        let Some(name) = single_ident(&expr.path) else {
+            return Err(CompileError::at("unsupported struct literal", expr.span()));
+        };
+        let Some(ty) = self.structs.get(&name).copied() else {
+            return Err(CompileError::at(
+                format!("unknown struct `{name}`"),
+                expr.span(),
+            ));
+        };
+        let fields = self
+            .adt(ty)
+            .map(|adt| adt.fields.clone())
+            .unwrap_or_default();
+        self.emit(Instruction::NewObject);
+        self.fill_fields(&fields, &expr.fields, expr.span())?;
+        Ok(ty)
+    }
+
+    fn construct_named(
+        &mut self,
+        enum_name: &str,
+        variant: &str,
+        expr: &syn::ExprStruct,
+    ) -> Result<Ty, CompileError> {
+        let Some(ty) = self.enums.get(enum_name).copied() else {
+            return Err(CompileError::at("unknown enum", expr.span()));
+        };
+        let Some(fields) = self.variant(ty, variant) else {
+            return Err(CompileError::at(
+                format!("unknown variant `{variant}`"),
+                expr.span(),
+            ));
+        };
+        let VariantFields::Named(fields) = fields else {
+            return Err(CompileError::at(
+                "construct this variant with its payload",
+                expr.span(),
+            ));
+        };
+        self.emit(Instruction::NewObject);
+        self.string(variant);
+        self.emit(Instruction::SetProp {
+            key: TAG.to_string(),
+        });
+        self.fill_fields(&fields, &expr.fields, expr.span())?;
+        Ok(ty)
+    }
+
+    fn fill_fields(
+        &mut self,
+        fields: &[(String, Ty)],
+        given: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+        span: proc_macro2::Span,
+    ) -> Result<(), CompileError> {
+        if given.len() != fields.len() {
+            return Err(CompileError::at("construct every field", span));
+        }
+        for (name, ty) in fields {
+            let Some(found) = given.iter().find(|field| match &field.member {
+                syn::Member::Named(ident) => ident == name,
+                syn::Member::Unnamed(_) => false,
+            }) else {
+                return Err(CompileError::at(format!("missing field `{name}`"), span));
+            };
+            let got = self.expr_move(&found.expr, true)?;
+            if got != *ty {
+                return Err(CompileError::at(
+                    format!("field `{name}` does not match its type"),
+                    found.span(),
+                ));
+            }
+            self.emit(Instruction::SetProp { key: name.clone() });
+        }
+        Ok(())
     }
 
     fn method(&mut self, call: &syn::ExprMethodCall) -> Result<Ty, CompileError> {
@@ -1258,7 +1773,7 @@ impl Compiler {
             }) = &*call.receiver
             {
                 self.string(&text.value());
-                return Ok(Ty::String);
+                return Ok(self.ty_string);
             }
         }
         if call.method == "push_str" {
@@ -1269,33 +1784,30 @@ impl Compiler {
         }
         if call.method == "len" && call.args.is_empty() && call.turbofish.is_none() {
             let ty = self.expr(&call.receiver)?;
-            if ty != Ty::VecF64 {
-                return Err(CompileError::at(
-                    "len is supported on Vec<f64>",
-                    call.span(),
-                ));
+            if self.vec_elem(ty).is_none() {
+                return Err(CompileError::at("len is supported on Vec", call.span()));
             }
             self.emit(Instruction::Length);
-            return Ok(Ty::F64);
+            return Ok(self.ty_f64);
         }
         if call.method == "push" && call.args.len() == 1 && call.turbofish.is_none() {
             let ty = self.expr(&call.receiver)?;
-            if ty != Ty::VecF64 {
+            let Some(elem) = self.vec_elem(ty) else {
+                return Err(CompileError::at("push is supported on Vec", call.span()));
+            };
+            let value = self.expr_move(&call.args[0], true)?;
+            if value != elem {
                 return Err(CompileError::at(
-                    "push is supported on Vec<f64>",
+                    "push does not match the vector element type",
                     call.span(),
                 ));
-            }
-            let value = self.expr_move(&call.args[0], true)?;
-            if value != Ty::F64 {
-                return Err(CompileError::at("Vec<f64> push takes f64", call.span()));
             }
             self.emit(Instruction::ArrayPush);
             self.emit(Instruction::Pop);
             self.emit(Instruction::LoadConst {
                 value: ConstValue::Undefined,
             });
-            return Ok(Ty::Unit);
+            return Ok(self.ty_unit);
         }
         Err(CompileError::at(
             "methods are outside this subset",
@@ -1306,19 +1818,45 @@ impl Compiler {
     fn question(&mut self, try_expr: &syn::ExprTry) -> Result<Ty, CompileError> {
         let inner = if let Expr::Await(await_expr) = &*try_expr.expr {
             let payload = self.durable(&await_expr.base)?;
+            let Some((_, ret_err)) = self.result_parts(self.ret) else {
+                return Err(CompileError::at(
+                    "? requires the function to return Result",
+                    try_expr.span(),
+                ));
+            };
+            if ret_err != self.ty_string {
+                return Err(CompileError::at(
+                    "? error type does not match the function",
+                    try_expr.span(),
+                ));
+            }
             self.wrap("Ok");
             payload
         } else {
             let ty = self.expr(&try_expr.expr)?;
-            result_inner(ty)
-                .ok_or_else(|| CompileError::at("? requires a Result", try_expr.span()))?
+            let (ok, err) = self
+                .result_parts(ty)
+                .ok_or_else(|| CompileError::at("? requires a Result", try_expr.span()))?;
+            let Some((_, ret_err)) = self.result_parts(self.ret) else {
+                return Err(CompileError::at(
+                    "? requires the function to return Result",
+                    try_expr.span(),
+                ));
+            };
+            if err != ret_err {
+                return Err(CompileError::at(
+                    "? error type does not match the function",
+                    try_expr.span(),
+                ));
+            }
+            ok
         };
         self.unwrap_result(inner)
     }
 
     fn if_expr(&mut self, expr: &syn::ExprIf) -> Result<Ty, CompileError> {
         let cond = self.expr(&expr.cond)?;
-        if cond != Ty::Bool {
+        if cond != self.ty_bool {
             return Err(CompileError::at("if requires a bool", expr.cond.span()));
         }
         let to_else = self.emit(Instruction::JumpIfFalse { target: Pc(0) });
@@ -1378,7 +1916,7 @@ impl Compiler {
                     arm.span(),
                 ));
             }
-            let (tag, binding) = self.arm_pattern(&arm.pat, scrutinee.ty)?;
+            let (tag, bindings) = self.arm_pattern(&arm.pat, scrutinee.ty)?;
             self.load(scrutinee.id);
             self.emit(Instruction::GetProp {
                 key: TAG.to_string(),
@@ -1386,11 +1924,17 @@ impl Compiler {
             self.string(&tag);
             self.emit(Instruction::StrictEq);
             let to_next = self.emit(Instruction::JumpIfFalse { target: Pc(0) });
-            if let Some((name, key)) = binding {
+            for (name, key, ty) in bindings {
                 self.load(scrutinee.id);
-                self.emit(Instruction::GetProp { key });
-                let id = self.bind(name.clone(), Ty::F64, false);
+                self.emit(Instruction::GetProp { key: key.clone() });
+                let id = self.bind(name, ty, false);
                 self.store(id);
+                if self.moves(ty) {
+                    self.load(scrutinee.id);
+                    self.undefined();
+                    self.emit(Instruction::SetProp { key });
+                    self.emit(Instruction::Pop);
+                }
             }
             let ty = self.expr(&arm.body)?;
             if let Some(expected) = result {
@@ -1433,9 +1977,9 @@ impl Compiler {
                 expr.span(),
             ));
         };
-        if !matches!(slot.ty, Ty::Enum | Ty::OptionF64) {
+        if !self.is_enum(slot.ty) {
             return Err(CompileError::at(
-                "match subject must be the enum or Option<f64>",
+                "match subject must be an enum, Option, or Result",
                 expr.span(),
             ));
         }
@@ -1455,89 +1999,118 @@ impl Compiler {
         &mut self,
         pat: &Pat,
         subject: Ty,
-    ) -> Result<(String, Option<(String, String)>), CompileError> {
+    ) -> Result<(String, Vec<ArmBinding>), CompileError> {
         match pat {
             Pat::TupleStruct(pat) => {
-                if subject != Ty::OptionF64 || path_string(&pat.path) != "Some" {
-                    return Err(CompileError::at("expected Some(n)", pat.span()));
-                }
+                let (variant, fields) = self.pattern_variant(&pat.path, subject, pat.span())?;
+                let VariantFields::Tuple(ty) = fields else {
+                    return Err(CompileError::at(
+                        "this variant has no tuple payload",
+                        pat.span(),
+                    ));
+                };
                 if pat.elems.len() != 1 {
-                    return Err(CompileError::at("Some binds one identifier", pat.span()));
+                    return Err(CompileError::at(
+                        "tuple variants bind one identifier",
+                        pat.span(),
+                    ));
                 }
                 let Pat::Ident(ident) = &pat.elems[0] else {
-                    return Err(CompileError::at("Some binds one identifier", pat.span()));
+                    return Err(CompileError::at(
+                        "nested patterns are outside this subset",
+                        pat.span(),
+                    ));
                 };
-                Ok((
-                    "Some".into(),
-                    Some((ident.ident.to_string(), PAYLOAD.into())),
-                ))
+                Ok((variant, vec![(ident.ident.to_string(), PAYLOAD.into(), ty)]))
             }
             Pat::Struct(pat) => {
-                if subject != Ty::Enum {
-                    return Err(CompileError::at("expected the enum", pat.span()));
+                if pat.rest.is_some() {
+                    return Err(CompileError::at(
+                        "rest patterns are outside this subset",
+                        pat.span(),
+                    ));
                 }
-                let (enum_name, variant) = two_idents(&pat.path)
-                    .ok_or_else(|| CompileError::at("expected Enum::Variant", pat.span()))?;
-                if self.enum_name.as_deref() != Some(enum_name.as_str()) {
-                    return Err(CompileError::at("expected the enum", pat.span()));
-                }
-                let info = self.variants.get(&variant).ok_or_else(|| {
-                    CompileError::at(format!("unknown variant `{variant}`"), pat.span())
-                })?;
-                if info.fields.len() != pat.fields.len() || pat.rest.is_some() {
+                let (variant, fields) = self.pattern_variant(&pat.path, subject, pat.span())?;
+                let VariantFields::Named(fields) = fields else {
+                    return Err(CompileError::at(
+                        "this variant has no named fields",
+                        pat.span(),
+                    ));
+                };
+                if pat.fields.len() != fields.len() {
                     return Err(CompileError::at(
                         "destructure every field of the variant",
                         pat.span(),
                     ));
                 }
-                if info.fields.len() != 1 {
+                let mut bindings = Vec::new();
+                for (name, ty) in fields {
+                    let Some(found) = pat.fields.iter().find(|field| match &field.member {
+                        syn::Member::Named(ident) => ident == &name,
+                        syn::Member::Unnamed(_) => false,
+                    }) else {
+                        return Err(CompileError::at(
+                            format!("missing field `{name}`"),
+                            pat.span(),
+                        ));
+                    };
+                    let Pat::Ident(ident) = &*found.pat else {
+                        return Err(CompileError::at(
+                            "nested patterns are outside this subset",
+                            found.span(),
+                        ));
+                    };
+                    bindings.push((ident.ident.to_string(), name, ty));
+                }
+                Ok((variant, bindings))
+            }
+            Pat::Path(path) => {
+                let (variant, fields) = self.pattern_variant(&path.path, subject, pat.span())?;
+                if !matches!(fields, VariantFields::Unit) {
                     return Err(CompileError::at(
-                        "this subset destructures one field",
+                        "construct a field-carrying variant with its fields",
                         pat.span(),
                     ));
                 }
-                let field = &pat.fields[0];
-                let syn::Member::Named(member) = &field.member else {
-                    return Err(CompileError::at("expected a named field", field.span()));
-                };
-                if member != &info.fields[0] {
-                    return Err(CompileError::at("unknown enum field", field.span()));
-                }
-                let Pat::Ident(ident) = &*field.pat else {
-                    return Err(CompileError::at(
-                        "enum field binds an identifier",
-                        field.span(),
-                    ));
-                };
-                Ok((
-                    variant,
-                    Some((ident.ident.to_string(), info.fields[0].clone())),
-                ))
+                Ok((variant, Vec::new()))
             }
-            Pat::Path(path) => {
-                let text = path_string(&path.path);
-                if subject == Ty::OptionF64 && text == "None" {
-                    return Ok(("None".into(), None));
+            Pat::Ident(ident) => {
+                let variant = ident.ident.to_string();
+                let fields = self.variant(subject, &variant).ok_or_else(|| {
+                    CompileError::at(format!("unknown variant `{variant}`"), pat.span())
+                })?;
+                if !matches!(fields, VariantFields::Unit) {
+                    return Err(CompileError::at("unsupported match pattern", pat.span()));
                 }
-                if subject == Ty::Enum {
-                    if let Some((enum_name, variant)) = two_idents(&path.path) {
-                        if self.enum_name.as_deref() == Some(enum_name.as_str())
-                            && self
-                                .variants
-                                .get(&variant)
-                                .is_some_and(|info| info.fields.is_empty())
-                        {
-                            return Ok((variant, None));
-                        }
-                    }
-                }
-                Err(CompileError::at("unsupported match pattern", pat.span()))
-            }
-            Pat::Ident(ident) if subject == Ty::OptionF64 && ident.ident == "None" => {
-                Ok(("None".into(), None))
+                Ok((variant, Vec::new()))
             }
             _ => Err(CompileError::at("unsupported match pattern", pat.span())),
         }
+    }
+
+    fn pattern_variant(
+        &self,
+        path: &syn::Path,
+        subject: Ty,
+        span: proc_macro2::Span,
+    ) -> Result<(String, VariantFields), CompileError> {
+        let adt = self
+            .adt(subject)
+            .ok_or_else(|| CompileError::at("match subject must be an enum", span))?;
+        let variant_name = if let Some((enum_name, variant)) = two_idents(path) {
+            if enum_name != adt.name {
+                return Err(CompileError::at("expected the enum", span));
+            }
+            variant
+        } else if let Some(name) = single_ident(path) {
+            name
+        } else {
+            return Err(CompileError::at("unsupported match pattern", span));
+        };
+        let fields = self
+            .variant(subject, &variant_name)
+            .ok_or_else(|| CompileError::at(format!("unknown variant `{variant_name}`"), span))?;
+        Ok((variant_name, fields))
     }
 
     fn wrap(&mut self, tag: &str) {
@@ -1554,11 +2127,11 @@ impl Compiler {
         });
     }
 
-    fn ty(&self, ty: &Type) -> Result<Ty, CompileError> {
+    fn ty(&mut self, ty: &Type) -> Result<Ty, CompileError> {
         let Type::Path(TypePath { qself: None, path }) = ty else {
             if let Type::Tuple(tuple) = ty {
                 if tuple.elems.is_empty() {
-                    return Ok(Ty::Unit);
+                    return Ok(self.ty_unit);
                 }
             }
             return Err(CompileError::at("unsupported type", ty.span()));
@@ -1569,9 +2142,9 @@ impl Compiler {
         let segment = &path.segments[0];
         let name = segment.ident.to_string();
         match name.as_str() {
-            "f64" => Ok(Ty::F64),
-            "bool" => Ok(Ty::Bool),
-            "String" => Ok(Ty::String),
+            "f64" => Ok(self.ty_f64),
+            "bool" => Ok(self.ty_bool),
+            "String" => Ok(self.ty_string),
             "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
             | "u128" | "usize" => Err(CompileError::at(
                 "integer types are outside this subset",
@@ -1579,41 +2152,29 @@ impl Compiler {
             )),
             "Vec" => {
                 let inner = generic_args(segment, 1)?;
-                if self.ty(&inner[0])? != Ty::F64 {
-                    return Err(CompileError::at("only Vec<f64> is supported", ty.span()));
-                }
-                Ok(Ty::VecF64)
+                let elem = self.ty(&inner[0])?;
+                Ok(self.vec_ty(elem))
             }
             "Option" => {
                 let inner = generic_args(segment, 1)?;
-                if self.ty(&inner[0])? != Ty::F64 {
-                    return Err(CompileError::at("only Option<f64> is supported", ty.span()));
-                }
-                Ok(Ty::OptionF64)
+                let elem = self.ty(&inner[0])?;
+                Ok(self.option_ty(elem))
             }
             "Result" => {
                 let args = generic_args(segment, 2)?;
                 let ok = self.ty(&args[0])?;
                 let err = self.ty(&args[1])?;
-                if err != Ty::String {
-                    return Err(CompileError::at(
-                        "Result's error type must be String",
-                        ty.span(),
-                    ));
-                }
-                match ok {
-                    Ty::F64 => Ok(Ty::ResultF64),
-                    Ty::Bool => Ok(Ty::ResultBool),
-                    Ty::String => Ok(Ty::ResultString),
-                    Ty::Unit => Ok(Ty::ResultUnit),
-                    Ty::Struct => Ok(Ty::ResultStruct),
-                    Ty::VecF64 => Ok(Ty::ResultVec),
-                    _ => Err(CompileError::at("unsupported Result ok type", ty.span())),
-                }
+                Ok(self.result_ty(ok, err))
             }
-            other if self.struct_name.as_deref() == Some(other) => Ok(Ty::Struct),
-            other if self.enum_name.as_deref() == Some(other) => Ok(Ty::Enum),
-            _ => Err(CompileError::at("unsupported type", ty.span())),
+            other => {
+                if let Some(ty) = self.structs.get(other).copied() {
+                    return Ok(ty);
+                }
+                if let Some(ty) = self.enums.get(other).copied() {
+                    return Ok(ty);
+                }
+                Err(CompileError::at("unsupported type", ty.span()))
+            }
         }
     }
 

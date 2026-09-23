@@ -1,7 +1,10 @@
 use super::*;
 
 impl Compiler {
-    pub(super) fn binding(&self, pat: &Pat) -> Result<(String, bool, Option<Ty>), CompileError> {
+    pub(super) fn binding(
+        &mut self,
+        pat: &Pat,
+    ) -> Result<(String, bool, Option<Ty>), CompileError> {
         match pat {
             Pat::Ident(ident) => {
                 if ident.by_ref.is_some() || ident.subpat.is_some() {
@@ -57,7 +60,7 @@ impl Compiler {
         }
         self.load(0);
         self.emit(Instruction::EnvGet { index });
-        if consume && ty.moves() {
+        if consume && self.moves(ty) {
             let tmp = self.fresh();
             self.store(tmp);
             self.load(0);
@@ -75,14 +78,16 @@ impl Compiler {
         variant: &str,
         span: proc_macro2::Span,
     ) -> Result<Ty, CompileError> {
-        if self.enum_name.as_deref() != Some(enum_name) {
+        let Some(ty) = self.enums.get(enum_name).copied() else {
             return Err(CompileError::at("expected the enum", span));
-        }
-        let info = self
-            .variants
-            .get(variant)
-            .ok_or_else(|| CompileError::at(format!("unknown variant `{variant}`"), span))?;
-        if !info.fields.is_empty() {
+        };
+        let Some(fields) = self.variant(ty, variant) else {
+            return Err(CompileError::at(
+                format!("unknown variant `{variant}`"),
+                span,
+            ));
+        };
+        if !matches!(fields, VariantFields::Unit) {
             return Err(CompileError::at(
                 "construct a field-carrying variant with its fields",
                 span,
@@ -93,22 +98,29 @@ impl Compiler {
         self.emit(Instruction::SetProp {
             key: TAG.to_string(),
         });
-        Ok(Ty::Enum)
+        Ok(ty)
     }
 
-    pub(super) fn none_value(&mut self) -> Result<Ty, CompileError> {
+    pub(super) fn none_value(&mut self, span: proc_macro2::Span) -> Result<Ty, CompileError> {
+        let ty = self
+            .expected
+            .filter(|ty| self.option_inner(*ty).is_some())
+            .or_else(|| self.option_inner(self.ret).map(|_| self.ret));
+        let Some(ty) = ty else {
+            return Err(CompileError::at("None needs a type ascription", span));
+        };
         self.emit(Instruction::NewObject);
         self.string("None");
         self.emit(Instruction::SetProp {
             key: TAG.to_string(),
         });
-        Ok(Ty::OptionF64)
+        Ok(ty)
     }
 
     pub(super) fn short_circuit(&mut self, binary: &syn::ExprBinary) -> Result<Ty, CompileError> {
         let and = matches!(binary.op, BinOp::And(_));
         let left = self.expr(&binary.left)?;
-        if left != Ty::Bool {
+        if left != self.ty_bool {
             return Err(CompileError::at("&& and || require bool", binary.span()));
         }
         let skip = if and {
@@ -117,7 +129,7 @@ impl Compiler {
             self.emit(Instruction::JumpIfTrue { target: Pc(0) })
         };
         let right = self.expr(&binary.right)?;
-        if right != Ty::Bool {
+        if right != self.ty_bool {
             return Err(CompileError::at("&& and || require bool", binary.span()));
         }
         let to_end = self.emit(Instruction::Jump { target: Pc(0) });
@@ -126,26 +138,26 @@ impl Compiler {
             value: ConstValue::Bool(!and),
         });
         self.patch(to_end);
-        Ok(Ty::Bool)
+        Ok(self.ty_bool)
     }
 
     pub(super) fn unary(&mut self, expr: &syn::ExprUnary) -> Result<Ty, CompileError> {
         match expr.op {
             syn::UnOp::Not(_) => {
                 let ty = self.expr(&expr.expr)?;
-                if ty != Ty::Bool {
+                if ty != self.ty_bool {
                     return Err(CompileError::at("! requires bool", expr.span()));
                 }
                 self.emit(Instruction::Not);
-                Ok(Ty::Bool)
+                Ok(self.ty_bool)
             }
             syn::UnOp::Neg(_) => {
                 let ty = self.expr(&expr.expr)?;
-                if ty != Ty::F64 {
+                if ty != self.ty_f64 {
                     return Err(CompileError::at("unary minus requires f64", expr.span()));
                 }
                 self.emit(Instruction::Neg);
-                Ok(Ty::F64)
+                Ok(self.ty_f64)
             }
             _ => Err(CompileError::at("outside this subset", expr.span())),
         }
@@ -160,26 +172,32 @@ impl Compiler {
                     expr.span(),
                 ));
             }
-        } else if self.ret != Ty::Unit {
+        } else if self.ret != self.ty_unit {
             return Err(CompileError::at("return a value", expr.span()));
         } else {
             self.undefined();
         }
         self.emit(Instruction::Return);
-        Ok(Ty::Never)
+        Ok(self.ty_never)
     }
 
     pub(super) fn index(&mut self, expr: &syn::ExprIndex) -> Result<Ty, CompileError> {
         let ty = self.expr(&expr.expr)?;
-        if ty != Ty::VecF64 {
-            return Err(CompileError::at("index Vec<f64>", expr.span()));
+        let Some(elem) = self.vec_elem(ty) else {
+            return Err(CompileError::at("index a Vec", expr.span()));
+        };
+        if self.moves(elem) {
+            return Err(CompileError::at(
+                "indexing a Vec would borrow; use for",
+                expr.span(),
+            ));
         }
         let index = self.expr(&expr.index)?;
-        if index != Ty::F64 {
+        if index != self.ty_f64 {
             return Err(CompileError::at("Vec index is f64", expr.span()));
         }
         self.emit(Instruction::GetIndex);
-        Ok(Ty::F64)
+        Ok(elem)
     }
 
     pub(super) fn call_helper(
@@ -304,7 +322,7 @@ impl Compiler {
         let name = durable_name(&call.args[0])?;
         self.string(&name);
         self.emit(Instruction::WaitForEvent);
-        Ok(self.expected.unwrap_or(Ty::Bool))
+        Ok(self.expected.unwrap_or(self.ty_bool))
     }
 
     pub(super) fn op_effect(&mut self, call: &syn::ExprCall) -> Result<Ty, CompileError> {
@@ -338,11 +356,11 @@ impl Compiler {
             return Err(CompileError::at("sleep takes an f64 duration", call.span()));
         }
         let ty = self.expr(&call.args[0])?;
-        if ty != Ty::F64 {
+        if ty != self.ty_f64 {
             return Err(CompileError::at("sleep takes an f64 duration", call.span()));
         }
         self.emit(Instruction::Sleep);
-        Ok(Ty::Unit)
+        Ok(self.ty_unit)
     }
 
     pub(super) fn op_invoke(&mut self, call: &syn::ExprCall) -> Result<Ty, CompileError> {
@@ -404,13 +422,7 @@ impl Compiler {
             Instruction::JoinAny
         });
         if all {
-            if left != Ty::F64 {
-                return Err(CompileError::at(
-                    "join yields Vec<f64> in this subset",
-                    call.span(),
-                ));
-            }
-            Ok(Ty::VecF64)
+            Ok(self.vec_ty(left))
         } else {
             Ok(left)
         }
@@ -461,6 +473,7 @@ impl Compiler {
         let next_local = self.next_local;
         let names = self.names.clone();
         let moved = self.moved.clone();
+        let moved_fields = self.moved_fields.clone();
         let extras = self.extras.len();
         let next_func = self.next_func;
         let pending = self.pending_closure.clone();
@@ -469,6 +482,7 @@ impl Compiler {
         self.next_local = next_local;
         self.names = names;
         self.moved = moved;
+        self.moved_fields = moved_fields;
         self.extras.truncate(extras);
         self.next_func = next_func;
         self.pending_closure = pending;
@@ -494,13 +508,13 @@ impl Compiler {
             return Err(CompileError::at("for supports 0..n", range.span()));
         };
         let start_ty = self.expr(start)?;
-        if start_ty != Ty::F64 {
+        if start_ty != self.ty_f64 {
             return Err(CompileError::at("range bounds are f64", range.span()));
         }
-        let index = self.bind(name.to_string(), Ty::F64, true);
+        let index = self.bind(name.to_string(), self.ty_f64, true);
         self.store(index);
         let end_ty = self.expr(end)?;
-        if end_ty != Ty::F64 {
+        if end_ty != self.ty_f64 {
             return Err(CompileError::at("range bounds are f64", range.span()));
         }
         let end_local = self.fresh();
@@ -531,7 +545,7 @@ impl Compiler {
         self.patch_breaks();
         self.loops.pop();
         self.undefined();
-        Ok(Ty::Unit)
+        Ok(self.ty_unit)
     }
 
     pub(super) fn for_vec(
@@ -540,13 +554,29 @@ impl Compiler {
         collection: &Expr,
         body: &Block,
     ) -> Result<Ty, CompileError> {
-        let ty = self.expr(collection)?;
-        if ty != Ty::VecF64 {
+        let ty = match collection {
+            Expr::Path(path) => {
+                let (ty, moved_from) = self.load_local(path)?;
+                if let Some((source, id)) = moved_from {
+                    if self.has_moved_field(&source) {
+                        return Err(CompileError::at(
+                            format!("use of moved value `{source}`"),
+                            collection.span(),
+                        ));
+                    }
+                    self.clear(id);
+                    self.moved.insert(source, ());
+                }
+                ty
+            }
+            other => self.expr(other)?,
+        };
+        let Some(elem) = self.vec_elem(ty) else {
             return Err(CompileError::at(
-                "for supports Vec<f64> or 0..n",
+                "for supports Vec<T> or 0..n",
                 collection.span(),
             ));
-        }
+        };
         let vec = self.fresh();
         self.store(vec);
         let index = self.fresh();
@@ -564,8 +594,15 @@ impl Compiler {
         self.load(vec);
         self.load(index);
         self.emit(Instruction::GetIndex);
-        let binding = self.bind(name.to_string(), Ty::F64, false);
+        let binding = self.bind(name.to_string(), elem, false);
         self.store(binding);
+        self.moved.remove(name);
+        if self.moves(elem) {
+            self.load(vec);
+            self.load(index);
+            self.undefined();
+            self.emit(Instruction::SetIndex);
+        }
         self.loops.push(LoopFrame {
             continue_pc: None,
             breaks: Vec::new(),
@@ -585,7 +622,7 @@ impl Compiler {
         self.patch_breaks();
         self.loops.pop();
         self.undefined();
-        Ok(Ty::Unit)
+        Ok(self.ty_unit)
     }
 
     pub(super) fn while_loop(&mut self, expr: &syn::ExprWhile) -> Result<Ty, CompileError> {
@@ -597,7 +634,7 @@ impl Compiler {
         }
         let start = self.instructions.len() as u32;
         let cond = self.expr(&expr.cond)?;
-        if cond != Ty::Bool {
+        if cond != self.ty_bool {
             return Err(CompileError::at("while requires a bool", expr.span()));
         }
         let to_end = self.emit(Instruction::JumpIfFalse { target: Pc(0) });
@@ -612,7 +649,7 @@ impl Compiler {
         self.patch_breaks();
         self.loops.pop();
         self.undefined();
-        Ok(Ty::Unit)
+        Ok(self.ty_unit)
     }
 
     pub(super) fn loop_expr(&mut self, expr: &syn::ExprLoop) -> Result<Ty, CompileError> {
@@ -633,7 +670,7 @@ impl Compiler {
         self.patch_breaks();
         self.loops.pop();
         self.undefined();
-        Ok(Ty::Unit)
+        Ok(self.ty_unit)
     }
 
     pub(super) fn break_expr(&mut self, expr: &syn::ExprBreak) -> Result<Ty, CompileError> {
@@ -648,7 +685,7 @@ impl Compiler {
         }
         let index = self.emit(Instruction::Jump { target: Pc(0) });
         self.loops.last_mut().unwrap().breaks.push(index);
-        Ok(Ty::Never)
+        Ok(self.ty_never)
     }
 
     pub(super) fn continue_expr(&mut self, expr: &syn::ExprContinue) -> Result<Ty, CompileError> {
@@ -669,7 +706,7 @@ impl Compiler {
             let index = self.emit(Instruction::Jump { target: Pc(0) });
             self.loops.last_mut().unwrap().continues.push(index);
         }
-        Ok(Ty::Never)
+        Ok(self.ty_never)
     }
 
     pub(super) fn patch_breaks(&mut self) {
@@ -762,10 +799,10 @@ impl Compiler {
             params: params.into_iter().map(|(_, ty)| ty).collect(),
             ret: body_ty,
         });
-        Ok(Ty::Closure)
+        Ok(self.ty_closure)
     }
 
-    pub(super) fn closure_param(&self, pat: &Pat) -> Result<(String, Ty), CompileError> {
+    pub(super) fn closure_param(&mut self, pat: &Pat) -> Result<(String, Ty), CompileError> {
         let Pat::Type(typed) = pat else {
             return Err(CompileError::at(
                 "closure parameters need a type",
@@ -802,7 +839,7 @@ impl Compiler {
             return Err(CompileError::at(format!("unknown name `{name}`"), span));
         };
         self.load(slot.id);
-        if slot.ty.moves() {
+        if self.moves(slot.ty) {
             self.clear(slot.id);
             self.moved.insert(name.to_string(), ());
         }
