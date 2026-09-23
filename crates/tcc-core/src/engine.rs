@@ -16,8 +16,6 @@ use crate::protocol::{
     ChildSpec, EffectRecord, EffectStatus, HostRequest, HostResponse, WaitRegistration,
 };
 
-/// Checkpoint requests carry a continuation delta, so this enum stays large.
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineOutcome {
     Host(HostRequest),
@@ -380,7 +378,7 @@ impl Engine {
             kind: intent.kind,
             base_revision: self.confirmed.as_ref().map(|c| c.revision).unwrap_or(0),
             materialize: intent.materialize,
-            delta: intent.delta,
+            delta: intent.delta.map(Box::new),
         });
     }
 

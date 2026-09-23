@@ -42,7 +42,7 @@ pub enum HostRequest {
         kind: PersistKind,
         base_revision: u64,
         materialize: bool,
-        delta: Option<ContinuationDelta>,
+        delta: Option<Box<ContinuationDelta>>,
     },
     RunEffect {
         key: String,
