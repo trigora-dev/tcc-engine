@@ -139,7 +139,7 @@ Packaged compilers, primitives, the JS engine binding (with bundled WASM), the N
 
 ```text
 primitives  @tcc-engine/primitives           /  tcc_engine.primitives
-compiler    @tcc-engine/frontend-typescript  /  tcc_engine.compile
+compiler    @tcc-engine/frontend-typescript  /  tcc_engine.compile  /  @tcc-engine/frontend-rust
 binding     @tcc-engine/bindings-javascript  /  tcc_engine.EngineBinding
 host        @tcc-engine/host-node            /  tcc_engine.host
 ```
@@ -154,7 +154,7 @@ python -m venv .venv
 ( cd bindings/python && ../../.venv/bin/maturin build --release --out ../../dist-packages )
 ```
 
-Tarballs and wheels land in `dist-packages/`. Install them elsewhere with `npm install ./tcc-engine-….tgz` and `pip install ./tcc_engine-….whl`. The JS binding’s `loadEngine()` uses the WASM file inside that package; do not pass a `target/…/tcc_wasm.wasm` path. The Node host needs Node 22 and `--experimental-sqlite`.
+Tarballs and wheels land in `dist-packages/`. Install them elsewhere with `npm install ./tcc-engine-….tgz` and `pip install ./tcc_engine-….whl`. `@tcc-engine/frontend-rust` is the platform binary of `tcc-rust-compile` plus `compile()`, version `0.1.0-rc.1`, which is the artifact `frontend_version`. Pin that tarball the same way as the TypeScript frontend. The pack is built for the machine that ran `pnpm pack:js`. The JS binding’s `loadEngine()` uses the WASM file inside that package; do not pass a `target/…/tcc_wasm.wasm` path. The Node host needs Node 22 and `--experimental-sqlite`.
 
 Portable manylinux/macOS wheels use cibuildwheel against `bindings/python/pyproject.toml`. Do not `npm publish` or upload to PyPI until the public `v0.1.0` cut.
 

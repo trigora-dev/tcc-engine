@@ -24,6 +24,8 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
+  frontends/rust/npm: {}
+
   frontends/typescript:
     dependencies:
       typescript:

@@ -35,6 +35,7 @@ dist/
 dist-packages/
 *.tgz
 frontends/**/dist/
+frontends/rust/npm/vendor/
 bindings/javascript/pkg/
 .pnpm-store/
 

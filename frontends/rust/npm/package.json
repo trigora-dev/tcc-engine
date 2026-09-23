@@ -1,0 +1,23 @@
+{
+  "name": "@tcc-engine/frontend-rust",
+  "version": "0.1.0-rc.1",
+  "private": true,
+  "type": "module",
+  "description": "Rust subset frontend: compile supported programs into TCC artifacts",
+  "bin": {
+    "tcc-rust-compile": "./vendor/tcc-rust-compile"
+  },
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "vendor"
+  ],
+  "scripts": {
+    "prepack": "node prepack.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

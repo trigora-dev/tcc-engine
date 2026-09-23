@@ -10,17 +10,18 @@ const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const dist = path.join(root, "dist-packages");
 const tarballs = readdirSync(dist).filter((name) => name.endsWith(".tgz"));
 const frontend = tarballs.find((name) => name.includes("frontend-typescript"));
+const rustFrontend = tarballs.find((name) => name.includes("frontend-rust"));
 const binding = tarballs.find((name) => name.includes("bindings-javascript"));
 const host = tarballs.find((name) => name.includes("host-node"));
 const primitives = tarballs.find((name) => name.includes("primitives"));
-if (!frontend || !binding || !host || !primitives) {
+if (!frontend || !rustFrontend || !binding || !host || !primitives) {
   throw new Error(
-    `missing npm packs in ${dist}: found ${tarballs.join(", ") || "(none)"}; need frontend-typescript, bindings-javascript, host-node, and primitives`,
+    `missing npm packs in ${dist}: found ${tarballs.join(", ") || "(none)"}; need frontend-typescript, frontend-rust, bindings-javascript, host-node, and primitives`,
   );
 }
 
 const dir = mkdtempSync(path.join(tmpdir(), "tcc-pack-verify-"));
-const npm = spawnSync("npm", ["install", path.join(dist, primitives), path.join(dist, frontend), path.join(dist, binding), path.join(dist, host)], {
+const npm = spawnSync("npm", ["install", path.join(dist, primitives), path.join(dist, frontend), path.join(dist, rustFrontend), path.join(dist, binding), path.join(dist, host)], {
   cwd: dir,
   encoding: "utf8",
 });
@@ -65,5 +66,22 @@ const result = await startExecution({
 assert.equal(result.status, "completed");
 assert.equal(result.result?.v?.result?.v, 42);
 assert.ok(EngineBinding);
+
+const { compile: compileRust, PACKAGE_VERSION: RUST_PACKAGE_VERSION, LANGUAGE_SEMANTICS_VERSION: RUST_LANGUAGE } = await import(
+  path.join(dir, "node_modules/@tcc-engine/frontend-rust/index.js")
+);
+assert.notEqual(RUST_PACKAGE_VERSION, RUST_LANGUAGE);
+const rustArtifact = compileRust("async fn run() -> f64 { 1.0 }\n");
+assert.equal(rustArtifact.envelope.frontend_id, "rust");
+assert.equal(rustArtifact.envelope.frontend_version, RUST_PACKAGE_VERSION);
+assert.equal(rustArtifact.envelope.language_semantics_version, RUST_LANGUAGE);
+const rustEngine = new EngineBinding(JSON.stringify(rustArtifact), "packed-rust", false, undefined);
+let rustOutcome = rustEngine.runUntilHost(100000);
+while (rustOutcome.type === "host" && rustOutcome.request?.type === "persist_checkpoint") {
+  rustEngine.applyHostResponse({ type: "persist_confirmed", revision: rustOutcome.request.revision });
+  rustOutcome = rustEngine.runUntilHost(100000);
+}
+assert.equal(rustOutcome.type, "completed");
+assert.equal(rustOutcome.result?.v, 1);
 
 console.log(`verified npm packs in ${dir}`);

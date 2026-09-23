@@ -1,5 +1,6 @@
 packages:
   - primitives
   - frontends/typescript
+  - frontends/rust/npm
   - bindings/javascript
   - hosts/node
