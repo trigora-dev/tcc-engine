@@ -1,383 +1,999 @@
 {
-  "baseline": {
-    "frozen": "2026-09-22",
-    "programs": [
-      {
-        "id": "alias-object",
-        "shared": true,
-        "typescript": "shared/collections/alias-object.ts",
-        "python": "shared/collections/alias-object.py",
-        "args": [],
-        "expected": { "t": "number", "v": 2 }
-      },
-      {
-        "id": "helper-mutate",
-        "shared": true,
-        "typescript": "shared/helpers/helper-mutate.ts",
-        "python": "shared/helpers/helper-mutate.py",
-        "args": [],
-        "expected": { "t": "number", "v": 1 }
-      },
-      {
-        "id": "price-total",
-        "shared": true,
-        "typescript": "shared/collections/price-total.ts",
-        "python": "shared/collections/price-total.py",
-        "args": [],
-        "expected": { "t": "number", "v": 32 }
-      },
-      {
-        "id": "list-total",
-        "shared": true,
-        "typescript": "shared/collections/list-total.ts",
-        "python": "shared/collections/list-total.py",
-        "args": [],
-        "expected": { "t": "number", "v": 32 }
-      },
-      {
-        "id": "retry-counter",
-        "shared": true,
-        "typescript": "shared/durability/retry-counter.ts",
-        "python": "shared/durability/retry-counter.py",
-        "args": [],
-        "effects": { "try-send": { "t": "string", "v": "ok" } },
-        "expected": { "t": "number", "v": 1 }
-      },
-      {
-        "id": "approval-flow",
-        "shared": true,
-        "typescript": "shared/durability/approval-flow.ts",
-        "python": "shared/durability/approval-flow.py",
-        "args": [],
-        "events": { "approval": { "t": "string", "v": "yes" } },
-        "expected": { "t": "string", "v": "approved" }
-      },
-      {
-        "id": "nested-score",
-        "shared": true,
-        "typescript": "shared/control_flow/nested-score.ts",
-        "python": "shared/control_flow/nested-score.py",
-        "args": [],
-        "expected": { "t": "number", "v": 16 }
-      },
-      {
-        "id": "early-return",
-        "shared": true,
-        "typescript": "shared/control_flow/early-return.ts",
-        "python": "shared/control_flow/early-return.py",
-        "args": [],
-        "expected": { "t": "string", "v": "neg" }
-      },
-      {
-        "id": "destructure-sum",
-        "shared": true,
-        "typescript": "shared/collections/destructure-sum.ts",
-        "python": "shared/collections/destructure-sum.py",
-        "args": [],
-        "expected": { "t": "number", "v": 9 }
-      },
-      {
-        "id": "loop-review",
-        "shared": true,
-        "typescript": "shared/durability/loop-review.ts",
-        "python": "shared/durability/loop-review.py",
-        "args": [],
-        "events": { "review": { "t": "string", "v": "stop" } },
-        "expected": { "t": "number", "v": 14 }
-      },
-      {
-        "id": "ts-nonfinite",
-        "typescript": "typescript/coercion/nonfinite.ts",
-        "args": [],
-        "expected": {
-          "t": "object",
-          "v": {
-            "inf": { "t": "number", "v": "Infinity" },
-            "nan": { "t": "number", "v": "NaN" },
-            "sum": { "t": "number", "v": "Infinity" },
-            "neg": { "t": "number", "v": "-Infinity" }
-          }
-        }
-      },
-      {
-        "id": "ts-ref-equality",
-        "typescript": "typescript/collections/ref-equality.ts",
-        "args": [],
-        "expected": {
-          "t": "object",
-          "v": {
-            "same": { "t": "bool", "v": true },
-            "other": { "t": "bool", "v": false },
-            "negZero": { "t": "bool", "v": true },
-            "nan": { "t": "bool", "v": false }
-          }
-        }
-      },
-      {
-        "id": "ts-param-defaults",
-        "typescript": "typescript/helpers/param-defaults.ts",
-        "args": [],
-        "expected": { "t": "number", "v": 4 }
-      },
-      {
-        "id": "ts-ternary",
-        "typescript": "typescript/control_flow/ternary.ts",
-        "args": [],
-        "expected": { "t": "string", "v": "neg" }
-      },
-      {
-        "id": "ts-compound-assign",
-        "typescript": "typescript/arithmetic/compound-assign.ts",
-        "args": [],
-        "expected": { "t": "number", "v": 3 }
-      },
-      {
-        "id": "ts-string-plus",
-        "typescript": "typescript/coercion/string-plus.ts",
-        "args": [],
-        "expected": { "t": "string", "v": "id:ada3" }
-      },
-      {
-        "id": "ts-logical",
-        "typescript": "typescript/coercion/logical.ts",
-        "args": [],
-        "expected": {
-          "t": "object",
-          "v": { "label": { "t": "string", "v": "ada" }, "fallback": { "t": "string", "v": "guest" } }
-        }
-      },
-      {
-        "id": "ts-array-index",
-        "typescript": "typescript/iteration/array-index.ts",
-        "args": [],
-        "expected": {
-          "t": "object",
-          "v": {
-            "len": { "t": "number", "v": 4 },
-            "second": { "t": "number", "v": 15 },
-            "missing": { "t": "undefined" },
-            "last": { "t": "number", "v": 40 }
-          }
-        }
-      },
-      {
-        "id": "ts-object-destructure",
-        "typescript": "typescript/collections/object-destructure.ts",
-        "args": [],
-        "expected": { "t": "number", "v": 25 }
-      },
-      {
-        "id": "ts-helper-product",
-        "typescript": "typescript/helpers/helper-product.ts",
-        "args": [],
-        "events": { "continue": { "t": "null" } },
-        "expected": { "t": "number", "v": 42 }
-      },
-      {
-        "id": "py-bool-arith",
-        "python": "python/numeric/bool-arith.py",
-        "args": [],
-        "expected": { "t": "number", "v": 2 }
-      },
-      {
-        "id": "py-const-defaults",
-        "python": "python/defaults/const-defaults.py",
-        "args": [ { "t": "number", "v": 5 } ],
-        "expected": { "t": "number", "v": 15 }
-      },
-      {
-        "id": "py-is-vs-eq",
-        "python": "python/collections/is-vs-eq.py",
-        "args": [],
-        "expected": {
-          "t": "object",
-          "v": {
-            "same": { "t": "bool", "v": true },
-            "other": { "t": "bool", "v": false },
-            "structural": { "t": "bool", "v": true }
-          }
-        }
-      },
-      {
-        "id": "py-negative-index",
-        "python": "python/numeric/negative-index.py",
-        "args": [],
-        "expected": { "t": "number", "v": 40 }
-      },
-      {
-        "id": "py-modulo",
-        "python": "python/numeric/modulo.py",
-        "args": [],
-        "expected": { "t": "number", "v": 2 }
-      },
-      {
-        "id": "py-dict-update",
-        "python": "python/collections/dict-update.py",
-        "args": [],
-        "expected": { "t": "number", "v": 15 }
-      },
-      {
-        "id": "py-list-append",
-        "python": "python/iteration/list-append.py",
-        "args": [],
-        "expected": { "t": "number", "v": 3 }
-      },
-      {
-        "id": "py-conditional-expr",
-        "python": "python/control_flow/conditional-expr.py",
-        "args": [],
-        "expected": { "t": "string", "v": "neg" }
-      },
-      {
-        "id": "py-helper-chain",
-        "python": "python/helpers/helper-chain.py",
-        "args": [],
-        "expected": { "t": "number", "v": 36 }
-      },
-      {
-        "id": "py-none-vs-default",
-        "python": "python/defaults/none-vs-default.py",
-        "args": [],
-        "expected": { "t": "number", "v": 7 }
+  "programs": [
+    {
+      "id": "alias-object",
+      "shared": true,
+      "typescript": "shared/collections/alias-object/alias-object.ts",
+      "python": "shared/collections/alias-object/alias-object.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 2
       }
-    ]
-  },
-  "suite": {
-    "programs": [
-      {
-        "id": "captured-cell",
-        "shared": true,
-        "typescript": "shared/closures/captured-cell.ts",
-        "python": "shared/closures/captured-cell.py",
-        "args": [],
-        "expected": { "t": "number", "v": 2 }
+    },
+    {
+      "id": "helper-mutate",
+      "shared": true,
+      "typescript": "shared/helpers/helper-mutate/helper-mutate.ts",
+      "python": "shared/helpers/helper-mutate/helper-mutate.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 1
+      }
+    },
+    {
+      "id": "price-total",
+      "shared": true,
+      "typescript": "shared/collections/price-total/price-total.ts",
+      "python": "shared/collections/price-total/price-total.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 32
       },
-      {
-        "id": "nested-closure",
-        "shared": true,
-        "typescript": "shared/closures/nested-closure.ts",
-        "python": "shared/closures/nested-closure.py",
-        "args": [],
-        "expected": { "t": "number", "v": 5 }
-      },
-      {
-        "id": "closure-wait",
-        "shared": true,
-        "typescript": "shared/closures/closure-wait.ts",
-        "python": "shared/closures/closure-wait.py",
-        "args": [],
-        "events": { "go": { "t": "number", "v": 4 } },
-        "expected": { "t": "number", "v": 12 }
-      },
-      {
-        "id": "callback-throw",
-        "shared": true,
-        "typescript": "shared/callbacks/callback-throw.ts",
-        "python": "shared/callbacks/callback-throw.py",
-        "args": [],
-        "expected": { "t": "number", "v": 1 }
-      },
-      {
-        "id": "nested-callback-throw",
-        "shared": true,
-        "typescript": "shared/callbacks/nested-callback-throw.ts",
-        "python": "shared/callbacks/nested-callback-throw.py",
-        "args": [],
-        "expected": { "t": "number", "v": 1 }
-      },
-      {
-        "id": "callback-local-try",
-        "shared": true,
-        "typescript": "shared/callbacks/callback-local-try.ts",
-        "python": "shared/callbacks/callback-local-try.py",
-        "args": [],
-        "expected": { "t": "number", "v": 1 }
-      },
-      {
-        "id": "callback-finally",
-        "shared": true,
-        "typescript": "shared/callbacks/callback-finally.ts",
-        "python": "shared/callbacks/callback-finally.py",
-        "args": [],
-        "expected": { "t": "number", "v": 1 }
-      },
-      {
-        "id": "ts-exponent",
-        "typescript": "typescript/arithmetic/exponent.ts",
-        "args": [],
-        "expected": {
-          "t": "array",
-          "v": [
-            { "t": "number", "v": 1 },
-            { "t": "number", "v": "Infinity" },
-            { "t": "number", "v": "-Infinity" },
-            { "t": "number", "v": -0 },
-            { "t": "number", "v": 1 },
-            { "t": "number", "v": 1 },
-            { "t": "number", "v": "NaN" }
-          ]
+      "rust": "shared/collections/price-total/price-total.rs"
+    },
+    {
+      "id": "list-total",
+      "shared": true,
+      "typescript": "shared/collections/list-total/list-total.ts",
+      "python": "shared/collections/list-total/list-total.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 32
+      }
+    },
+    {
+      "id": "retry-counter",
+      "shared": true,
+      "typescript": "shared/durability/retry-counter/retry-counter.ts",
+      "python": "shared/durability/retry-counter/retry-counter.py",
+      "args": [],
+      "effects": {
+        "try-send": {
+          "t": "string",
+          "v": "ok"
         }
       },
-      {
-        "id": "ts-map-helpers",
-        "typescript": "typescript/callbacks/map-helpers.ts",
-        "args": [],
-        "expected": { "t": "number", "v": 13 }
-      },
-      {
-        "id": "ts-filter-truthy",
-        "typescript": "typescript/callbacks/filter-truthy.ts",
-        "args": [],
-        "expected": { "t": "number", "v": 2 }
-      },
-      {
-        "id": "ts-reduce-forms",
-        "typescript": "typescript/callbacks/reduce-forms.ts",
-        "args": [],
-        "expected": { "t": "number", "v": 22 }
-      },
-      {
-        "id": "ts-map-element",
-        "typescript": "typescript/callbacks/map-element.ts",
-        "args": [],
-        "expected": { "t": "number", "v": 2 }
-      },
-      {
-        "id": "py-floor-div",
-        "python": "python/numeric/floor-div.py",
-        "args": [],
-        "expected": { "t": "number", "v": -274 }
-      },
-      {
-        "id": "py-power",
-        "python": "python/numeric/power.py",
-        "args": [],
-        "expected": { "t": "number", "v": -7 }
-      },
-      {
-        "id": "py-shadow-local",
-        "python": "python/closures/shadow-local.py",
-        "args": [],
-        "expected": { "t": "number", "v": 12 }
-      },
-      {
-        "id": "py-nonlocal-assign",
-        "python": "python/closures/nonlocal-assign.py",
-        "args": [],
-        "expected": { "t": "number", "v": 2 }
-      },
-      {
-        "id": "py-loop-lambda",
-        "python": "python/closures/loop-lambda.py",
-        "args": [],
-        "expected": { "t": "number", "v": 3 }
-      },
-      {
-        "id": "py-func-identity",
-        "python": "python/closures/func-identity.py",
-        "args": [],
-        "expected": { "t": "number", "v": 1 }
+      "expected": {
+        "t": "number",
+        "v": 1
       }
-    ]
-  }
+    },
+    {
+      "id": "approval-flow",
+      "shared": true,
+      "typescript": "shared/durability/approval-flow/approval-flow.ts",
+      "python": "shared/durability/approval-flow/approval-flow.py",
+      "args": [],
+      "events": {
+        "approval": {
+          "t": "string",
+          "v": "yes"
+        }
+      },
+      "expected": {
+        "t": "string",
+        "v": "approved"
+      }
+    },
+    {
+      "id": "nested-score",
+      "shared": true,
+      "typescript": "shared/control_flow/nested-score/nested-score.ts",
+      "python": "shared/control_flow/nested-score/nested-score.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 16
+      },
+      "rust": "shared/control_flow/nested-score/nested-score.rs"
+    },
+    {
+      "id": "early-return",
+      "shared": true,
+      "typescript": "shared/control_flow/early-return/early-return.ts",
+      "python": "shared/control_flow/early-return/early-return.py",
+      "args": [],
+      "expected": {
+        "t": "string",
+        "v": "neg"
+      },
+      "rust": "shared/control_flow/early-return/early-return.rs"
+    },
+    {
+      "id": "destructure-sum",
+      "shared": true,
+      "typescript": "shared/collections/destructure-sum/destructure-sum.ts",
+      "python": "shared/collections/destructure-sum/destructure-sum.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 9
+      }
+    },
+    {
+      "id": "loop-review",
+      "shared": true,
+      "typescript": "shared/durability/loop-review/loop-review.ts",
+      "python": "shared/durability/loop-review/loop-review.py",
+      "args": [],
+      "events": {
+        "review": {
+          "t": "string",
+          "v": "stop"
+        }
+      },
+      "expected": {
+        "t": "number",
+        "v": 14
+      }
+    },
+    {
+      "id": "ts-nonfinite",
+      "typescript": "typescript/coercion/nonfinite.ts",
+      "args": [],
+      "expected": {
+        "t": "object",
+        "v": {
+          "inf": {
+            "t": "number",
+            "v": "Infinity"
+          },
+          "nan": {
+            "t": "number",
+            "v": "NaN"
+          },
+          "sum": {
+            "t": "number",
+            "v": "Infinity"
+          },
+          "neg": {
+            "t": "number",
+            "v": "-Infinity"
+          }
+        }
+      }
+    },
+    {
+      "id": "ts-ref-equality",
+      "typescript": "typescript/collections/ref-equality.ts",
+      "args": [],
+      "expected": {
+        "t": "object",
+        "v": {
+          "same": {
+            "t": "bool",
+            "v": true
+          },
+          "other": {
+            "t": "bool",
+            "v": false
+          },
+          "negZero": {
+            "t": "bool",
+            "v": true
+          },
+          "nan": {
+            "t": "bool",
+            "v": false
+          }
+        }
+      }
+    },
+    {
+      "id": "ts-param-defaults",
+      "typescript": "typescript/helpers/param-defaults.ts",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 4
+      }
+    },
+    {
+      "id": "ts-ternary",
+      "typescript": "typescript/control_flow/ternary.ts",
+      "args": [],
+      "expected": {
+        "t": "string",
+        "v": "neg"
+      }
+    },
+    {
+      "id": "ts-compound-assign",
+      "typescript": "typescript/arithmetic/compound-assign.ts",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 3
+      }
+    },
+    {
+      "id": "ts-string-plus",
+      "typescript": "typescript/coercion/string-plus.ts",
+      "args": [],
+      "expected": {
+        "t": "string",
+        "v": "id:ada3"
+      }
+    },
+    {
+      "id": "ts-logical",
+      "typescript": "typescript/coercion/logical.ts",
+      "args": [],
+      "expected": {
+        "t": "object",
+        "v": {
+          "label": {
+            "t": "string",
+            "v": "ada"
+          },
+          "fallback": {
+            "t": "string",
+            "v": "guest"
+          }
+        }
+      }
+    },
+    {
+      "id": "ts-array-index",
+      "typescript": "typescript/iteration/array-index.ts",
+      "args": [],
+      "expected": {
+        "t": "object",
+        "v": {
+          "len": {
+            "t": "number",
+            "v": 4
+          },
+          "second": {
+            "t": "number",
+            "v": 15
+          },
+          "missing": {
+            "t": "undefined"
+          },
+          "last": {
+            "t": "number",
+            "v": 40
+          }
+        }
+      }
+    },
+    {
+      "id": "ts-object-destructure",
+      "typescript": "typescript/collections/object-destructure.ts",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 25
+      }
+    },
+    {
+      "id": "ts-helper-product",
+      "typescript": "typescript/helpers/helper-product.ts",
+      "args": [],
+      "events": {
+        "continue": {
+          "t": "null"
+        }
+      },
+      "expected": {
+        "t": "number",
+        "v": 42
+      }
+    },
+    {
+      "id": "py-bool-arith",
+      "python": "python/numeric/bool-arith.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 2
+      }
+    },
+    {
+      "id": "py-const-defaults",
+      "python": "python/defaults/const-defaults.py",
+      "args": [
+        {
+          "t": "number",
+          "v": 5
+        }
+      ],
+      "expected": {
+        "t": "number",
+        "v": 15
+      }
+    },
+    {
+      "id": "py-is-vs-eq",
+      "python": "python/collections/is-vs-eq.py",
+      "args": [],
+      "expected": {
+        "t": "object",
+        "v": {
+          "same": {
+            "t": "bool",
+            "v": true
+          },
+          "other": {
+            "t": "bool",
+            "v": false
+          },
+          "structural": {
+            "t": "bool",
+            "v": true
+          }
+        }
+      }
+    },
+    {
+      "id": "py-negative-index",
+      "python": "python/numeric/negative-index.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 40
+      }
+    },
+    {
+      "id": "py-modulo",
+      "python": "python/numeric/modulo.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 2
+      }
+    },
+    {
+      "id": "py-dict-update",
+      "python": "python/collections/dict-update.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 15
+      }
+    },
+    {
+      "id": "py-list-append",
+      "python": "python/iteration/list-append.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 3
+      }
+    },
+    {
+      "id": "py-conditional-expr",
+      "python": "python/control_flow/conditional-expr.py",
+      "args": [],
+      "expected": {
+        "t": "string",
+        "v": "neg"
+      }
+    },
+    {
+      "id": "py-helper-chain",
+      "python": "python/helpers/helper-chain.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 36
+      }
+    },
+    {
+      "id": "py-none-vs-default",
+      "python": "python/defaults/none-vs-default.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 7
+      }
+    },
+    {
+      "id": "captured-cell",
+      "shared": true,
+      "typescript": "shared/closures/captured-cell/captured-cell.ts",
+      "python": "shared/closures/captured-cell/captured-cell.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 2
+      }
+    },
+    {
+      "id": "nested-closure",
+      "shared": true,
+      "typescript": "shared/closures/nested-closure/nested-closure.ts",
+      "python": "shared/closures/nested-closure/nested-closure.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 5
+      }
+    },
+    {
+      "id": "closure-wait",
+      "shared": true,
+      "typescript": "shared/closures/closure-wait/closure-wait.ts",
+      "python": "shared/closures/closure-wait/closure-wait.py",
+      "args": [],
+      "events": {
+        "go": {
+          "t": "number",
+          "v": 4
+        }
+      },
+      "expected": {
+        "t": "number",
+        "v": 12
+      }
+    },
+    {
+      "id": "callback-throw",
+      "shared": true,
+      "typescript": "shared/callbacks/callback-throw/callback-throw.ts",
+      "python": "shared/callbacks/callback-throw/callback-throw.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 1
+      }
+    },
+    {
+      "id": "nested-callback-throw",
+      "shared": true,
+      "typescript": "shared/callbacks/nested-callback-throw/nested-callback-throw.ts",
+      "python": "shared/callbacks/nested-callback-throw/nested-callback-throw.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 1
+      }
+    },
+    {
+      "id": "callback-local-try",
+      "shared": true,
+      "typescript": "shared/callbacks/callback-local-try/callback-local-try.ts",
+      "python": "shared/callbacks/callback-local-try/callback-local-try.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 1
+      }
+    },
+    {
+      "id": "callback-finally",
+      "shared": true,
+      "typescript": "shared/callbacks/callback-finally/callback-finally.ts",
+      "python": "shared/callbacks/callback-finally/callback-finally.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 1
+      }
+    },
+    {
+      "id": "ts-exponent",
+      "typescript": "typescript/arithmetic/exponent.ts",
+      "args": [],
+      "expected": {
+        "t": "array",
+        "v": [
+          {
+            "t": "number",
+            "v": 1
+          },
+          {
+            "t": "number",
+            "v": "Infinity"
+          },
+          {
+            "t": "number",
+            "v": "-Infinity"
+          },
+          {
+            "t": "number",
+            "v": -0
+          },
+          {
+            "t": "number",
+            "v": 1
+          },
+          {
+            "t": "number",
+            "v": 1
+          },
+          {
+            "t": "number",
+            "v": "NaN"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ts-map-helpers",
+      "typescript": "typescript/callbacks/map-helpers.ts",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 13
+      }
+    },
+    {
+      "id": "ts-filter-truthy",
+      "typescript": "typescript/callbacks/filter-truthy.ts",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 2
+      }
+    },
+    {
+      "id": "ts-reduce-forms",
+      "typescript": "typescript/callbacks/reduce-forms.ts",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 22
+      }
+    },
+    {
+      "id": "ts-map-element",
+      "typescript": "typescript/callbacks/map-element.ts",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 2
+      }
+    },
+    {
+      "id": "py-floor-div",
+      "python": "python/numeric/floor-div.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": -274
+      }
+    },
+    {
+      "id": "py-power",
+      "python": "python/numeric/power.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": -7
+      }
+    },
+    {
+      "id": "py-shadow-local",
+      "python": "python/closures/shadow-local.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 12
+      }
+    },
+    {
+      "id": "py-nonlocal-assign",
+      "python": "python/closures/nonlocal-assign.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 2
+      }
+    },
+    {
+      "id": "py-loop-lambda",
+      "python": "python/closures/loop-lambda.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 3
+      }
+    },
+    {
+      "id": "py-func-identity",
+      "python": "python/closures/func-identity.py",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 1
+      }
+    },
+    {
+      "id": "rust-move-struct",
+      "rust": "rust/ownership/move_struct.rs",
+      "args": [
+        {
+          "t": "object",
+          "v": {
+            "count": {
+              "t": "number",
+              "v": 2
+            }
+          }
+        }
+      ],
+      "events": {
+        "go": {
+          "t": "bool",
+          "v": true
+        }
+      },
+      "expected": {
+        "t": "object",
+        "v": {
+          "$tag": {
+            "t": "string",
+            "v": "Ok"
+          },
+          "$0": {
+            "t": "number",
+            "v": 3
+          }
+        }
+      }
+    },
+    {
+      "id": "rust-copy-f64",
+      "rust": "rust/values/copy_f64.rs",
+      "args": [
+        {
+          "t": "number",
+          "v": 10
+        }
+      ],
+      "events": {
+        "go": {
+          "t": "bool",
+          "v": true
+        }
+      },
+      "expected": {
+        "t": "object",
+        "v": {
+          "$tag": {
+            "t": "string",
+            "v": "Ok"
+          },
+          "$0": {
+            "t": "number",
+            "v": 10
+          }
+        }
+      }
+    },
+    {
+      "id": "rust-move-string",
+      "rust": "rust/ownership/move_string.rs",
+      "args": [
+        {
+          "t": "string",
+          "v": "hello"
+        }
+      ],
+      "events": {
+        "go": {
+          "t": "bool",
+          "v": true
+        }
+      },
+      "expected": {
+        "t": "object",
+        "v": {
+          "$tag": {
+            "t": "string",
+            "v": "Ok"
+          },
+          "$0": {
+            "t": "string",
+            "v": "hello"
+          }
+        }
+      }
+    },
+    {
+      "id": "rust-update-struct",
+      "rust": "rust/structs/update_struct.rs",
+      "args": [
+        {
+          "t": "object",
+          "v": {
+            "count": {
+              "t": "number",
+              "v": 0
+            }
+          }
+        }
+      ],
+      "events": {
+        "approved": {
+          "t": "bool",
+          "v": true
+        }
+      },
+      "expected": {
+        "t": "object",
+        "v": {
+          "$tag": {
+            "t": "string",
+            "v": "Ok"
+          },
+          "$0": {
+            "t": "number",
+            "v": 3
+          }
+        }
+      }
+    },
+    {
+      "id": "rust-match-enum",
+      "rust": "rust/matching/match_enum.rs",
+      "args": [
+        {
+          "t": "object",
+          "v": {
+            "$tag": {
+              "t": "string",
+              "v": "Ready"
+            },
+            "count": {
+              "t": "number",
+              "v": 4
+            }
+          }
+        }
+      ],
+      "expected": {
+        "t": "number",
+        "v": 4
+      }
+    },
+    {
+      "id": "rust-match-option",
+      "rust": "rust/matching/match_option.rs",
+      "args": [
+        {
+          "t": "object",
+          "v": {
+            "$tag": {
+              "t": "string",
+              "v": "Some"
+            },
+            "$0": {
+              "t": "number",
+              "v": 5
+            }
+          }
+        }
+      ],
+      "expected": {
+        "t": "number",
+        "v": 5
+      }
+    },
+    {
+      "id": "rust-result-question",
+      "rust": "rust/matching/result_question.rs",
+      "args": [
+        {
+          "t": "number",
+          "v": 4
+        }
+      ],
+      "expected": {
+        "t": "object",
+        "v": {
+          "$tag": {
+            "t": "string",
+            "v": "Ok"
+          },
+          "$0": {
+            "t": "number",
+            "v": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "rust-vec-values",
+      "rust": "rust/collections/vec_values.rs",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 42
+      }
+    },
+    {
+      "id": "rust-range-for",
+      "rust": "rust/iteration/range_for.rs",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 6
+      }
+    },
+    {
+      "id": "rust-while-loop",
+      "rust": "rust/iteration/while_loop.rs",
+      "args": [],
+      "expected": {
+        "t": "number",
+        "v": 3
+      }
+    },
+    {
+      "id": "rust-helper-call",
+      "rust": "rust/helpers/helper_call.rs",
+      "args": [
+        {
+          "t": "number",
+          "v": 5
+        }
+      ],
+      "expected": {
+        "t": "number",
+        "v": 10
+      }
+    },
+    {
+      "id": "rust-helper-move",
+      "rust": "rust/ownership/helper_move.rs",
+      "args": [
+        {
+          "t": "object",
+          "v": {
+            "count": {
+              "t": "number",
+              "v": 4
+            }
+          }
+        }
+      ],
+      "expected": {
+        "t": "number",
+        "v": 4
+      }
+    },
+    {
+      "id": "rust-closure-move",
+      "rust": "rust/closures/closure_move.rs",
+      "args": [
+        {
+          "t": "number",
+          "v": 3
+        }
+      ],
+      "expected": {
+        "t": "number",
+        "v": 5
+      }
+    },
+    {
+      "id": "rust-closure-capture",
+      "rust": "rust/ownership/closure_capture.rs",
+      "args": [
+        {
+          "t": "string",
+          "v": "hello"
+        }
+      ],
+      "expected": {
+        "t": "string",
+        "v": "hello"
+      }
+    },
+    {
+      "id": "rust-effect-then-wait",
+      "rust": "rust/durability/effect_then_wait.rs",
+      "args": [],
+      "effects": {
+        "left": {
+          "t": "number",
+          "v": 2
+        }
+      },
+      "events": {
+        "go": {
+          "t": "bool",
+          "v": true
+        }
+      },
+      "expected": {
+        "t": "object",
+        "v": {
+          "$tag": {
+            "t": "string",
+            "v": "Ok"
+          },
+          "$0": {
+            "t": "number",
+            "v": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "rust-invoke-args",
+      "rust": "rust/durability/invoke_args.rs",
+      "args": [],
+      "child": {
+        "t": "number",
+        "v": 7
+      },
+      "expected": {
+        "t": "object",
+        "v": {
+          "$tag": {
+            "t": "string",
+            "v": "Ok"
+          },
+          "$0": {
+            "t": "number",
+            "v": 7
+          }
+        }
+      }
+    },
+    {
+      "id": "rust-join-pair",
+      "rust": "rust/durability/join_pair.rs",
+      "args": [],
+      "effects": {
+        "a": {
+          "t": "number",
+          "v": 1
+        },
+        "b": {
+          "t": "number",
+          "v": 2
+        }
+      },
+      "expected": {
+        "t": "object",
+        "v": {
+          "$tag": {
+            "t": "string",
+            "v": "Ok"
+          },
+          "$0": {
+            "t": "number",
+            "v": 3
+          }
+        }
+      }
+    },
+    {
+      "id": "rust-race-pair",
+      "rust": "rust/durability/race_pair.rs",
+      "args": [],
+      "effects": {
+        "a": {
+          "t": "number",
+          "v": 1
+        },
+        "b": {
+          "t": "number",
+          "v": 2
+        }
+      },
+      "expected": {
+        "t": "object",
+        "v": {
+          "$tag": {
+            "t": "string",
+            "v": "Ok"
+          },
+          "$0": {
+            "t": "number",
+            "v": 1
+          }
+        }
+      }
+    }
+  ]
 }

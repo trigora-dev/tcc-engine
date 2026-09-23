@@ -20,7 +20,7 @@ def _parse_int(text: str):
     return int(text)
 
 
-def drive(engine: EngineBinding, effects: dict, events: dict):
+def drive(engine: EngineBinding, effects: dict, events: dict, child=None):
     for _ in range(10000):
         outcome = loads(engine.run_until_host(100000))
         kind = outcome["type"]
@@ -29,12 +29,17 @@ def drive(engine: EngineBinding, effects: dict, events: dict):
         if kind == "failed":
             raise RuntimeError(outcome.get("message", "failed"))
         if kind == "suspended":
-            if not events:
+            if child is not None:
+                engine.apply_response(
+                    json.dumps({"type": "child_result", "value": child})
+                )
+            elif events:
+                name = next(iter(events))
+                engine.apply_response(
+                    json.dumps({"type": "event_payload", "value": events[name]})
+                )
+            else:
                 raise RuntimeError("suspended without an event")
-            name = next(iter(events))
-            engine.apply_response(
-                json.dumps({"type": "event_payload", "value": events[name]})
-            )
             continue
         if kind != "host":
             raise RuntimeError(f"unexpected outcome {kind}")
@@ -65,7 +70,7 @@ def drive(engine: EngineBinding, effects: dict, events: dict):
     raise RuntimeError("drive did not finish")
 
 
-def resume_once(artifact: str, args: list, effects: dict, events: dict) -> None:
+def resume_once(artifact: str, args: list, effects: dict, events: dict, child=None) -> None:
     engine = EngineBinding(artifact, "ordinary-resume", canonical_stringify(args) if args else None)
     for _ in range(10000):
         outcome = loads(engine.run_until_host(100000))
@@ -75,11 +80,16 @@ def resume_once(artifact: str, args: list, effects: dict, events: dict) -> None:
             if len(continuation.get("frames") or []) != 1:
                 raise RuntimeError("resumed continuation has a helper frame")
             resumed = EngineBinding.resume(artifact, engine.continuation_json())
-            name = next(iter(events))
-            resumed.apply_response(
-                json.dumps({"type": "event_payload", "value": events[name]})
-            )
-            drive(resumed, effects, events)
+            if child is not None:
+                resumed.apply_response(
+                    json.dumps({"type": "child_result", "value": child})
+                )
+            else:
+                name = next(iter(events))
+                resumed.apply_response(
+                    json.dumps({"type": "event_payload", "value": events[name]})
+                )
+            drive(resumed, effects, events, child)
             return
         if kind == "completed":
             return
@@ -99,9 +109,9 @@ def resume_once(artifact: str, args: list, effects: dict, events: dict) -> None:
             if len(continuation.get("frames") or []) != 1:
                 raise RuntimeError("resumed continuation has a helper frame")
             resumed = EngineBinding.resume(artifact, engine.continuation_json())
-            drive(resumed, effects, events)
+            drive(resumed, effects, events, child)
             return
-        elif request_type in {"register_wait", "persist_effect"}:
+        elif request_type in {"register_wait", "persist_effect", "create_child"}:
             engine.apply_response(json.dumps({"type": "ack"}))
         elif request_type == "run_effect":
             engine.apply_response(
@@ -124,10 +134,11 @@ def main() -> None:
     args = message.get("args") or []
     effects = message.get("effects") or {}
     events = message.get("events") or {}
+    child = message.get("child")
     engine = EngineBinding(artifact, "ordinary", canonical_stringify(args) if args else None)
-    result = drive(engine, effects, events)
-    if events or effects:
-        resume_once(artifact, args, effects, events)
+    result = drive(engine, effects, events, child)
+    if events or effects or child is not None:
+        resume_once(artifact, args, effects, events, child)
     sys.stdout.write(canonical_stringify(result))
 
 

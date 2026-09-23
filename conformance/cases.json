@@ -187,6 +187,45 @@
       "expected_result": { "t": "string", "v": "ok" },
       "typescript": { "file": "cases/typescript/branch.ts" },
       "python": { "file": "cases/python/branch.py" }
+    },
+    {
+      "id": "rust-effect-wait",
+      "kind": "crash-resume",
+      "crash_ats": [
+        "after_persist_checkpoint:1",
+        "after_persist_effect",
+        "after_wait_checkpoint",
+        "after_effect_provider"
+      ],
+      "expected_result": {
+        "t": "object",
+        "v": {
+          "$tag": { "t": "string", "v": "Ok" },
+          "$0": { "t": "number", "v": 42 }
+        }
+      },
+      "rust": { "file": "cases/rust/effect_wait.rs" }
+    },
+    {
+      "id": "rust-branch",
+      "kind": "crash-resume",
+      "crash_ats": ["after_persist_checkpoint:1", "after_wait_checkpoint"],
+      "expected_result": {
+        "t": "object",
+        "v": {
+          "$tag": { "t": "string", "v": "Ok" },
+          "$0": { "t": "string", "v": "ok" }
+        }
+      },
+      "rust": { "file": "cases/rust/branch.rs" }
+    },
+    {
+      "id": "rust-pinning",
+      "kind": "artifact-pinning",
+      "rust": {
+        "stored": { "file": "cases/rust/pinning_stored.rs" },
+        "other": { "file": "cases/rust/pinning_other.rs" }
+      }
     }
   ]
 }

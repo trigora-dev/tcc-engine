@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,7 +31,10 @@ type SemanticCase = {
   cancel?: boolean;
   typescript?: ProgramSpec | { stored: ProgramSpec; other: ProgramSpec };
   python?: ProgramSpec | { stored: ProgramSpec; other: ProgramSpec };
+  rust?: ProgramSpec | { stored: ProgramSpec; other: ProgramSpec };
 };
+
+type KitLanguage = "typescript" | "python" | "rust";
 
 type CasesFile = {
   reconstruct: string[];
@@ -59,13 +63,59 @@ function loadProgram(spec: ProgramSpec): { source: string; filename: string } {
 
 function programFor(
   item: SemanticCase,
-  language: "typescript" | "python",
+  language: KitLanguage,
 ): ProgramSpec | { stored: ProgramSpec; other: ProgramSpec } {
-  const spec = language === "python" ? item.python : item.typescript;
+  const spec =
+    language === "python" ? item.python : language === "rust" ? item.rust : item.typescript;
   if (!spec) {
     throw new Error(`case ${item.id} has no ${language} program`);
   }
   return spec;
+}
+
+function languagesFor(
+  item: SemanticCase,
+  driverLanguage: "typescript" | "python",
+): KitLanguage[] {
+  const languages: KitLanguage[] = [];
+  if (item.compiler === "typescript") {
+    languages.push("typescript");
+  } else if (driverLanguage === "typescript" && item.typescript) {
+    languages.push("typescript");
+  } else if (driverLanguage === "python" && item.python) {
+    languages.push("python");
+  }
+  if (item.rust) {
+    languages.push("rust");
+  }
+  return languages;
+}
+
+function compileRust(file: string): string {
+  const bin = process.env.TCC_RUSTC ?? path.resolve(root, "target/release/tcc-rust-compile");
+  const result = spawnSync(bin, [path.join(here, file)], { encoding: "utf8" });
+  if (result.status !== 0) {
+    throw new Error(result.stderr || result.stdout || `rust compiler failed (${bin})`);
+  }
+  return canonicalStringify(JSON.parse(result.stdout));
+}
+
+function compileSpec(
+  driver: HostConformanceDriver,
+  spec: ProgramSpec,
+  language: KitLanguage,
+): string {
+  if (language === "rust") {
+    if (!spec.file) {
+      throw new Error("rust program needs a file");
+    }
+    return compileRust(spec.file);
+  }
+  const program = loadProgram(spec);
+  if (language === "typescript") {
+    return canonicalStringify(compile(program.source, { filename: program.filename }));
+  }
+  return driver.compile(program.source, program.filename);
 }
 
 function isPinningSpec(
@@ -116,14 +166,14 @@ function compileChildren(
 async function runCrashResume(
   driver: HostConformanceDriver,
   item: SemanticCase,
+  language: KitLanguage,
 ): Promise<void> {
-  const program = item.compiler === "typescript" && item.typescript && !isPinningSpec(item.typescript)
-    ? loadProgram(item.typescript)
-    : loadProgram(programFor(item, driver.language) as ProgramSpec);
-  const artifactJson = item.compiler === "typescript"
-    ? canonicalStringify(compile(program.source, { filename: program.filename }))
-    : driver.compile(program.source, program.filename);
-  const childArtifacts = compileChildren(item);
+  const spec = programFor(item, language);
+  if (isPinningSpec(spec)) {
+    throw new Error(`case ${item.id} is not a crash-resume program`);
+  }
+  const artifactJson = compileSpec(driver, spec, language);
+  const childArtifacts = language === "rust" ? undefined : compileChildren(item);
   const expectedStatus = item.cancel ? "cancelled" : "completed";
   const started = await driver.start({
     artifactJson,
@@ -194,15 +244,14 @@ async function runCrashResume(
 async function runPinning(
   driver: HostConformanceDriver,
   item: SemanticCase,
+  language: KitLanguage,
 ): Promise<void> {
-  const spec = programFor(item, driver.language);
+  const spec = programFor(item, language);
   if (!isPinningSpec(spec)) {
     throw new Error(`case ${item.id} needs stored/other programs`);
   }
-  const storedProgram = loadProgram(spec.stored);
-  const otherProgram = loadProgram(spec.other);
-  const stored = driver.compile(storedProgram.source, storedProgram.filename);
-  const other = driver.compile(otherProgram.source, otherProgram.filename);
+  const stored = compileSpec(driver, spec.stored, language);
+  const other = compileSpec(driver, spec.other, language);
   const storedHash = (
     JSON.parse(stored) as { envelope: { artifact_hash: string } }
   ).envelope.artifact_hash;
@@ -250,10 +299,12 @@ export async function runKit(driver: HostConformanceDriver): Promise<void> {
     const kind =
       item.kind ??
       (item.id === "artifact-pinning" ? "artifact-pinning" : "crash-resume");
-    if (kind === "artifact-pinning") {
-      await runPinning(driver, item);
-    } else {
-      await runCrashResume(driver, item);
+    for (const language of languagesFor(item, driver.language)) {
+      if (kind === "artifact-pinning") {
+        await runPinning(driver, item, language);
+      } else {
+        await runCrashResume(driver, item, language);
+      }
     }
   }
 }

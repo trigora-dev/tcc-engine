@@ -1,5 +1,5 @@
 //! Drive one artifact JSON blob the way the ordinary-corpus scorer does.
-//! Stdin is `{ "artifact", "args", "effects", "events" }`. Stdout is the tagged result.
+//! Stdin is `{ "artifact", "args", "effects", "events", "child" }`. Stdout is the tagged result.
 
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
@@ -44,11 +44,12 @@ fn run() -> Result<String, String> {
     let args = decode_args_array(&args_json).map_err(|err| err.to_string())?;
     let effects = tagged_map(map.get("effects"))?;
     let events = tagged_map(map.get("events"))?;
+    let child = tagged_value(map.get("child"))?;
     let mut engine =
         Engine::start_with_args(artifact.clone(), "ordinary", &EngineCaps::current(), &args)
             .map_err(|err| err.to_string())?;
-    let result = drive(&mut engine, &effects, &events)?;
-    if !events.is_empty() || !effects.is_empty() {
+    let result = drive(&mut engine, &effects, &events, child.as_ref())?;
+    if !events.is_empty() || !effects.is_empty() || child.is_some() {
         let mut again = Engine::start_with_args(
             artifact.clone(),
             "ordinary-resume",
@@ -56,7 +57,7 @@ fn run() -> Result<String, String> {
             &args,
         )
         .map_err(|err| err.to_string())?;
-        resume_once(&mut again, &artifact, &effects, &events)?;
+        resume_once(&mut again, &artifact, &effects, &events, child.as_ref())?;
     }
     Ok(result.stringify())
 }
@@ -65,6 +66,7 @@ fn drive(
     engine: &mut Engine,
     effects: &BTreeMap<String, Value>,
     events: &BTreeMap<String, Value>,
+    child: Option<&Value>,
 ) -> Result<Json, String> {
     for _ in 0..10_000 {
         match engine.run_until_host(100_000) {
@@ -72,14 +74,7 @@ fn drive(
                 return Json::parse(&encode_value_json(&result)?).map_err(|err| err.to_string());
             }
             EngineOutcome::Failed { message } => return Err(message),
-            EngineOutcome::Suspended => {
-                let value = events
-                    .values()
-                    .next()
-                    .cloned()
-                    .ok_or_else(|| "suspended without an event".to_string())?;
-                apply(engine, &event_response(value)?)?;
-            }
+            EngineOutcome::Suspended => apply(engine, &wake(events, child)?)?,
             EngineOutcome::Host(request) => apply_request(engine, &request, effects)?,
             other => return Err(format!("unexpected outcome {other:?}")),
         }
@@ -92,21 +87,24 @@ fn resume_once(
     artifact: &Artifact,
     effects: &BTreeMap<String, Value>,
     events: &BTreeMap<String, Value>,
+    child: Option<&Value>,
 ) -> Result<(), String> {
     for _ in 0..10_000 {
         match engine.run_until_host(100_000) {
             EngineOutcome::Suspended => {
                 require_single_frame(engine)?;
                 let saved = continuation_json(engine)?;
-                return resume_from(artifact, &saved, effects, events, true);
+                return resume_from(artifact, &saved, effects, events, child, true);
             }
             EngineOutcome::Completed { .. } => return Ok(()),
             EngineOutcome::Failed { message } => return Err(message),
-            EngineOutcome::Host(HostRequest::PersistEffect { .. }) if events.is_empty() => {
+            EngineOutcome::Host(HostRequest::PersistEffect { .. })
+                if events.is_empty() && child.is_none() =>
+            {
                 apply(engine, &Json::Object(ack()))?;
                 require_single_frame(engine)?;
                 let saved = continuation_json(engine)?;
-                return resume_from(artifact, &saved, effects, events, false);
+                return resume_from(artifact, &saved, effects, events, child, false);
             }
             EngineOutcome::Host(request) => apply_request(engine, &request, effects)?,
             other => return Err(format!("resume setup {other:?}")),
@@ -120,20 +118,16 @@ fn resume_from(
     saved: &str,
     effects: &BTreeMap<String, Value>,
     events: &BTreeMap<String, Value>,
+    child: Option<&Value>,
     deliver_event: bool,
 ) -> Result<(), String> {
     let continuation = decode_continuation(saved.as_bytes()).map_err(|err| err.to_string())?;
     let mut resumed = Engine::resume(artifact.clone(), continuation, &EngineCaps::current())
         .map_err(|err| err.to_string())?;
     if deliver_event {
-        let value = events
-            .values()
-            .next()
-            .cloned()
-            .ok_or_else(|| "resume without an event".to_string())?;
-        apply(&mut resumed, &event_response(value)?)?;
+        apply(&mut resumed, &wake(events, child)?)?;
     }
-    drive(&mut resumed, effects, events).map(|_| ())
+    drive(&mut resumed, effects, events, child).map(|_| ())
 }
 
 fn require_single_frame(engine: &Engine) -> Result<(), String> {
@@ -198,12 +192,23 @@ fn ack() -> BTreeMap<String, Json> {
     map
 }
 
-fn event_response(value: Value) -> Result<Json, String> {
+fn wake(events: &BTreeMap<String, Value>, child: Option<&Value>) -> Result<Json, String> {
+    if let Some(value) = child {
+        return tagged_response("child_result", value);
+    }
+    let value = events
+        .values()
+        .next()
+        .ok_or_else(|| "suspended without an event".to_string())?;
+    tagged_response("event_payload", value)
+}
+
+fn tagged_response(kind: &str, value: &Value) -> Result<Json, String> {
     let mut map = BTreeMap::new();
-    map.insert("type".into(), Json::String("event_payload".into()));
+    map.insert("type".into(), Json::String(kind.into()));
     map.insert(
         "value".into(),
-        Json::parse(&encode_value_json(&value)?).map_err(|err| err.to_string())?,
+        Json::parse(&encode_value_json(value)?).map_err(|err| err.to_string())?,
     );
     Ok(Json::Object(map))
 }
@@ -216,6 +221,19 @@ fn encode_value_json(value: &Value) -> Result<String, String> {
 fn json_str(map: &BTreeMap<String, Json>, key: &str) -> Result<String, String> {
     Json::get(map, key)
         .and_then(|value| value.as_str().map(|text| text.to_string()))
+        .map_err(|err| err.to_string())
+}
+
+fn tagged_value(value: Option<&Json>) -> Result<Option<Value>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if matches!(value, Json::Null) {
+        return Ok(None);
+    }
+    let bytes = value.stringify();
+    tcc_state::decode_value(bytes.as_bytes())
+        .map(Some)
         .map_err(|err| err.to_string())
 }
 

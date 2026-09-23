@@ -24,10 +24,28 @@ def _load_program(spec: dict[str, Any]) -> tuple[str, str]:
 
 
 def _program_for(item: dict[str, Any], language: str) -> dict[str, Any]:
-    spec = item.get("python" if language == "python" else "typescript")
+    if language == "python":
+        spec = item.get("python")
+    elif language == "rust":
+        spec = item.get("rust")
+    else:
+        spec = item.get("typescript")
     if spec is None:
         raise RuntimeError(f"case {item['id']} has no {language} program")
     return spec
+
+
+def _languages(item: dict[str, Any], driver: Any) -> list[str]:
+    languages = []
+    if item.get("compiler") == "typescript":
+        languages.append("typescript")
+    elif driver.language == "typescript" and item.get("typescript"):
+        languages.append("typescript")
+    elif driver.language == "python" and item.get("python"):
+        languages.append("python")
+    if item.get("rust"):
+        languages.append("rust")
+    return languages
 
 
 def _run_reconstruct(driver: Any, cases: dict[str, Any]) -> None:
@@ -69,22 +87,47 @@ def _child_artifacts(item: dict[str, Any]) -> dict[str, str] | None:
     return artifacts
 
 
-def _compile_case(driver: Any, item: dict[str, Any]) -> str:
-    if item.get("compiler") == "typescript":
-        spec = item["typescript"]
+def _compile_rust_file(path: Path) -> str:
+    import os
+    import subprocess
+
+    root = HERE.parent
+    binary = os.environ.get("TCC_RUSTC") or str(root / "target" / "release" / "tcc-rust-compile")
+    completed = subprocess.run(
+        [binary, str(path)],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=root,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(completed.stderr or completed.stdout or f"rust compiler failed ({binary})")
+    return completed.stdout.strip()
+
+
+def _compile_spec(driver: Any, spec: dict[str, Any], language: str) -> str:
+    if language == "rust":
+        if not spec.get("file"):
+            raise RuntimeError("rust program needs a file")
+        return _compile_rust_file(HERE / spec["file"])
+    if language == "typescript":
         if spec.get("file"):
-            path = HERE / spec["file"]
-        else:
-            raise RuntimeError(f"case {item['id']} typescript compiler needs a file")
-        return _compile_typescript_file(path)
-    spec = _program_for(item, driver.language)
+            return _compile_typescript_file(HERE / spec["file"])
+        raise RuntimeError("typescript program needs a file")
     source, filename = _load_program(spec)
     return driver.compile(source, filename)
 
 
-def _run_crash_resume(driver: Any, item: dict[str, Any]) -> None:
-    artifact_json = _compile_case(driver, item)
-    children = _child_artifacts(item)
+def _compile_case(driver: Any, item: dict[str, Any], language: str) -> str:
+    spec = _program_for(item, language)
+    if "stored" in spec:
+        raise RuntimeError(f"case {item['id']} is not a crash-resume program")
+    return _compile_spec(driver, spec, language)
+
+
+def _run_crash_resume(driver: Any, item: dict[str, Any], language: str) -> None:
+    artifact_json = _compile_case(driver, item, language)
+    children = None if language == "rust" else _child_artifacts(item)
     expected_status = "cancelled" if item.get("cancel") else "completed"
     started = driver.start(
         artifactJson=artifact_json,
@@ -133,12 +176,10 @@ def _run_crash_resume(driver: Any, item: dict[str, Any]) -> None:
             assert driver.effect_log(handle) == item["expected_effect_log"]
 
 
-def _run_pinning(driver: Any, item: dict[str, Any]) -> None:
-    spec = _program_for(item, driver.language)
-    stored_source, stored_name = _load_program(spec["stored"])
-    other_source, other_name = _load_program(spec["other"])
-    stored = driver.compile(stored_source, stored_name)
-    other = driver.compile(other_source, other_name)
+def _run_pinning(driver: Any, item: dict[str, Any], language: str) -> None:
+    spec = _program_for(item, language)
+    stored = _compile_spec(driver, spec["stored"], language)
+    other = _compile_spec(driver, spec["other"], language)
     stored_hash = json.loads(stored)["envelope"]["artifact_hash"]
     other_hash = json.loads(other)["envelope"]["artifact_hash"]
     assert stored_hash != other_hash, f"{item['id']} artifacts must differ"
@@ -174,10 +215,11 @@ def run_kit(driver: Any) -> None:
         kind = item.get("kind") or (
             "artifact-pinning" if item["id"] == "artifact-pinning" else "crash-resume"
         )
-        if kind == "artifact-pinning":
-            _run_pinning(driver, item)
-        else:
-            _run_crash_resume(driver, item)
+        for language in _languages(item, driver):
+            if kind == "artifact-pinning":
+                _run_pinning(driver, item, language)
+            else:
+                _run_crash_resume(driver, item, language)
 
 
 if __name__ == "__main__":
