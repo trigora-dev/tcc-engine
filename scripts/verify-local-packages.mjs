@@ -71,7 +71,7 @@ const { compile: compileRust, PACKAGE_VERSION: RUST_PACKAGE_VERSION, LANGUAGE_SE
   path.join(dir, "node_modules/@tcc-engine/frontend-rust/index.js")
 );
 assert.notEqual(RUST_PACKAGE_VERSION, RUST_LANGUAGE);
-const rustArtifact = compileRust("async fn run() -> f64 { 1.0 }\n");
+const rustArtifact = compileRust("pub async fn main() -> f64 { 1.0 }\n");
 assert.equal(rustArtifact.envelope.frontend_id, "rust");
 assert.equal(rustArtifact.envelope.frontend_version, RUST_PACKAGE_VERSION);
 assert.equal(rustArtifact.envelope.language_semantics_version, RUST_LANGUAGE);
