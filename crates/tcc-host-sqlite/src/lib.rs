@@ -7,8 +7,10 @@ mod runtime;
 mod store;
 
 pub use crash::Crash;
-pub use host::SqliteHost;
-pub use runtime::{read_continuation, resume_execution, start_execution, RunResult};
+pub use host::{EffectProvider, SqliteHost};
+pub use runtime::{
+    read_continuation, resume_execution, start_execution, start_execution_with_args, RunResult,
+};
 pub use store::{ChildRow, EffectRow, Snapshot, Store, TimerRow, WaitRow};
 
 #[cfg(test)]

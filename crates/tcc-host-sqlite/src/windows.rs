@@ -1,12 +1,19 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tcc_core::{ChildSpec, EffectRecord, EffectStatus, HostRequest, HostResponse};
 use tcc_host::Host;
+use tcc_ir::{
+    encode_artifact, Artifact, ConstValue, Envelope, FuncId, Function, Instruction, LocalId,
+    Program,
+};
 use tcc_state::{Continuation, ContinuationStatus, PersistKind, Value};
 
 use crate::host::SqliteHost;
+use crate::runtime::{resume_execution, start_execution_with_args};
 use crate::store::{CompletedChild, NewChild, Snapshot, Store};
 
 fn db_path(label: &str) -> PathBuf {
@@ -301,6 +308,80 @@ fn completed_child_result_commits_with_the_child_snapshot() {
     let _ = std::fs::remove_file(&path);
 }
 
+#[test]
+fn fresh_start_binds_args_once_and_resume_keeps_them() {
+    let path = db_path("args");
+    let artifact = encode_artifact(&wait_then_return_first_arg()).unwrap();
+    let started = {
+        let mut host = SqliteHost::open(&path, "ex").unwrap();
+        host.auto_deliver = false;
+        start_execution_with_args(
+            &mut host,
+            &artifact,
+            "ex",
+            &[Value::String("original".to_string())],
+        )
+        .unwrap()
+    };
+    assert_eq!(started.status, "suspended");
+    let resumed = {
+        let mut host = SqliteHost::open(&path, "ex").unwrap();
+        resume_execution(&mut host, None, "ex").unwrap()
+    };
+    assert_eq!(resumed.status, "completed");
+    assert_eq!(resumed.result, Some(Value::String("original".to_string())));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn effect_provider_runs_only_when_the_map_and_journal_miss() {
+    let path = db_path("provider");
+    let mut host = SqliteHost::open(&path, "ex").unwrap();
+    host.effects
+        .insert("mapped".to_string(), Value::Number(1.0));
+    let calls = Arc::new(AtomicU32::new(0));
+    let seen = calls.clone();
+    host.set_effect_provider(Box::new(move |_key, _input| {
+        seen.fetch_add(1, Ordering::SeqCst);
+        Ok(Value::Number(9.0))
+    }));
+    let mapped = host
+        .handle(effect_request_for("mapped", object_input(1.0)))
+        .unwrap();
+    assert!(matches!(
+        mapped,
+        HostResponse::EffectResult { value: Value::Number(n) } if n == 1.0
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    let live = host
+        .handle(effect_request_for("live", object_input(1.0)))
+        .unwrap();
+    assert!(matches!(
+        live,
+        HostResponse::EffectResult { value: Value::Number(n) } if n == 9.0
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    host.handle(effect_record_for("live", EffectStatus::Completed, 9.0))
+        .unwrap();
+    let hit = host
+        .handle(effect_request_for("live", object_input(1.0)))
+        .unwrap();
+    assert!(matches!(
+        hit,
+        HostResponse::EffectResult { value: Value::Number(n) } if n == 9.0
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    let mismatch = host
+        .handle(effect_request_for("live", object_input(2.0)))
+        .unwrap_err();
+    assert!(mismatch.to_string().contains("input mismatch"));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let _ = std::fs::remove_file(&path);
+}
+
 fn stage(host: &mut SqliteHost, status: ContinuationStatus) {
     let mut continuation = Continuation::start("ex", "hash", 1, "ts", 0, 0);
     continuation.execution_id = host.execution_id.clone();
@@ -325,20 +406,54 @@ fn object_input(n: f64) -> Value {
 }
 
 fn effect_request(input: Value) -> HostRequest {
+    effect_request_for("generate", input)
+}
+
+fn effect_request_for(key: &str, input: Value) -> HostRequest {
     HostRequest::RunEffect {
-        key: "generate".to_string(),
-        idempotency_key: "ex:generate".to_string(),
+        key: key.to_string(),
+        idempotency_key: format!("ex:{key}"),
         input,
     }
 }
 
 fn effect_record(status: EffectStatus) -> HostRequest {
+    effect_record_for("generate", status, 42.0)
+}
+
+fn effect_record_for(key: &str, status: EffectStatus, result: f64) -> HostRequest {
     HostRequest::PersistEffect {
         record: EffectRecord {
-            key: "generate".to_string(),
-            idempotency_key: "ex:generate".to_string(),
+            key: key.to_string(),
+            idempotency_key: format!("ex:{key}"),
             status,
-            result: Some(Value::Number(42.0)),
+            result: Some(Value::Number(result)),
+        },
+    }
+}
+
+fn wait_then_return_first_arg() -> Artifact {
+    let instructions = vec![
+        Instruction::LoadConst {
+            value: ConstValue::String("approval".to_string()),
+        },
+        Instruction::WaitForEvent,
+        Instruction::LoadLocal { local: LocalId(0) },
+        Instruction::Return,
+    ];
+    Artifact {
+        envelope: Envelope::typescript_v1("args-hash"),
+        program: Program {
+            entry: FuncId(0),
+            functions: vec![Function {
+                id: FuncId(0),
+                name: "run".to_string(),
+                param_count: 1,
+                local_count: 1,
+                param_defaults: Vec::new(),
+                spans: vec![None; instructions.len()],
+                instructions,
+            }],
         },
     }
 }

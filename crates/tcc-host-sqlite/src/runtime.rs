@@ -27,6 +27,15 @@ pub fn start_execution(
     artifact_json: &str,
     execution_id: &str,
 ) -> Result<RunResult, HostError> {
+    start_execution_with_args(host, artifact_json, execution_id, &[])
+}
+
+pub fn start_execution_with_args(
+    host: &mut SqliteHost,
+    artifact_json: &str,
+    execution_id: &str,
+    args: &[Value],
+) -> Result<RunResult, HostError> {
     let artifact = decode_artifact(artifact_json).map_err(core_err)?;
     let hash = artifact.envelope.artifact_hash.clone();
     host.store
@@ -36,7 +45,8 @@ pub fn start_execution(
         .create_execution(execution_id, &hash)
         .map_err(store_err)?;
     host.execution_id = execution_id.to_string();
-    let engine = Engine::start(artifact, execution_id, &EngineCaps::current()).map_err(core_err)?;
+    let engine = Engine::start_with_args(artifact, execution_id, &EngineCaps::current(), args)
+        .map_err(core_err)?;
     drive(host, engine)
 }
 

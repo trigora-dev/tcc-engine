@@ -13,6 +13,9 @@ use tcc_state::{
 use crate::crash::Crash;
 use crate::store::{CompletedChild, NewChild, Snapshot, Store};
 
+/// Injected effect handler. It sees the effect key and input only.
+pub type EffectProvider = Box<dyn FnMut(&str, &Value) -> Result<Value, HostError> + Send>;
+
 pub struct SqliteHost {
     pub store: Store,
     pub execution_id: String,
@@ -26,6 +29,7 @@ pub struct SqliteHost {
     pub event_payload: Option<Value>,
     pub completion_reverse: bool,
     pub cancel: bool,
+    effect_provider: Option<EffectProvider>,
     continuation_json: Option<String>,
     staged_status: ContinuationStatus,
     staged_result: Option<Value>,
@@ -46,6 +50,7 @@ impl SqliteHost {
             event_payload: None,
             completion_reverse: false,
             cancel: false,
+            effect_provider: None,
             continuation_json: None,
             staged_status: ContinuationStatus::Runnable,
             staged_result: None,
@@ -62,6 +67,10 @@ impl SqliteHost {
             .as_ref()
             .map(|value| export_value(&continuation.heap, value).unwrap_or_else(|_| value.clone()));
         Ok(())
+    }
+
+    pub fn set_effect_provider(&mut self, provider: EffectProvider) {
+        self.effect_provider = Some(provider);
     }
 
     fn crash_at(&mut self, hook: &str, detail: Option<&str>) -> Result<(), HostError> {
@@ -166,18 +175,20 @@ impl SqliteHost {
                 continue;
             }
             self.append_log(&key)?;
-            let produced = self
-                .effects
-                .get(&key)
-                .cloned()
-                .ok_or_else(|| HostError::Message(format!("no effect for `{key}`")))?;
-            if matches!(&produced, Value::String(text) if text == "__fail__") {
-                return Ok(HostResponse::EffectFailed {
-                    message: "failed".to_string(),
-                });
+            let produced = if let Some(value) = self.effects.get(&key).cloned() {
+                value
+            } else if let Some(mut provider) = self.effect_provider.take() {
+                let result = provider(&key, &input);
+                self.effect_provider = Some(provider);
+                result?
+            } else {
+                return Err(HostError::Message(format!("no effect for `{key}`")));
+            };
+            let response = validate_effect_value(produced)?;
+            if matches!(response, HostResponse::EffectResult { .. }) {
+                self.crash_at("after_effect_provider", None)?;
             }
-            self.crash_at("after_effect_provider", None)?;
-            return Ok(HostResponse::EffectResult { value: produced });
+            return Ok(response);
         }
     }
 
@@ -322,6 +333,15 @@ impl SqliteHost {
 
 pub fn canonical(value: &Value) -> Result<String, HostError> {
     utf8(encode_value(value).map_err(state_err)?)
+}
+
+fn validate_effect_value(value: Value) -> Result<HostResponse, HostError> {
+    if matches!(&value, Value::String(text) if text == "__fail__") {
+        return Ok(HostResponse::EffectFailed {
+            message: "failed".to_string(),
+        });
+    }
+    Ok(HostResponse::EffectResult { value })
 }
 
 fn artifact_hash(body: &str) -> Result<String, HostError> {
