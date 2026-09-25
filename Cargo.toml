@@ -5,6 +5,7 @@ members = [
     "crates/tcc-state",
     "crates/tcc-core",
     "crates/tcc-host",
+    "crates/tcc-host-sqlite",
     "crates/tcc-wasm",
     "crates/tcc-python",
     "frontends/rust",

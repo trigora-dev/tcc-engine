@@ -1,0 +1,20 @@
+[package]
+name = "tcc-host-sqlite"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "SQLite host for TCC executions"
+
+[dependencies]
+libc = "0.2"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tcc-core = { path = "../tcc-core" }
+tcc-host = { path = "../tcc-host" }
+tcc-ir = { path = "../tcc-ir" }
+tcc-state = { path = "../tcc-state" }
+
+[[bin]]
+name = "tcc-host-sqlite"
+path = "src/bin/worker.rs"
