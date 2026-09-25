@@ -13,6 +13,10 @@ def _not_runtime() -> NoReturn:
     )
 
 
+def program(fn: T) -> T:
+    return fn
+
+
 def effect(_key: str, _fn: Callable[[], T]) -> T:
     _not_runtime()
 

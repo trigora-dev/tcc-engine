@@ -1,6 +1,7 @@
-from tcc_engine.primitives import effect, wait_for_event
+from tcc_engine.primitives import program, effect, wait_for_event
 
 
+@program
 async def run():
     flag = await effect("generate", lambda: 1)
     if flag:

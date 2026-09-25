@@ -13,8 +13,9 @@ from tcc_engine.compile import (
 )
 
 FIRST = """
-from trigora import effect, wait_for_event
+from trigora import program, effect, wait_for_event
 
+@program
 async def run():
     result = await effect("generate", generate_something)
     approval = await wait_for_event("approved")
@@ -56,8 +57,9 @@ def test_repeat_compile_same_hash():
 
 def test_accepts_aliased_imports():
     source = """
-from trigora import effect as durable_effect, wait_for_event as wait
+from trigora import program, effect as durable_effect, wait_for_event as wait
 
+@program
 async def run():
     result = await durable_effect("generate", lambda: 1)
     approval = await wait("approved")
@@ -69,6 +71,7 @@ async def run():
 
 def test_rejects_local_function_named_effect():
     source = """
+@program
 async def run():
     async def effect(key, fn):
         return fn()
@@ -90,6 +93,7 @@ def test_compile_errors_include_filename_and_span():
 
 def test_rejects_ctx_style_entry():
     source = """
+@program
 async def run(ctx):
     await ctx.effect("generate", lambda: 1)
 """
@@ -99,8 +103,9 @@ async def run(ctx):
 
 def test_compiles_if_else():
     source = """
-from trigora import effect
+from trigora import program, effect
 
+@program
 async def run():
     flag = await effect("flag", lambda: 1)
     if flag:
@@ -117,8 +122,9 @@ async def run():
 
 def test_rejects_list_truthiness():
     source = """
-from trigora import effect
+from trigora import program, effect
 
+@program
 async def run():
     flag = await effect("flag", lambda: 1)
     if []:
@@ -131,6 +137,9 @@ async def run():
 
 def test_rejects_for_else():
     source = """
+from tcc_engine.primitives import program
+
+@program
 async def run():
     for x in [1]:
         return x
@@ -143,8 +152,9 @@ async def run():
 
 
 FIRST_PRIMITIVES = """
-from tcc_engine.primitives import effect, wait_for_event
+from tcc_engine.primitives import program, effect, wait_for_event
 
+@program
 async def run():
     result = await effect("generate", generate_something)
     approval = await wait_for_event("approved")
@@ -167,8 +177,9 @@ def test_primitives_and_trigora_imports_produce_the_same_hash():
 
 def test_accepts_aliased_primitives_imports():
     source = """
-from tcc_engine.primitives import effect as durable_effect, wait_for_event as wait
+from tcc_engine.primitives import program, effect as durable_effect, wait_for_event as wait
 
+@program
 async def run():
     result = await durable_effect("generate", lambda: 1)
     approval = await wait("approved")
@@ -182,6 +193,7 @@ def test_rejects_imports_from_other_modules():
     source = """
 from somewhere_else import effect
 
+@program
 async def run():
     result = await effect("generate", lambda: 1)
     return result
@@ -191,7 +203,7 @@ async def run():
 
 
 def test_primitives_are_not_runtime_callable():
-    from tcc_engine.primitives import effect, gather, race
+    from tcc_engine.primitives import program, effect, gather, race
 
     with pytest.raises(RuntimeError, match="compiler intrins"):
         effect("generate", lambda: 1)
@@ -213,8 +225,9 @@ def _join_shape(artifact):
 
 
 GATHER = """
-from tcc_engine.primitives import effect, gather
+from tcc_engine.primitives import program, effect, gather
 
+@program
 async def run():
     return await gather(effect("a", lambda: 1), effect("b", lambda: 2))
 """
@@ -257,8 +270,9 @@ export default async function run() {
 
 def test_race_lowers_to_join_any():
     source = """
-from trigora import effect, race
+from trigora import program, effect, race
 
+@program
 async def run():
     return await race(effect("a", lambda: 1), effect("b", lambda: 2))
 """
@@ -272,16 +286,18 @@ async def run():
 
 def test_gather_alias_lowers_and_a_local_name_does_not():
     aliased = """
-from trigora import gather as g, effect
+from trigora import program, gather as g, effect
 
+@program
 async def run():
     return await g(effect("a", lambda: 1), effect("b", lambda: 2))
 """
     artifact = compile(aliased, filename="alias.py")
     assert "JoinAll" in _ops(artifact)
     local = """
-from tcc_engine.primitives import effect
+from tcc_engine.primitives import program, effect
 
+@program
 async def run():
     return await gather(effect("a", lambda: 1), effect("b", lambda: 2))
 """
@@ -291,8 +307,9 @@ async def run():
 
 def test_primitives_and_trigora_gather_produce_the_same_hash():
     trigora = """
-from trigora import effect, gather
+from trigora import program, effect, gather
 
+@program
 async def run():
     return await gather(effect("a", lambda: 1), effect("b", lambda: 2))
 """
@@ -304,51 +321,59 @@ async def run():
 def test_rejects_gather_and_race_shapes_outside_direct_await():
     cases = {
         "return gather": """
-from tcc_engine.primitives import effect, gather
+from tcc_engine.primitives import program, effect, gather
 
+@program
 async def run():
     return gather(effect("a", lambda: 1), effect("b", lambda: 2))
 """,
         "assign": """
-from tcc_engine.primitives import effect, gather
+from tcc_engine.primitives import program, effect, gather
 
+@program
 async def run():
     pending = gather(effect("a", lambda: 1), effect("b", lambda: 2))
     return await pending
 """,
         "call": """
-from tcc_engine.primitives import effect, gather
+from tcc_engine.primitives import program, effect, gather
 
+@program
 async def run():
     return foo(gather(effect("a", lambda: 1), effect("b", lambda: 2)))
 """,
         "preawait": """
-from tcc_engine.primitives import effect, gather
+from tcc_engine.primitives import program, effect, gather
 
+@program
 async def run():
     return await gather(await effect("a", lambda: 1), effect("b", lambda: 2))
 """,
         "spread": """
-from tcc_engine.primitives import effect, gather
+from tcc_engine.primitives import program, effect, gather
 
+@program
 async def run():
     return await gather(*items)
 """,
         "list": """
-from tcc_engine.primitives import effect, gather
+from tcc_engine.primitives import program, effect, gather
 
+@program
 async def run():
     return await gather([effect("a", lambda: 1)])
 """,
         "nested": """
-from tcc_engine.primitives import effect, gather
+from tcc_engine.primitives import program, effect, gather
 
+@program
 async def run():
     return await gather(gather(effect("a", lambda: 1)), effect("b", lambda: 2))
 """,
         "empty": """
-from tcc_engine.primitives import gather
+from tcc_engine.primitives import program, gather
 
+@program
 async def run():
     return await gather()
 """,
@@ -360,8 +385,9 @@ async def run():
     with pytest.raises(CompileError, match="1 to 32"):
         compile(
             f"""
-from tcc_engine.primitives import effect, gather
+from tcc_engine.primitives import program, effect, gather
 
+@program
 async def run():
     return await gather({branches})
 """,
@@ -371,6 +397,9 @@ async def run():
 
 def test_run_parameters_occupy_slots_and_invoke_args_match_typescript(tmp_path):
     source = """
+from tcc_engine.primitives import program
+
+@program
 async def run(a, b, c):
     return a
 """
@@ -381,8 +410,9 @@ async def run(a, b, c):
     assert function["instructions"][0] == {"op": "LoadLocal", "local": 0}
     assert function["instructions"][1] == {"op": "Return"}
     invoked = """
-from tcc_engine.primitives import invoke
+from tcc_engine.primitives import program, invoke
 
+@program
 async def run(sources):
     return await invoke("analyze", {"sources": sources})
 """
@@ -423,8 +453,9 @@ export default async function run(sources) {
     ]
     plain = compile(
         """
-from trigora import invoke
+from trigora import program, invoke
 
+@program
 async def run():
     return await invoke("analyze")
 """,
@@ -436,7 +467,10 @@ async def run():
         if instruction["op"] == "Invoke"
     )
     assert "arg_count" not in plain_invoke
-    none_default = compile("async def run(input=None):\n    return input\n", filename="default.py")
+    none_default = compile(
+        "from tcc_engine.primitives import program\n@program\nasync def run(input=None):\n    return input\n",
+        filename="default.py",
+    )
     assert none_default["program"]["functions"][0]["param_defaults"] == [{"t": "null"}]
     for source in (
         "async def run(*items):\n    return 1\n",
@@ -444,3 +478,27 @@ async def run():
     ):
         with pytest.raises(CompileError):
             compile(source, filename="bad.py")
+
+
+def test_program_marker_selects_any_name_including_an_alias():
+    named = compile(
+        "from tcc_engine.primitives import program\n@program\nasync def research(value):\n    return value\n",
+        filename="named.py",
+    )
+    assert named["program"]["functions"][0]["name"] == "research"
+    assert named["program"]["entry"] == named["program"]["functions"][0]["id"]
+    aliased = compile(
+        "from trigora import program as tcc_program\n@tcc_program\nasync def research(value):\n    return value\n",
+        filename="alias.py",
+    )
+    assert aliased["program"]["functions"][0]["name"] == "research"
+    message = "A TCC program must declare exactly one `@program` async function."
+    for source in (
+        "from tcc_engine.primitives import program\n",
+        "from tcc_engine.primitives import program\n@program\nasync def one():\n    return 1\n@program\nasync def two():\n    return 2\n",
+        "from tcc_engine.primitives import program\n@program\ndef sync():\n    return 1\n",
+        "async def run():\n    return 1\n",
+    ):
+        with pytest.raises(CompileError, match="exactly one"):
+            compile(source, filename="entry.py")
+    assert message.startswith("A TCC program")

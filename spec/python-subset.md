@@ -6,9 +6,9 @@ Authoring uses resolved imports from `tcc_engine.primitives` (engine-native) or 
 
 ## Supported
 
-- A single top-level `async def run(a, b=10, ...)` with plain parameters. Defaults are compile-time constants: `None`, bool, finite number, or string. An omitted argument uses that constant. Explicit `None` stays null. Extra arguments are a start error. A missing argument with no default is a start error. `*args`, keyword-only, positional-only, and mutable literal defaults (`b=[]`, `b={}`) stay unsupported
+- Exactly one top-level `@program` async function, any name. `@program` is the identity marker `def program(fn): return fn` imported from `tcc_engine.primitives` or `trigora`, including an alias. Zero, two, a sync `@program`, or a bare `async def` is a compile error. Parameters are plain. Defaults are compile-time constants: `None`, bool, finite number, or string. An omitted argument uses that constant. Explicit `None` stays null. Extra arguments are a start error. A missing argument with no default is a start error. `*args`, keyword-only, positional-only, and mutable literal defaults (`b=[]`, `b={}`) stay unsupported
 - Top-level `def` helpers with the same parameter rules. They may call other helpers. They cannot await a durable operation. A durable boundary runs only while the program entry frame is active, so a helper or closure frame is never live at a checkpoint. A top-level helper used as a value is one empty-environment closure for the execution
-- Imports from `tcc_engine.primitives` or `trigora`: `effect`, `wait_for_event`, `sleep`, `invoke`, `gather`, `race` (aliases included). `gather` and `race` are compiler intrinsics for [concurrency.md](concurrency.md), not runtime coroutine helpers.
+- Imports from `tcc_engine.primitives` or `trigora`: `program`, `effect`, `wait_for_event`, `sleep`, `invoke`, `gather`, `race` (aliases included). `gather` and `race` are compiler intrinsics for [concurrency.md](concurrency.md), not runtime coroutine helpers.
 - Assignment to simple locals
 - `if` / `elif` / `else`
 - `while`

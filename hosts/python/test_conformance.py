@@ -10,8 +10,9 @@ from conformance import assert_conformance, run_uninterrupted, kill_and_resume
 from host import start_execution
 
 FIRST = """
-from trigora import effect, wait_for_event
+from trigora import program, effect, wait_for_event
 
+@program
 async def run():
     result = await effect("generate", generate_something)
     approval = await wait_for_event("approved")
@@ -19,8 +20,9 @@ async def run():
 """
 
 IF_ELSE = """
-from trigora import effect
+from trigora import program, effect
 
+@program
 async def run():
     flag = await effect("flag", lambda: 1)
     if flag:
@@ -32,8 +34,9 @@ async def run():
 """
 
 LOOP = """
-from trigora import effect
+from trigora import program, effect
 
+@program
 async def run():
     go = await effect("go", lambda: 1)
     while go:
@@ -44,8 +47,9 @@ async def run():
 """
 
 SCOPES = """
-from trigora import effect, wait_for_event
+from trigora import program, effect, wait_for_event
 
+@program
 async def run():
     outer = await effect("outer", lambda: 1)
     inner = await wait_for_event("go")
@@ -53,8 +57,9 @@ async def run():
 """
 
 MULTI = """
-from trigora import effect, wait_for_event
+from trigora import program, effect, wait_for_event
 
+@program
 async def run():
     a = await effect("a", lambda: 1)
     b = await effect("b", lambda: 2)
@@ -63,8 +68,9 @@ async def run():
 """
 
 VALUES = """
-from trigora import effect
+from trigora import program, effect
 
+@program
 async def run():
     n = await effect("n", lambda: 3)
     if n == 3:
@@ -74,8 +80,9 @@ async def run():
 """
 
 TRY = """
-from trigora import effect
+from trigora import program, effect
 
+@program
 async def run():
     try:
         raise Exception("boom")
@@ -85,8 +92,9 @@ async def run():
 """
 
 FINALLY = """
-from trigora import effect
+from trigora import program, effect
 
+@program
 async def run():
     x = 0
     try:
@@ -98,16 +106,18 @@ async def run():
 """
 
 RETRY = """
-from trigora import effect
+from trigora import program, effect
 
+@program
 async def run():
     x = await effect("flaky", lambda: 7)
     return x
 """
 
 SLEEP = """
-from trigora import sleep, effect
+from trigora import program, sleep, effect
 
+@program
 async def run():
     await sleep(0)
     x = await effect("after", lambda: 1)
@@ -115,8 +125,9 @@ async def run():
 """
 
 CANCEL = """
-from trigora import effect, wait_for_event
+from trigora import program, effect, wait_for_event
 
+@program
 async def run():
     a = await effect("a", lambda: 1)
     b = await wait_for_event("never")
@@ -124,16 +135,18 @@ async def run():
 """
 
 INVOKE = """
-from trigora import invoke
+from trigora import program, invoke
 
+@program
 async def run():
     result = await invoke("child")
     return result
 """
 
 CHILD = """
-from trigora import effect
+from trigora import program, effect
 
+@program
 async def run():
     result = await effect("child_work", lambda: 7)
     return result
@@ -283,22 +296,25 @@ def test_cancel_at_durable_boundary():
 
 
 GATHER = """
-from tcc_engine.primitives import effect, gather
+from tcc_engine.primitives import program, effect, gather
 
+@program
 async def run():
     return await gather(effect("a", lambda: 1), effect("b", lambda: 2))
 """
 
 RACE = """
-from tcc_engine.primitives import effect, race
+from tcc_engine.primitives import program, effect, race
 
+@program
 async def run():
     return await race(effect("a", lambda: 1), effect("b", lambda: 2))
 """
 
 RACE_FAIL = """
-from tcc_engine.primitives import effect, race
+from tcc_engine.primitives import program, effect, race
 
+@program
 async def run():
     try:
         return await race(effect("bad", lambda: 1), effect("sibling", lambda: 2))
@@ -352,23 +368,30 @@ def test_child_invoke_recovers():
 
 
 INPUT_PROGRAM = """
+from tcc_engine.primitives import program
+@program
 async def run(input):
     return input
 """
 
 NO_PARAM = """
+from tcc_engine.primitives import program
+@program
 async def run():
     return 1
 """
 
 ANALYZE = """
+from tcc_engine.primitives import program
+@program
 async def run(input):
     return input["query"]
 """
 
 PARENT_ANALYZE = """
-from tcc_engine.primitives import invoke
+from tcc_engine.primitives import program, invoke
 
+@program
 async def run():
     return await invoke("analyze", {"query": "hello"})
 """
@@ -397,6 +420,8 @@ def test_python_start_requires_exact_arity():
     child = artifact_json(
         compile(
             """
+from tcc_engine.primitives import program
+@program
 async def run(a, b):
     return a
 """,

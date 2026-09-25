@@ -1,3 +1,5 @@
+from tcc_engine.primitives import program
+@program
 async def run():
     x = 1
 

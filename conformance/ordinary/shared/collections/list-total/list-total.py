@@ -1,3 +1,5 @@
+from tcc_engine.primitives import program
+@program
 async def run():
     items = [
         {"price": 10, "quantity": 2},

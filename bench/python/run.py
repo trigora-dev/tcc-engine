@@ -157,8 +157,9 @@ def packing_fields(store: Store, persist: str) -> dict:
 
 
 FIRST = """
-from trigora import effect, wait_for_event
+from trigora import program, effect, wait_for_event
 
+@program
 async def run():
     result = await effect("generate", generate_something)
     approval = await wait_for_event("approved")

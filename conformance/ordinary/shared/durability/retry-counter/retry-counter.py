@@ -1,10 +1,11 @@
-from tcc_engine.primitives import effect
+from tcc_engine.primitives import program, effect
 
 
 def next_attempt(attempt):
     return attempt + 1
 
 
+@program
 async def run():
     attempt = 0
     accepted = False

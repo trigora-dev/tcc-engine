@@ -19,7 +19,8 @@ LANGUAGE_SEMANTICS_VERSION = "py.subset.v1"
 SDK_MODULE = "trigora"
 PRIMITIVES_MODULE = "tcc_engine.primitives"
 DURABLE_MODULES = {SDK_MODULE, PRIMITIVES_MODULE}
-DURABLE = {"effect", "wait_for_event", "sleep", "invoke", "gather", "race"}
+DURABLE = {"program", "effect", "wait_for_event", "sleep", "invoke", "gather", "race"}
+PROGRAM_ERROR = "A TCC program must declare exactly one `@program` async function."
 
 
 class CompileError(Exception):
@@ -52,15 +53,16 @@ def compile(source: str, filename: str = "input.py") -> dict[str, Any]:
     except SyntaxError as err:
         raise CompileError(f"{filename}: {err.msg}", filename=filename, span=_syntax_span(filename, err)) from err
     aliases = collect_imports(tree, filename)
-    entry, helpers = collect_functions(tree, filename)
+    entry, helpers = collect_functions(tree, filename, aliases)
     recs = analyze_functions(entry, helpers, aliases, filename)
     functions: dict[str, tuple[int, int, int, bool]] = {}
     for helper in helpers:
         rec = recs[id(helper)]
         count, required = param_shape(helper, filename)
         functions[helper.name] = (rec["id"], count, required, rec["closure"])
+    entry_id = recs[id(entry)]["id"]
     lowered = [
-        lower_function(rec["node"], aliases, filename, rec, rec["id"] == 0, functions, recs)
+        lower_function(rec["node"], aliases, filename, rec, rec["node"] is entry, functions, recs)
         for rec in sorted(recs.values(), key=lambda item: item["id"])
     ]
     instructions = [item for function in lowered for item in function["instructions"]]
@@ -79,7 +81,7 @@ def compile(source: str, filename: str = "input.py") -> dict[str, Any]:
             "required_host_capabilities": host,
             "runtime_modules": [],
         },
-        "program": {"entry": 0, "functions": lowered},
+        "program": {"entry": entry_id, "functions": lowered},
     }
     artifact["envelope"]["artifact_hash"] = hash_artifact(artifact)
     return artifact
@@ -196,7 +198,7 @@ def analyze_functions(
         recs[id(node)] = rec
         return rec
 
-    make(entry, 0, "run", False)
+    make(entry, 0, entry.name, False)
     for index, helper in enumerate(helpers):
         make(helper, index + 1, helper.name, False)
 
@@ -222,7 +224,7 @@ def analyze_functions(
                     "nested functions cannot be async",
                     filename=filename,
                     why=WHY_SUBSET,
-                    alternative="keep durable operations in run",
+                    alternative="keep durable operations in the program entry",
                     node=statement,
                 )
             if isinstance(statement, ast.Assign):
@@ -394,28 +396,28 @@ def _ancestors(rec: dict[str, Any]) -> list[dict[str, Any] | None]:
     return found
 
 
+def _marks_program(decorator: ast.expr, aliases: dict[str, str]) -> bool:
+    return isinstance(decorator, ast.Name) and aliases.get(decorator.id) == "program"
+
+
 def collect_functions(
-    tree: ast.Module, filename: str
+    tree: ast.Module, filename: str, aliases: dict[str, str]
 ) -> tuple[ast.AsyncFunctionDef, list[ast.FunctionDef]]:
-    entry: ast.AsyncFunctionDef | None = None
+    entries: list[ast.AsyncFunctionDef] = []
     helpers: list[ast.FunctionDef] = []
     for statement in tree.body:
         if isinstance(statement, ast.ImportFrom):
             continue
-        if isinstance(statement, ast.AsyncFunctionDef) and statement.name == "run":
-            if entry is not None:
-                raise CompileError(
-                    "multiple `async def run` entry points",
-                    filename=filename,
-                    why=WHY_SUBSET,
-                    node=statement,
-                )
-            if statement.decorator_list:
-                raise CompileError("decorators are not supported", filename=filename, why=WHY_SUBSET, node=statement)
-            param_shape(statement, filename)
-            entry = statement
-            continue
+        if isinstance(statement, ast.AsyncFunctionDef):
+            marked = [item for item in statement.decorator_list if _marks_program(item, aliases)]
+            if len(statement.decorator_list) == 1 and marked:
+                param_shape(statement, filename)
+                entries.append(statement)
+                continue
+            raise CompileError(PROGRAM_ERROR, filename=filename, why=WHY_SUBSET, node=statement)
         if isinstance(statement, ast.FunctionDef):
+            if any(_marks_program(item, aliases) for item in statement.decorator_list):
+                raise CompileError(PROGRAM_ERROR, filename=filename, why=WHY_SUBSET, node=statement)
             if statement.decorator_list:
                 raise CompileError("decorators are not supported", filename=filename, why=WHY_SUBSET, node=statement)
             param_shape(statement, filename)
@@ -427,9 +429,9 @@ def collect_functions(
             why=WHY_SUBSET,
             node=statement,
         )
-    if entry is None:
-        raise CompileError("missing `async def run` entry point", filename=filename, why=WHY_SUBSET)
-    return entry, helpers
+    if len(entries) != 1:
+        raise CompileError(PROGRAM_ERROR, filename=filename, why=WHY_SUBSET)
+    return entries[0], helpers
 
 
 def lower_function(
@@ -725,7 +727,7 @@ class Lowerer:
             return
         if isinstance(statement, ast.FunctionDef) or isinstance(statement, ast.AsyncFunctionDef):
             if isinstance(statement, ast.AsyncFunctionDef):
-                self.fail(statement, "nested functions cannot be async", WHY_SUBSET, "keep durable operations in run")
+                self.fail(statement, "nested functions cannot be async", WHY_SUBSET, "keep durable operations in the program entry")
             rec = self.recs.get(id(statement))
             if rec is None:
                 self.fail(statement, "nested functions are not supported", WHY_SUBSET)

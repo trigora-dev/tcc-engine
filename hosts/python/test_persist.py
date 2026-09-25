@@ -15,8 +15,9 @@ from tcc_engine.store import Store
 from conformance import kill_and_resume, run_wasm_uninterrupted
 
 FIRST = """
-from trigora import effect, wait_for_event
+from trigora import program, effect, wait_for_event
 
+@program
 async def run():
     result = await effect("generate", generate_something)
     approval = await wait_for_event("approved")
@@ -168,8 +169,9 @@ def test_naive_and_optimized_generated_programs():
     programs = [
         (
             """
-from trigora import effect
+from trigora import program, effect
 
+@program
 async def run():
     flag = await effect("generate", lambda: 1)
     if flag:
@@ -182,8 +184,9 @@ async def run():
         ),
         (
             """
-from trigora import effect, wait_for_event
+from trigora import program, effect, wait_for_event
 
+@program
 async def run():
     dead = await effect("generate", lambda: "drop-me")
     live = dead
@@ -194,8 +197,9 @@ async def run():
         ),
         (
             """
-from trigora import effect
+from trigora import program, effect
 
+@program
 async def run():
     try:
         raise Exception("boom")
@@ -329,16 +333,18 @@ def test_optimized_resume_matches_naive():
 
 
 INVOKE = """
-from trigora import invoke
+from trigora import program, invoke
 
+@program
 async def run():
     result = await invoke("child")
     return result
 """
 
 CHILD = """
-from trigora import effect
+from trigora import program, effect
 
+@program
 async def run():
     result = await effect("child_work", child_work)
     return result
@@ -671,8 +677,9 @@ def test_reconstruct_golden_slot_undefined_does_not_resurrect():
 
 def test_dead_scalar_undefined_after_later_wait():
     source = """
-from trigora import effect, wait_for_event
+from trigora import program, effect, wait_for_event
 
+@program
 async def run():
     dead = await effect("dead", lambda: "dead-scalar")
     live = await effect("live", lambda: "live-scalar")
@@ -689,8 +696,9 @@ def test_large_dead_string_absent_from_committed_continuation():
     marker = "DEADBLOB_MARKER"
     blob = marker + ("x" * 1_000_000)
     source = """
-from trigora import effect, wait_for_event
+from trigora import program, effect, wait_for_event
 
+@program
 async def run():
     blob = await effect("blob", lambda: "unused")
     await wait_for_event("go")
@@ -707,8 +715,9 @@ async def run():
 
 def test_live_value_survives_several_waits():
     source = """
-from trigora import effect, wait_for_event
+from trigora import program, effect, wait_for_event
 
+@program
 async def run():
     live = await effect("live", lambda: "stay-live")
     await wait_for_event("a")
@@ -729,8 +738,9 @@ async def run():
 
 def test_dead_after_taken_branch_is_gone():
     source = """
-from trigora import effect, wait_for_event
+from trigora import program, effect, wait_for_event
 
+@program
 async def run():
     flag = await effect("flag", lambda: 1)
     if flag:
@@ -756,8 +766,9 @@ async def run():
 
 def test_loop_carried_value_remains():
     source = """
-from trigora import effect, wait_for_event
+from trigora import program, effect, wait_for_event
 
+@program
 async def run():
     acc = await effect("start", lambda: "loop-acc")
     go = await effect("go", lambda: 1)
@@ -774,8 +785,9 @@ async def run():
 
 def test_try_except_keeps_catch_live_value_and_finally_drops_dead():
     keep = """
-from trigora import effect, wait_for_event
+from trigora import program, effect, wait_for_event
 
+@program
 async def run():
     try:
         keep = await effect("keep", lambda: "keep-me")
@@ -787,8 +799,9 @@ async def run():
     assert "keep-me" in _load_head(_suspend(keep, {"keep": "keep-me"}, "keep.py")["db_path"])["json"]
 
     gone = """
-from trigora import effect, wait_for_event
+from trigora import program, effect, wait_for_event
 
+@program
 async def run():
     try:
         gone = await effect("gone", lambda: "drop-me")
@@ -803,8 +816,9 @@ async def run():
 
 def test_sigkill_after_compaction_resumes_live_result():
     source = """
-from trigora import effect, wait_for_event
+from trigora import program, effect, wait_for_event
 
+@program
 async def run():
     dead = await effect("dead", lambda: "dead-scalar")
     live = await effect("live", lambda: "live-scalar")
@@ -823,8 +837,9 @@ async def run():
 
 def test_native_and_wasm_agree_on_compacted_locals():
     source = """
-from trigora import effect, wait_for_event
+from trigora import program, effect, wait_for_event
 
+@program
 async def run():
     dead = await effect("dead", lambda: "dead-scalar")
     live = await effect("live", lambda: "live-scalar")

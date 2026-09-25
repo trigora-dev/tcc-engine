@@ -1,8 +1,8 @@
 # First example (Python)
 
-A Python program that imports durable operations from `tcc_engine.primitives` and defines a top-level `async def run()`. There is no context object or workflow wrapper.
+A Python program that imports durable operations from `tcc_engine.primitives` and marks exactly one `@program` async function. There is no context object or workflow wrapper.
 
-The Python frontend treats `tcc_engine.primitives` and `trigora` as durable-operations modules. The frontend recognizes resolved imports of `effect` and `wait_for_event`. Programs that differ only in that specifier produce the same artifact hash. Aliasing works:
+The Python frontend treats `tcc_engine.primitives` and `trigora` as durable-operations modules. The frontend recognizes resolved imports of `program`, `effect`, and `wait_for_event`. Programs that differ only in that specifier produce the same artifact hash. Aliasing works:
 
 ```python
 from tcc_engine.primitives import effect as durable_effect
@@ -11,9 +11,10 @@ from tcc_engine.primitives import effect as durable_effect
 A locally declared `def effect` is not durable.
 
 ```python
-from tcc_engine.primitives import effect, wait_for_event
+from tcc_engine.primitives import program, effect, wait_for_event
 
-async def run():
+@program
+async def research():
     result = await effect("generate", generate_something)
     approval = await wait_for_event("approved")
     return {"result": result, "approval": approval}

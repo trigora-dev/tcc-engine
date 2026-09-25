@@ -21,8 +21,9 @@ from tcc_engine.persist import apply_delta
 from tcc_engine.store import Store
 
 FIRST = """
-from trigora import effect, wait_for_event
+from trigora import program, effect, wait_for_event
 
+@program
 async def run():
     result = await effect("generate", generate_something)
     approval = await wait_for_event("approved")

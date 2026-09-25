@@ -1,6 +1,7 @@
-from tcc_engine.primitives import wait_for_event
+from tcc_engine.primitives import program, wait_for_event
 
 
+@program
 async def run():
     items = [2, 5, 9]
     total = 0

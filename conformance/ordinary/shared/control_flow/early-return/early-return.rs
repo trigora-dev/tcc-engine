@@ -8,6 +8,6 @@ fn classify(n: f64) -> String {
     }
 }
 
-async fn run() -> String {
+pub async fn main() -> String {
     classify(-3.0)
 }

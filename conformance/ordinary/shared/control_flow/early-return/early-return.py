@@ -1,3 +1,4 @@
+from tcc_engine.primitives import program
 def classify(n):
     if n < 0:
         return "neg"
@@ -6,5 +7,6 @@ def classify(n):
     return "pos"
 
 
+@program
 async def run():
     return classify(-3)

@@ -1,4 +1,4 @@
-async fn run() -> f64 {
+pub async fn main() -> f64 {
     let price = 10.0;
     let quantity = 3.0;
     let tax = 2.0;
