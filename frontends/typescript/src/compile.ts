@@ -100,11 +100,11 @@ export function compile(source: string, options: CompileOptions = {}): Artifact 
     });
   });
   const lowered = [entry, ...helpers].map((fn) =>
-    lowerFunction(fn, sourceFile, checker, filename, analysis.recs.get(fn)!, functions, analysis.recs),
+    lowerFunction(fn, sourceFile, checker, filename, analysis.recs.get(fn)!, functions, analysis.recs, entry),
   );
   const arrows = [...analysis.recs.values()].filter((rec) => ts.isArrowFunction(rec.node));
   const loweredArrows = arrows.map((rec) =>
-    lowerFunction(rec.node, sourceFile, checker, filename, rec, functions, analysis.recs),
+    lowerFunction(rec.node, sourceFile, checker, filename, rec, functions, analysis.recs, entry),
   );
   const all = [...lowered, ...loweredArrows].sort((left, right) => left.id - right.id);
   const { engine, host } = requiredFrom(all.flatMap((item) => item.instructions));
@@ -120,7 +120,7 @@ export function compile(source: string, options: CompileOptions = {}): Artifact 
       runtime_modules: [],
     },
     program: {
-      entry: 0,
+      entry: analysis.recs.get(entry)!.id,
       functions: all,
     },
   };
@@ -216,7 +216,7 @@ function collectFunctions(
     }
     if (ts.isFunctionDeclaration(statement) && statement.name && !hasModifier(statement, ts.SyntaxKind.ExportKeyword)) {
       if (hasModifier(statement, ts.SyntaxKind.AsyncKeyword)) {
-        fail(filename, sourceFile, statement, "helper functions cannot be async", WHY_SUBSET, "keep durable operations in run");
+        fail(filename, sourceFile, statement, "helper functions cannot be async", WHY_SUBSET, "keep durable operations in the program entry");
       }
       if (!statement.body) {
         fail(filename, sourceFile, statement, "helper function is missing a body", WHY_SUBSET);
@@ -299,38 +299,39 @@ function assertEarlierOnly(
 }
 
 function lowerFunction(
-  entry: ts.FunctionDeclaration | ts.ArrowFunction,
+  fn: ts.FunctionDeclaration | ts.ArrowFunction,
   sourceFile: ts.SourceFile,
   checker: ts.TypeChecker,
   filename: string,
   rec: FnRec,
   functions: Map<string, FnInfo>,
   recs: Map<ts.Node, FnRec>,
+  programEntry: ts.Node,
 ): FunctionDecl {
-  const lower = new Lowerer(sourceFile, checker, filename, rec.node === entry && rec.id === 0, functions, rec, recs);
+  const lower = new Lowerer(sourceFile, checker, filename, rec.node === programEntry, functions, rec, recs);
   lower.pushScope();
   if (rec.closure) {
     lower.alloc();
   }
   rec.captured.forEach((captured, index) => lower.installOuter(captured.name, captured.kind, index));
-  const paramCount = bindEntryParams(entry, lower, sourceFile, filename);
-  for (const param of entry.parameters) {
+  const paramCount = bindEntryParams(fn, lower, sourceFile, filename);
+  for (const param of fn.parameters) {
     if (ts.isIdentifier(param.name) && rec.capturedLocals.has(param.name)) {
       lower.boxExisting(param.name.text, param);
     }
   }
-  const body = entry.body;
+  const body = fn.body;
   if (body && ts.isBlock(body)) {
     for (const statement of body.statements) {
       lower.statement(statement);
     }
   } else if (body) {
     lower.expression(body);
-    lower.emit({ op: "Return" }, entry);
+    lower.emit({ op: "Return" }, fn);
   }
   if (lower.needsImplicitReturn()) {
-    lower.emit({ op: "LoadConst", value: { t: "undefined" } }, entry);
-    lower.emit({ op: "Return" }, entry);
+    lower.emit({ op: "LoadConst", value: { t: "undefined" } }, fn);
+    lower.emit({ op: "Return" }, fn);
   }
   lower.popScope();
   lower.seal();
@@ -887,7 +888,7 @@ class Lowerer {
         expression,
         "v0.1.0 helper calls are non-suspending. Durable boundaries are only allowed in the program entry",
         WHY_SUBSET,
-        "move the durable operation into run",
+        "move the durable operation into the program entry",
       );
     }
     const inner = unwrap(expression.expression);
@@ -1283,7 +1284,7 @@ class Lowerer {
 
   arrowExpression(expression: ts.ArrowFunction): void {
     if (ts.getModifiers(expression)?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword)) {
-      this.fail(expression, "async arrows are not supported", WHY_SUBSET, "keep durable operations in run");
+      this.fail(expression, "async arrows are not supported", WHY_SUBSET, "keep durable operations in the program entry");
     }
     for (const param of expression.parameters) {
       if (param.initializer || param.questionToken || param.dotDotDotToken || !ts.isIdentifier(param.name)) {

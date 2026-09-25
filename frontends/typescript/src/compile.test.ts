@@ -541,3 +541,19 @@ export default async function run(input = null) {
   assert.equal(defaults.program.functions[0]?.param_count, 1);
   assert.ok(defaults.program.functions[0]?.instructions.some((instruction) => instruction.op === "StrictEq"));
 });
+
+test("the default export is the program entry under any name", () => {
+  const named = compile(`
+export default async function researchAgent(input) {
+  return input;
+}
+`);
+  assert.equal(named.program.entry, named.program.functions[0]?.id);
+  assert.equal(named.program.functions[0]?.name, "researchAgent");
+  const anonymous = compile(`
+export default async function (input) {
+  return input;
+}
+`);
+  assert.equal(anonymous.program.functions[0]?.name, "default");
+});
