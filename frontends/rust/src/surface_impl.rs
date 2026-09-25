@@ -37,7 +37,7 @@ impl Compiler {
             Ok(())
         } else {
             Err(CompileError::at(
-                "durable operations are only allowed in run",
+                "durable operations are only allowed in the program entry",
                 span,
             ))
         }

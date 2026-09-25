@@ -663,27 +663,31 @@ impl Compiler {
 
     fn compile_run(&mut self, file: &File) -> Result<(), CompileError> {
         let mut helpers = Vec::new();
-        let mut run = None;
+        let mut entries = Vec::new();
         for item in &file.items {
             let Item::Fn(func) = item else {
                 continue;
             };
-            if func.sig.ident == "run" {
-                if run.is_some() {
-                    return Err(CompileError::at("a file has one run function", func.span()));
+            if func.sig.ident == "main" && func.sig.asyncness.is_some() {
+                if !matches!(func.vis, syn::Visibility::Public(_)) {
+                    return Err(CompileError::at(
+                        "`async fn main` must be `pub`",
+                        func.span(),
+                    ));
                 }
-                run = Some(func);
+                entries.push(func);
             } else {
                 helpers.push(func);
             }
         }
-        let Some(run) = run else {
+        let [run] = entries.as_slice() else {
             return Err(CompileError {
-                message: "the file needs async fn run".into(),
+                message: "A Rust TCC program must contain exactly one `pub async fn main`.".into(),
                 line: 1,
                 column: 1,
             });
         };
+        let run = *run;
         let mut next_id = 1u32;
         for func in &helpers {
             if func.sig.asyncness.is_some() {
@@ -713,7 +717,7 @@ impl Compiler {
                 compiler.compile_fn_body(func, helper.ret, false)
             })?;
         }
-        self.reject_shadow("run", run.span())?;
+        self.reject_shadow("main", run.span())?;
         let ret = self.signature(run)?.1;
         self.entry = true;
         self.compile_fn_body(run, ret, true)
@@ -890,7 +894,7 @@ impl Compiler {
     fn finish(self) -> Result<Artifact, CompileError> {
         let mut functions = vec![Function {
             id: FuncId(0),
-            name: "run".into(),
+            name: "main".into(),
             param_count: self.param_count,
             local_count: self.next_local,
             param_defaults: Vec::new(),

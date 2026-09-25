@@ -1,7 +1,9 @@
 #![allow(unused)]
 
-include!("../../../../../conformance/ordinary/rust/structs/construct_job.rs");
+mod program {
+    include!("../../../../../conformance/ordinary/rust/structs/construct_job.rs");
+}
 
 fn main() {
-    let _future = run();
+    let _future = program::main();
 }

@@ -1,6 +1,6 @@
 use tcc_rust_prelude::Vec;
 
-async fn run() -> f64 {
+pub async fn main() -> f64 {
     let mut xs: Vec<f64> = Vec::new();
     xs.push(10.0);
     xs.push(22.0);

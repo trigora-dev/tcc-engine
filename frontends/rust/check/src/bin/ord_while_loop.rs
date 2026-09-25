@@ -1,7 +1,9 @@
 #![allow(unused)]
 
-include!("../../../../../conformance/ordinary/rust/iteration/while_loop.rs");
+mod program {
+    include!("../../../../../conformance/ordinary/rust/iteration/while_loop.rs");
+}
 
 fn main() {
-    let _future = run();
+    let _future = program::main();
 }

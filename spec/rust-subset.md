@@ -18,7 +18,7 @@ Frontend tests run `cargo check` before `compile`. A fixture `cargo check` rejec
 
 ## Supported
 
-- `async fn run` with plain owned parameters. Argument binding is exact arity with no defaults
+- Exactly one `pub async fn main` with plain owned parameters. That function is the program entry. Its artifact name is `main`. `program.entry` is its function id. A private `async fn main` is a compile error. Argument binding is exact arity with no defaults
 - Ordinary `fn` helpers. They are `Call`. They cannot await. A durable operation runs only while the entry frame is alone
 - `let` / `let mut`, assignment, and early `return`
 - `if` / `else`, `loop`, `while`, `for x in xs` over `Vec<T>`, and `for i in 0..n` as a counted `f64` loop. `i32` and every other integer type written in the source are rejected. `as f64` is a no-op on that loop binding

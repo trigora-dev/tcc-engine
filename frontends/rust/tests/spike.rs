@@ -163,7 +163,7 @@ fn user_copy_is_rejected() {
         r#"
         #[derive(Copy, Clone)]
         struct Job { count: f64 }
-        async fn run(job: Job) -> f64 { job.count }
+        pub async fn main(job: Job) -> f64 { job.count }
         "#,
     )
     .unwrap_err();

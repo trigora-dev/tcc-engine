@@ -1,7 +1,9 @@
 #![allow(unused)]
 
-include!("../../../../../conformance/ordinary/rust/ownership/helper_move.rs");
+mod program {
+    include!("../../../../../conformance/ordinary/rust/ownership/helper_move.rs");
+}
 
 fn main() {
-    let _future = run(Job { count: 0.0 });
+    let _future = program::main(program::Job { count: 0.0 });
 }

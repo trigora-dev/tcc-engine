@@ -1,7 +1,9 @@
 #![allow(unused)]
 
-include!("../../../../../conformance/ordinary/rust/iteration/range_for.rs");
+mod program {
+    include!("../../../../../conformance/ordinary/rust/iteration/range_for.rs");
+}
 
 fn main() {
-    let _future = run();
+    let _future = program::main();
 }

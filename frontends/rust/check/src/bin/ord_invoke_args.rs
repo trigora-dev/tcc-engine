@@ -1,7 +1,9 @@
 #![allow(unused)]
 
-include!("../../../../../conformance/ordinary/rust/durability/invoke_args.rs");
+mod program {
+    include!("../../../../../conformance/ordinary/rust/durability/invoke_args.rs");
+}
 
 fn main() {
-    let _future = run();
+    let _future = program::main();
 }

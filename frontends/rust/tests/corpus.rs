@@ -327,43 +327,44 @@ fn invoke_flattens_the_tuple_into_the_argument_vector() {
 #[test]
 fn diagnostics_reject_borrows_macros_generics_and_integers() {
     let macro_error =
-        compile("macro_rules! m { () => {}; } async fn run() -> f64 { 1.0 }").unwrap_err();
+        compile("macro_rules! m { () => {}; } pub async fn main() -> f64 { 1.0 }").unwrap_err();
     assert!(macro_error.message.contains("macro"), "{macro_error}");
-    let generic =
-        compile("fn id<T>(value: T) -> T { value } async fn run() -> f64 { 1.0 }").unwrap_err();
+    let generic = compile("fn id<T>(value: T) -> T { value } pub async fn main() -> f64 { 1.0 }")
+        .unwrap_err();
     assert!(generic.message.contains("generic"), "{generic}");
-    let integer = compile("async fn run(value: i32) -> i32 { value }").unwrap_err();
+    let integer = compile("pub async fn main(value: i32) -> i32 { value }").unwrap_err();
     assert!(integer.message.contains("integer"), "{integer}");
     let capture =
-        compile("async fn run(name: String) -> String { let read = || name; read() }").unwrap_err();
+        compile("pub async fn main(name: String) -> String { let read = || name; read() }")
+            .unwrap_err();
     assert!(capture.message.contains("move"), "{capture}");
-    let direct = compile("struct A { a: A } async fn run() -> f64 { 1.0 }").unwrap_err();
+    let direct = compile("struct A { a: A } pub async fn main() -> f64 { 1.0 }").unwrap_err();
     assert!(direct.message.contains("recursive"), "{direct}");
     let indirect = compile(
-        "struct A { xs: Vec<Option<Result<B, String>>> } struct B { a: A } async fn run() -> f64 { 1.0 }",
+        "struct A { xs: Vec<Option<Result<B, String>>> } struct B { a: A } pub async fn main() -> f64 { 1.0 }",
     )
     .unwrap_err();
     assert!(indirect.message.contains("recursive"), "{indirect}");
     let nested = compile(
-        "struct Job { count: f64 } async fn run(value: Option<Job>) -> f64 { match value { Some(Job { count }) => count, None => 0.0 } }",
+        "struct Job { count: f64 } pub async fn main(value: Option<Job>) -> f64 { match value { Some(Job { count }) => count, None => 0.0 } }",
     )
     .unwrap_err();
     assert!(nested.message.contains("nested"), "{nested}");
     let index = compile(
-        "async fn run() -> String { let mut xs: Vec<String> = Vec::new(); xs.push(String::from(\"a\")); xs[0.0] }",
+        "pub async fn main() -> String { let mut xs: Vec<String> = Vec::new(); xs.push(String::from(\"a\")); xs[0.0] }",
     )
     .unwrap_err();
     assert!(index.message.contains("borrow"), "{index}");
     let again = compile(
-        "struct Job { name: String, score: f64 } async fn run() -> f64 { let job = Job { name: String::from(\"a\"), score: 1.0 }; let _name = job.name; let _again = job.name; job.score }",
+        "struct Job { name: String, score: f64 } pub async fn main() -> f64 { let job = Job { name: String::from(\"a\"), score: 1.0 }; let _name = job.name; let _again = job.name; job.score }",
     )
     .unwrap_err();
     assert!(again.message.contains("moved"), "{again}");
     let pair =
-        compile("enum State { Pair(String, f64) } async fn run() -> f64 { 1.0 }").unwrap_err();
+        compile("enum State { Pair(String, f64) } pub async fn main() -> f64 { 1.0 }").unwrap_err();
     assert!(pair.message.contains("tuple"), "{pair}");
     let local =
-        compile("fn effect(x: f64) -> f64 { x * 2.0 } async fn run() -> f64 { effect(3.0) }")
+        compile("fn effect(x: f64) -> f64 { x * 2.0 } pub async fn main() -> f64 { effect(3.0) }")
             .unwrap();
     assert!(
         !local.program.functions.iter().any(|function| function
@@ -372,29 +373,29 @@ fn diagnostics_reject_borrows_macros_generics_and_integers() {
             .any(|instruction| matches!(instruction, Instruction::Effect { .. }))),
         "a local effect helper is not a durable call"
     );
-    let glob = compile("use tcc_rust_prelude::*; async fn run() -> f64 { 1.0 }").unwrap_err();
+    let glob = compile("use tcc_rust_prelude::*; pub async fn main() -> f64 { 1.0 }").unwrap_err();
     assert!(glob.message.contains("glob"), "{glob}");
     let qualified = compile(
-        "async fn run() -> Result<f64, String> { trigora::effect(\"search\", || 1.0).await? }",
+        "pub async fn main() -> Result<f64, String> { trigora::effect(\"search\", || 1.0).await? }",
     )
     .unwrap_err();
     assert!(qualified.message.contains("import"), "{qualified}");
     let shadow =
-        compile("use tcc_rust_prelude::effect; async fn run(effect: f64) -> f64 { effect }")
+        compile("use tcc_rust_prelude::effect; pub async fn main(effect: f64) -> f64 { effect }")
             .unwrap_err();
     assert!(shadow.message.contains("shadow"), "{shadow}");
     let local_shadow = compile(
-        "use tcc_rust_prelude::sleep; async fn run() -> Result<(), String> { let sleep = 1.0; sleep(sleep).await }",
+        "use tcc_rust_prelude::sleep; pub async fn main() -> Result<(), String> { let sleep = 1.0; sleep(sleep).await }",
     )
     .unwrap_err();
     assert!(local_shadow.message.contains("shadow"), "{local_shadow}");
     let bare_capture = compile(
-        "use tcc_rust_prelude::effect; async fn run(query: String) -> Result<String, String> { effect(\"search\", || query).await? }",
+        "use tcc_rust_prelude::effect; pub async fn main(query: String) -> Result<String, String> { effect(\"search\", || query).await? }",
     )
     .unwrap_err();
     assert!(bare_capture.message.contains("move"), "{bare_capture}");
     let moved_again = compile(
-        "use tcc_rust_prelude::effect; async fn run() -> Result<String, String> { let query = String::from(\"hello\"); let found = effect(\"search\", move || query).await?; let _again = query; Ok(found) }",
+        "use tcc_rust_prelude::effect; pub async fn main() -> Result<String, String> { let query = String::from(\"hello\"); let found = effect(\"search\", move || query).await?; let _again = query; Ok(found) }",
     )
     .unwrap_err();
     assert!(moved_again.message.contains("moved"), "{moved_again}");
@@ -403,7 +404,7 @@ fn diagnostics_reject_borrows_macros_generics_and_integers() {
 #[test]
 fn rust_effects_are_imported_and_always_carry_input() {
     let aliased = compile(
-        "use tcc_rust_prelude::effect as fx; async fn run() -> Result<f64, String> { let value = fx(\"search\", || 1.0).await?; Ok(value) }",
+        "use tcc_rust_prelude::effect as fx; pub async fn main() -> Result<f64, String> { let value = fx(\"search\", || 1.0).await?; Ok(value) }",
     )
     .unwrap();
     assert!(aliased.program.functions[0]
@@ -411,7 +412,7 @@ fn rust_effects_are_imported_and_always_carry_input() {
         .iter()
         .any(|instruction| matches!(instruction, Instruction::Effect { has_input: true })));
     let empty = compile(
-        "use tcc_rust_prelude::effect; async fn run() -> Result<f64, String> { let value = effect(\"search\", || 1.0).await?; Ok(value) }",
+        "use tcc_rust_prelude::effect; pub async fn main() -> Result<f64, String> { let value = effect(\"search\", || 1.0).await?; Ok(value) }",
     )
     .unwrap();
     let instructions = &empty.program.functions[0].instructions;
@@ -423,7 +424,7 @@ fn rust_effects_are_imported_and_always_carry_input() {
         .iter()
         .any(|instruction| matches!(instruction, Instruction::NewObject)));
     let copied = compile(
-        "use tcc_rust_prelude::effect; async fn run(limit: f64) -> Result<f64, String> { let value = effect(\"search\", move || limit).await?; Ok(value + limit) }",
+        "use tcc_rust_prelude::effect; pub async fn main(limit: f64) -> Result<f64, String> { let value = effect(\"search\", move || limit).await?; Ok(value + limit) }",
     )
     .unwrap();
     assert!(copied.program.functions[0]
@@ -438,7 +439,7 @@ fn rust_effects_are_imported_and_always_carry_input() {
 fn moved_effect_capture_survives_resume_after_the_effect_checkpoint() {
     let source = r#"
         use tcc_rust_prelude::effect;
-        async fn run() -> Result<String, String> {
+        pub async fn main() -> Result<String, String> {
             let query = String::from("hello");
             let found = effect("search", move || query).await?;
             Ok(found)
@@ -555,4 +556,15 @@ fn use_after_move_is_not_lowered_when_cargo_check_rejects_it() {
         !status.success(),
         "cargo check should reject use after move"
     );
+}
+
+#[test]
+fn entry_is_pub_async_fn_main() {
+    let artifact = compile("pub async fn main(value: f64) -> f64 { value }").unwrap();
+    assert_eq!(artifact.program.functions[0].name, "main");
+    assert_eq!(artifact.program.entry, tcc_ir::FuncId(0));
+    let missing = compile("fn helper(value: f64) -> f64 { value }").unwrap_err();
+    assert!(missing.message.contains("exactly one `pub async fn main`"));
+    let private = compile("async fn main() -> f64 { 1.0 }").unwrap_err();
+    assert!(private.message.contains("must be `pub`"));
 }

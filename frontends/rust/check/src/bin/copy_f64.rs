@@ -1,7 +1,9 @@
 #![allow(unused)]
 
-include!("../../../fixtures/copy_f64.rs");
+mod program {
+    include!("../../../fixtures/copy_f64.rs");
+}
 
 fn main() {
-    let _future = run(1.0);
+    let _future = program::main(1.0);
 }

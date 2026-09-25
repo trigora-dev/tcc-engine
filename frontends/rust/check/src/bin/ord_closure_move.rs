@@ -1,7 +1,9 @@
 #![allow(unused)]
 
-include!("../../../../../conformance/ordinary/rust/closures/closure_move.rs");
+mod program {
+    include!("../../../../../conformance/ordinary/rust/closures/closure_move.rs");
+}
 
 fn main() {
-    let _future = run(1.0);
+    let _future = program::main(1.0);
 }

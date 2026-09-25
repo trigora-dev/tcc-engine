@@ -5,13 +5,13 @@ enum Decision {
     No,
 }
 
-enum State {
+pub enum State {
     Ready,
     Failed(String),
     Pair { name: String, score: f64 },
 }
 
-async fn run() -> f64 {
+pub async fn main() -> f64 {
     let failed = State::Failed(String::from("timeout"));
     let from_failed = match failed {
         State::Ready => 0.0,

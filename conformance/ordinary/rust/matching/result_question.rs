@@ -6,7 +6,7 @@ fn parse(value: f64) -> Result<f64, String> {
     }
 }
 
-async fn run(value: f64) -> Result<f64, String> {
+pub async fn main(value: f64) -> Result<f64, String> {
     let got = parse(value)?;
     Ok(got + 1.0)
 }

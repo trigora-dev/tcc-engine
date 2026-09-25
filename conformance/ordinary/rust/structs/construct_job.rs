@@ -2,14 +2,14 @@ struct Note {
     flag: bool,
 }
 
-struct Job {
+pub struct Job {
     name: String,
     active: bool,
     score: f64,
     note: Note,
 }
 
-async fn run() -> f64 {
+pub async fn main() -> f64 {
     let job = Job {
         name: String::from("research"),
         active: true,

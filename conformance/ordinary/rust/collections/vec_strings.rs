@@ -1,6 +1,6 @@
 use tcc_rust_prelude::Vec;
 
-async fn run() -> f64 {
+pub async fn main() -> f64 {
     let mut names: Vec<String> = Vec::new();
     names.push(String::from("ab"));
     names.push(String::from("owned"));

@@ -1,7 +1,9 @@
 #![allow(unused)]
 
-include!("../../../fixtures/job.rs");
+mod program {
+    include!("../../../fixtures/job.rs");
+}
 
 fn main() {
-    let _future = run(Job { count: 0.0 });
+    let _future = program::main(program::Job { count: 0.0 });
 }

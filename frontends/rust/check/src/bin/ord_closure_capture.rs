@@ -1,7 +1,9 @@
 #![allow(unused)]
 
-include!("../../../../../conformance/ordinary/rust/ownership/closure_capture.rs");
+mod program {
+    include!("../../../../../conformance/ordinary/rust/ownership/closure_capture.rs");
+}
 
 fn main() {
-    let _future = run(String::new());
+    let _future = program::main(String::new());
 }

@@ -1,7 +1,9 @@
 #![allow(unused)]
 
-include!("../../../../../conformance/ordinary/rust/collections/vec_jobs.rs");
+mod program {
+    include!("../../../../../conformance/ordinary/rust/collections/vec_jobs.rs");
+}
 
 fn main() {
-    let _future = run();
+    let _future = program::main();
 }

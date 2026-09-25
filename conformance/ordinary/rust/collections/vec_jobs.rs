@@ -1,12 +1,12 @@
 use tcc_rust_prelude::Vec;
 
-struct Job {
+pub struct Job {
     name: String,
     active: bool,
     score: f64,
 }
 
-async fn run() -> f64 {
+pub async fn main() -> f64 {
     let mut jobs: Vec<Job> = Vec::new();
     jobs.push(Job {
         name: String::from("a"),

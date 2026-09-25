@@ -1,7 +1,9 @@
 #![allow(unused)]
 
-include!("../../../../../conformance/ordinary/rust/matching/result_question.rs");
+mod program {
+    include!("../../../../../conformance/ordinary/rust/matching/result_question.rs");
+}
 
 fn main() {
-    let _future = run(1.0);
+    let _future = program::main(1.0);
 }

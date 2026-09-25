@@ -1,4 +1,4 @@
-struct Job {
+pub struct Job {
     name: String,
     score: f64,
 }
@@ -14,7 +14,7 @@ fn decode(score: f64) -> Result<Job, String> {
     }
 }
 
-async fn run(score: f64) -> Result<f64, String> {
+pub async fn main(score: f64) -> Result<f64, String> {
     let job = decode(score)?;
     let name = job.name;
     if name == "research" {
