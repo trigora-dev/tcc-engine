@@ -37,6 +37,8 @@ jobs:
       - run: pnpm --filter @tcc-engine/bindings-javascript build
       - run: node --experimental-sqlite --experimental-strip-types conformance/run-node.ts
       - run: .venv/bin/python conformance/run_python.py
+      - run: cargo build -p tcc-host-sqlite
+      - run: node --experimental-sqlite --experimental-strip-types conformance/run.ts --driver conformance/drivers/rust-sqlite.ts
       - run: TCC_BENCH_SCALE=quick pnpm bench
       - uses: actions/upload-artifact@v4
         with:

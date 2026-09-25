@@ -56,6 +56,22 @@ jobs:
       - run: node --experimental-strip-types --test bindings/javascript/src/index.test.ts hosts/node-memory/src/host.test.ts
       - run: pnpm --filter @tcc-engine/host-node test
 
+  rust-sqlite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: cargo build -p tcc-host-sqlite
+      - run: cargo build -p tcc-rust-frontend --release
+      - run: pnpm install --frozen-lockfile
+      - run: node --experimental-sqlite --experimental-strip-types conformance/run.ts --driver conformance/drivers/rust-sqlite.ts
+
   ordinary:
     runs-on: ubuntu-latest
     steps:

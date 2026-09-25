@@ -13,6 +13,7 @@ Reference adapters (CI aliases):
 ```text
 node --experimental-sqlite --experimental-strip-types conformance/run-node.ts
 python conformance/run_python.py
+node --experimental-sqlite --experimental-strip-types conformance/run.ts --driver conformance/drivers/rust-sqlite.ts
 ```
 
 Generic Node runner with a driver module that default-exports `createDriver()`:
@@ -41,6 +42,7 @@ conformance/
   drivers/
     node-sqlite.ts
     python_sqlite.py
+    rust-sqlite.ts          # CI: runner + rust sqlite host
   run-node.ts             # CI: runner + node-sqlite
   run_python.py           # CI: run.py + python-sqlite
 ```
@@ -51,6 +53,7 @@ conformance/
 |---|---|
 | TypeScript | [`drivers/node-sqlite.ts`](drivers/node-sqlite.ts) |
 | Python | [`drivers/python_sqlite.py`](drivers/python_sqlite.py) |
+| Rust | [`drivers/rust-sqlite.ts`](drivers/rust-sqlite.ts) |
 
 `HostConformanceDriver` is semantic only: `applyDelta`, `start`, `crashAt`, `resume`, `readContinuation`, `effectLog`. No SQLite schema, `exec_head`, WAL, or packing knobs.
 
