@@ -2,13 +2,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import type { HostConformanceDriver } from "./driver.ts";
-import { createNodeSqliteDriver } from "./drivers/node-sqlite.ts";
 import { runKit } from "./runner.ts";
 
 async function loadDriver(): Promise<HostConformanceDriver> {
   const args = process.argv.slice(2);
   const index = args.indexOf("--driver");
   if (index < 0) {
+    const { createNodeSqliteDriver } = await import("./drivers/node-sqlite.ts");
     return createNodeSqliteDriver();
   }
   const spec = args[index + 1];
