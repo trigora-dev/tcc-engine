@@ -1,6 +1,6 @@
 # Host conformance v1
 
-A named kit a host can claim. This repository ships a generic runner plus Node and Python SQLite adapters. Trigora Cloud is not a driver in this repository.
+A named kit a host can claim. This repository ships a generic runner plus Node, Python, and Rust SQLite adapters. Trigora Cloud is not a driver in this repository.
 
 `engine_format_version` stays `1`. Every host-protocol JSON message must declare `host_protocol_version: 1`. Missing is not version 1.
 
@@ -40,7 +40,7 @@ export type HostConformanceDriver = {
 | `readContinuation` | Load the committed continuation JSON for an execution. |
 | `effectLog` | Ordered effect-provider invocations. |
 
-Third parties implement this interface against their own host. This repository’s runner also requires `language` and `compile` so it can load the shared TypeScript/Python sources. Adapters are [`conformance/drivers/node-sqlite.ts`](../conformance/drivers/node-sqlite.ts) and [`conformance/drivers/python_sqlite.py`](../conformance/drivers/python_sqlite.py). Reference-host crash helpers stay in [`hosts/node/src/conformance.ts`](../hosts/node/src/conformance.ts) and [`hosts/python/conformance.py`](../hosts/python/conformance.py) for the language suite.
+Third parties implement this interface against their own host. This repository’s runner also requires `language` and `compile` so it can load the shared TypeScript/Python sources. Adapters are [`conformance/drivers/node-sqlite.ts`](../conformance/drivers/node-sqlite.ts), [`conformance/drivers/python_sqlite.py`](../conformance/drivers/python_sqlite.py), and [`conformance/drivers/rust-sqlite.ts`](../conformance/drivers/rust-sqlite.ts). Reference-host crash helpers stay in [`hosts/node/src/conformance.ts`](../hosts/node/src/conformance.ts) and [`hosts/python/conformance.py`](../hosts/python/conformance.py) for the language suite.
 
 Kit entry points: [`conformance/run-node.ts`](../conformance/run-node.ts), [`conformance/run_python.py`](../conformance/run_python.py). Public runner: [`conformance/runner.ts`](../conformance/runner.ts) (`--driver` via [`conformance/run.ts`](../conformance/run.ts)). Case index: [`conformance/cases.json`](../conformance/cases.json).
 
