@@ -68,13 +68,19 @@ export default async function run(a, b) {
 ```
 
 ```python
-async def run(input):
+from tcc_engine.primitives import program, invoke
+
+@program
+async def research(input):
     analysis = await invoke("analyze", {"sources": input["sources"]})
     return analysis
 ```
 
 ```python
-async def run(a, b):
+from tcc_engine.primitives import program, invoke
+
+@program
+async def research(a, b):
     analysis = await invoke("analyze", a, b)
     return analysis
 ```

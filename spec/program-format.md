@@ -34,7 +34,7 @@ Each function has:
 - an instruction sequence
 - a source-span array of the same length as the instruction sequence (`null` spans are allowed)
 
-Jump and try targets must be in range for that function. Call targets must name a function that exists in the program. The entry function must exist.
+Jump and try targets must be in range for that function. Call targets must name a function that exists in the program. The entry function must exist. `program.entry` is that function's id. The function's `name` is source text for diagnostics. Execution identity is the id.
 
 ## Instructions
 
