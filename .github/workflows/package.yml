@@ -1,0 +1,117 @@
+name: package
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches: [main]
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install license tools
+        run: |
+          cargo install cargo-deny --version 0.18.9 --locked
+          cargo install cargo-about --version 0.6.6 --locked
+      - name: Check dependency licenses
+        run: python3 scripts/licenses/collect.py --deny-only --manifest Cargo.toml
+      - name: Package Rust crates
+        run: bash scripts/package-crates.sh
+      - run: mkdir -p dist-packages
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @tcc-engine/frontend-typescript build
+      - run: pnpm --filter @tcc-engine/frontend-typescript exec npm pack --pack-destination "$GITHUB_WORKSPACE/dist-packages"
+      - name: Authoring package carries no binary notices
+        run: python3 scripts/licenses/check_archive.py frontend dist-packages/tcc-engine-frontend-typescript-0.1.0.tgz
+      - name: Pack the JavaScript binding
+        run: |
+          cargo build -p tcc-wasm --target wasm32-unknown-unknown --release
+          stage="$(mktemp -d)"
+          python3 scripts/licenses/collect.py \
+            --skip-deny \
+            --manifest Cargo.toml \
+            --exclude tcc-core \
+            --exclude tcc-ir \
+            --exclude tcc-state \
+            --exclude tcc-host \
+            --exclude tcc-host-sqlite \
+            --exclude tcc-rust-frontend \
+            --exclude tcc-python \
+            --exclude tcc-wasm \
+            --out "$stage" \
+            --bin target/wasm32-unknown-unknown/release/tcc_wasm.wasm
+          cp LICENSE bindings/javascript/LICENSE
+          cp "$stage/THIRD_PARTY_LICENSES" bindings/javascript/THIRD_PARTY_LICENSES
+          rm -rf bindings/javascript/licenses
+          mkdir -p bindings/javascript/licenses
+          if [ -d "$stage/licenses/third-party" ]; then
+            cp -R "$stage/licenses/third-party" bindings/javascript/licenses/third-party
+          fi
+          pnpm --filter @tcc-engine/bindings-javascript exec npm pack --pack-destination "$GITHUB_WORKSPACE/dist-packages"
+      - name: Inspect the wasm package
+        run: python3 scripts/licenses/check_archive.py wasm dist-packages/tcc-engine-bindings-javascript-0.1.0.tgz
+      - name: Build the Python wheel
+        run: |
+          cargo build -p tcc-python --release
+          stage="$(mktemp -d)"
+          python3 scripts/licenses/collect.py \
+            --skip-deny \
+            --manifest Cargo.toml \
+            --exclude tcc-core \
+            --exclude tcc-ir \
+            --exclude tcc-state \
+            --exclude tcc-host \
+            --exclude tcc-host-sqlite \
+            --exclude tcc-rust-frontend \
+            --exclude tcc-python \
+            --exclude tcc-wasm \
+            --out "$stage" \
+            --bin target/release/lib_engine.so
+          dest=bindings/python/python/tcc_engine/_licenses
+          rm -rf "$dest"
+          mkdir -p "$dest/licenses"
+          cp "$stage/THIRD_PARTY_LICENSES" LICENSE "$dest/"
+          if [ -d "$stage/licenses/third-party" ]; then
+            cp -R "$stage/licenses/third-party" "$dest/licenses/third-party"
+          fi
+          if grep -q rusqlite "$dest/THIRD_PARTY_LICENSES" || grep -q '^clap ' "$dest/THIRD_PARTY_LICENSES"; then
+            echo "the engine wheel notices include a Trigora CLI dependency" >&2
+            exit 1
+          fi
+          python -m venv .venv
+          .venv/bin/pip install build maturin
+          .venv/bin/python -m build --wheel --outdir "$GITHUB_WORKSPACE/dist-packages" bindings/python
+      - name: Inspect the Python wheel
+        run: python3 scripts/licenses/check_archive.py wheel dist-packages/tcc_engine-*.whl
+      - name: Install packed npm packages
+        run: |
+          mkdir -p /tmp/tcc-npm
+          npm install --prefix /tmp/tcc-npm "$GITHUB_WORKSPACE"/dist-packages/tcc-engine-frontend-typescript-0.1.0.tgz
+          npm install --prefix /tmp/tcc-npm "$GITHUB_WORKSPACE"/dist-packages/tcc-engine-bindings-javascript-0.1.0.tgz
+          cd /tmp/tcc-npm
+          node --input-type=module -e "import('@tcc-engine/frontend-typescript').then(m => { if (m.PACKAGE_VERSION !== '0.1.0') process.exit(1) })"
+      - name: Install the Python wheel
+        run: |
+          python -m venv /tmp/tcc-py
+          /tmp/tcc-py/bin/pip install "$GITHUB_WORKSPACE"/dist-packages/tcc_engine-*.whl
+          /tmp/tcc-py/bin/python -c "import tcc_engine; assert tcc_engine.PACKAGE_VERSION == '0.1.0'"
+      - name: Stage artifacts
+        run: cp target/package/*.crate dist-packages/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tcc-engine-0.1.0
+          path: dist-packages/

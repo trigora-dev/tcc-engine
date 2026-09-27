@@ -1,0 +1,55 @@
+name: release
+
+on:
+  push:
+    tags: ["v0.1.0"]
+
+jobs:
+  package:
+    uses: ./.github/workflows/package.yml
+
+  publish:
+    needs: package
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: tcc-engine-0.1.0
+          path: dist-packages
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          test -n "$CARGO_REGISTRY_TOKEN"
+          for name in tcc-ir tcc-state tcc-core tcc-host tcc-host-sqlite tcc-rust-frontend; do
+            cargo publish -p "$name"
+          done
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Publish npm packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          test -n "$NODE_AUTH_TOKEN"
+          npm publish dist-packages/tcc-engine-frontend-typescript-0.1.0.tgz
+          npm publish dist-packages/tcc-engine-bindings-javascript-0.1.0.tgz
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Publish the Python wheel
+        env:
+          TWINE_USERNAME: ${{ secrets.PYPI_USERNAME }}
+          TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
+        run: |
+          test -n "$TWINE_PASSWORD"
+          python -m pip install twine
+          twine upload dist-packages/tcc_engine-*.whl
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-packages/**

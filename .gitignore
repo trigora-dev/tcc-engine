@@ -37,6 +37,10 @@ dist-packages/
 frontends/**/dist/
 frontends/rust/npm/vendor/
 bindings/javascript/pkg/
+bindings/javascript/LICENSE
+bindings/javascript/THIRD_PARTY_LICENSES
+bindings/javascript/licenses/
+bindings/python/python/tcc_engine/_licenses/
 .pnpm-store/
 
 # Python
