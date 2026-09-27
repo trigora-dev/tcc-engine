@@ -12,7 +12,7 @@ use tcc_ir::Artifact;
 pub use lower::CompileError;
 
 /// npm package version stamped on every artifact as `frontend_version`.
-pub const PACKAGE_VERSION: &str = "0.1.0-rc.1";
+pub const PACKAGE_VERSION: &str = "0.1.0";
 
 /// Compile one Rust subset file into an artifact. `language_semantics_version` is `rust.subset.v1`.
 pub fn compile(source: &str) -> Result<Artifact, CompileError> {

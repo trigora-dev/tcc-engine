@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-export const PACKAGE_VERSION = "0.1.0-rc.1";
+export const PACKAGE_VERSION = "0.1.0";
 export const FRONTEND_IDENTITY = "rust";
 export const FRONTEND_ID = FRONTEND_IDENTITY;
 export const FRONTEND_VERSION = PACKAGE_VERSION;

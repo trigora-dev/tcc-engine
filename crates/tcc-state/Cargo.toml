@@ -1,6 +1,7 @@
 [package]
 name = "tcc-state"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2021"
-publish = false
+license = "BUSL-1.1"
+repository = "https://github.com/trigora-dev/tcc-engine"
 description = "TCC values, frames, and continuation encoding"

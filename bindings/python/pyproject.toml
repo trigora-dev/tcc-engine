@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "tcc-engine"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 description = "TCC compiler frontend and native Python engine embedding"
 requires-python = ">=3.9"
 
@@ -12,6 +12,7 @@ requires-python = ">=3.9"
 manifest-path = "../../crates/tcc-python/Cargo.toml"
 module-name = "tcc_engine._engine"
 python-source = "python"
+include = ["python/tcc_engine/_licenses/**/*"]
 
 [tool.cibuildwheel]
 build = "cp310-* cp311-* cp312-*"

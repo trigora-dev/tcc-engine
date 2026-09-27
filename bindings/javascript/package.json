@@ -1,7 +1,7 @@
 {
   "name": "@tcc-engine/bindings-javascript",
-  "version": "0.1.0-rc.1",
-  "private": true,
+  "version": "0.1.0",
+  "license": "BUSL-1.1",
   "type": "module",
   "description": "JavaScript binding for the TCC WASM engine",
   "exports": {
@@ -12,7 +12,10 @@
     "./tcc_wasm.wasm": "./dist/tcc_wasm.wasm"
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE",
+    "THIRD_PARTY_LICENSES",
+    "licenses"
   ],
   "scripts": {
     "build:wasm": "cargo build -p tcc-wasm --target wasm32-unknown-unknown --release",

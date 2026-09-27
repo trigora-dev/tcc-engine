@@ -9,7 +9,7 @@ from typing import Any
 
 from .canonical import canonical_stringify
 
-PACKAGE_VERSION = "0.1.0-rc.1"
+PACKAGE_VERSION = "0.1.0"
 ENGINE_FORMAT_VERSION = 1
 HOST_PROTOCOL_VERSION = 1
 FRONTEND_IDENTITY = "python"

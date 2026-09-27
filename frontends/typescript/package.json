@@ -1,7 +1,7 @@
 {
   "name": "@tcc-engine/frontend-typescript",
-  "version": "0.1.0-rc.1",
-  "private": true,
+  "version": "0.1.0",
+  "license": "BUSL-1.1",
   "type": "module",
   "description": "TypeScript frontend: compile supported programs into TCC artifacts",
   "exports": {
