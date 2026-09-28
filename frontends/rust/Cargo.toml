@@ -1,6 +1,6 @@
 [package]
 name = "tcc-rust-frontend"
-version = "0.1.0"
+version = "26.10.0"
 edition = "2021"
 license = "BUSL-1.1"
 repository = "https://github.com/trigora-dev/tcc-engine"
@@ -14,8 +14,8 @@ path = "src/bin/tcc-rust-compile.rs"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 sha2 = "0.10"
 syn = { version = "2", features = ["full", "visit"] }
-tcc-ir = { version = "0.1.0", path = "../../crates/tcc-ir" }
+tcc-ir = { version = "26.10.0", path = "../../crates/tcc-ir" }
 
 [dev-dependencies]
-tcc-core = { version = "0.1.0", path = "../../crates/tcc-core" }
-tcc-state = { version = "0.1.0", path = "../../crates/tcc-state" }
+tcc-core = { version = "26.10.0", path = "../../crates/tcc-core" }
+tcc-state = { version = "26.10.0", path = "../../crates/tcc-state" }

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "tcc-engine"
-version = "0.1.0"
+version = "26.10.0"
 description = "TCC compiler frontend and native Python engine embedding"
 requires-python = ">=3.9"
 

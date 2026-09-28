@@ -1,12 +1,12 @@
 [package]
 name = "tcc-host"
-version = "0.1.0"
+version = "26.10.0"
 edition = "2021"
 license = "BUSL-1.1"
 repository = "https://github.com/trigora-dev/tcc-engine"
 description = "TCC host protocol driver and Host trait"
 
 [dependencies]
-tcc-core = { version = "0.1.0", path = "../tcc-core" }
-tcc-ir = { version = "0.1.0", path = "../tcc-ir" }
-tcc-state = { version = "0.1.0", path = "../tcc-state" }
+tcc-core = { version = "26.10.0", path = "../tcc-core" }
+tcc-ir = { version = "26.10.0", path = "../tcc-ir" }
+tcc-state = { version = "26.10.0", path = "../tcc-state" }

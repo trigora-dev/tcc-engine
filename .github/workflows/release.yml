@@ -2,7 +2,7 @@ name: release
 
 on:
   push:
-    tags: ["v0.1.0"]
+    tags: ["v26.10.0"]
 
 jobs:
   package:
@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: tcc-engine-0.1.0
+          name: tcc-engine-26.10.0
           path: dist-packages
       - uses: dtolnay/rust-toolchain@stable
       - name: Publish crates
@@ -64,8 +64,8 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           test -n "$NODE_AUTH_TOKEN"
-          npm publish dist-packages/tcc-engine-frontend-typescript-0.1.0.tgz
-          npm publish dist-packages/tcc-engine-bindings-javascript-0.1.0.tgz
+          npm publish dist-packages/tcc-engine-frontend-typescript-26.10.0.tgz
+          npm publish dist-packages/tcc-engine-bindings-javascript-26.10.0.tgz
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

@@ -154,9 +154,9 @@ python -m venv .venv
 ( cd bindings/python && ../../.venv/bin/maturin build --release --out ../../dist-packages )
 ```
 
-Tarballs and wheels land in `dist-packages/`. Install them elsewhere with `npm install ./tcc-engine-….tgz` and `pip install ./tcc_engine-….whl`. `@tcc-engine/frontend-rust` is the platform binary of `tcc-rust-compile` plus `compile()`, version `0.1.0-rc.1`, which is the artifact `frontend_version`. Pin that tarball the same way as the TypeScript frontend. The pack is built for the machine that ran `pnpm pack:js`. The JS binding’s `loadEngine()` uses the WASM file inside that package; do not pass a `target/…/tcc_wasm.wasm` path. The Node host needs Node 22 and `--experimental-sqlite`.
+Tarballs and wheels land in `dist-packages/`. Install them elsewhere with `npm install ./tcc-engine-….tgz` and `pip install ./tcc_engine-….whl`. `@tcc-engine/frontend-rust` is the platform binary of `tcc-rust-compile` plus `compile()`. The private npm package version is `0.1.0-rc.1`; the artifact `frontend_version` follows `PACKAGE_VERSION` (`26.10.0`). Pin that tarball the same way as the TypeScript frontend. The pack is built for the machine that ran `pnpm pack:js`. The JS binding’s `loadEngine()` uses the WASM file inside that package; do not pass a `target/…/tcc_wasm.wasm` path. The Node host needs Node 22 and `--experimental-sqlite`.
 
-Portable manylinux/macOS wheels use cibuildwheel against `bindings/python/pyproject.toml`. Do not `npm publish` or upload to PyPI until the public `v0.1.0` cut.
+Portable manylinux/macOS wheels use cibuildwheel against `bindings/python/pyproject.toml`. Do not `npm publish` or upload to PyPI until the public `v26.10.0` cut.
 
 ## Development
 
