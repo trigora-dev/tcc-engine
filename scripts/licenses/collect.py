@@ -92,7 +92,21 @@ def crate_names(package: dict) -> set[str]:
 
 
 def symbol_text(binary: Path) -> str:
-    for cmd in (["nm", str(binary)], ["llvm-nm", str(binary)], ["strings", str(binary)]):
+    commands: list[list[str]] = []
+    sysroot = run(["rustc", "--print", "sysroot"], binary.parent)
+    if sysroot.returncode == 0:
+        root = Path(sysroot.stdout.strip())
+        commands.extend(
+            [str(tool), str(binary)] for tool in sorted(root.glob("lib/rustlib/*/bin/llvm-nm*"))
+        )
+    commands.extend(
+        (
+            ["llvm-nm", str(binary)],
+            ["nm", str(binary)],
+            ["strings", str(binary)],
+        )
+    )
+    for cmd in commands:
         result = run(cmd, binary.parent)
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout

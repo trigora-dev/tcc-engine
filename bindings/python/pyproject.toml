@@ -20,5 +20,11 @@ skip = "pp* *-win32 *-musllinux_*"
 build-frontend = "build"
 
 [tool.cibuildwheel.linux]
-before-all = "curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal"
+before-all = "curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal && . \"$HOME/.cargo/env\" && bash ../../scripts/licenses/prepare-wheel.sh"
 environment = { PATH = "$HOME/.cargo/bin:$PATH", CARGO_TERM_COLOR = "always" }
+
+[tool.cibuildwheel.macos]
+before-all = "bash ../../scripts/licenses/prepare-wheel.sh"
+
+[tool.cibuildwheel.windows]
+before-all = "bash ../../scripts/licenses/prepare-wheel.sh"
