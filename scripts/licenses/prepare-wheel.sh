@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Trigora, Inc.
+# SPDX-License-Identifier: BUSL-1.1
+# See LICENSE for full terms.
+
 # Build the Python engine and write this platform's license notices before the wheel is packed.
 set -euo pipefail
 

@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 use std::collections::BTreeMap;
 
 /// TypeScript-subset runtime values. JavaScript `number` is IEEE-754 f64.

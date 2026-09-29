@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 /**
  * Internal packing-policy sweep. Not a public claim surface.
  *

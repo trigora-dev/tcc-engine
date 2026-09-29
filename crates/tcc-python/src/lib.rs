@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 //! Native Python embedding of the TCC core.
 //!
 //! JSON crosses the boundary the same way as the WASM C ABI. This crate does

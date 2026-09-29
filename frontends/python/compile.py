@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Trigora, Inc.
+# SPDX-License-Identifier: BUSL-1.1
+# See LICENSE for full terms.
+
 """TypeScript frontend sources now live in this tree for development tests.
 
 The installable package is `tcc_engine` (see `bindings/python`).

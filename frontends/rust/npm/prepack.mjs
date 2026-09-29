@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 import { chmodSync, copyFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

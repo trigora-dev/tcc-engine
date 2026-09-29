@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Trigora, Inc.
+# SPDX-License-Identifier: BUSL-1.1
+# See LICENSE for full terms.
+
 from crash import maybe_crash
 from tcc_engine.host import (
     encode_value,

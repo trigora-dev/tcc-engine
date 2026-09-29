@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Trigora, Inc.
+# SPDX-License-Identifier: BUSL-1.1
+# See LICENSE for full terms.
+
 """Semantic continuation deltas. Reconstruction is host packing, not instruction replay."""
 
 from __future__ import annotations

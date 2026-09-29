@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 //! Internal native micro-profile: `cargo run -p tcc-state --release --example profile_diff`.
 use std::hint::black_box;
 use std::time::Instant;

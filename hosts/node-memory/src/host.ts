@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 import { EngineBinding, loadEngine, type Outcome } from "../../../bindings/javascript/src/index.ts";
 
 export type FakeEffects = Record<string, unknown>;

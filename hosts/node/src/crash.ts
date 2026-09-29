@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 export function maybeCrash(hook: string, detail?: string): void {
   const want = process.env.TCC_CRASH_AT;
   if (!want) {

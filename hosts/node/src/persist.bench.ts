@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 /**
  * Internal engineering persist benches (tuning / micro / adversarial).
  * Not the public claim surface — use `pnpm bench` instead.

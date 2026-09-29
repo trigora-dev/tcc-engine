@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 //! Drive one artifact JSON blob the way the ordinary-corpus scorer does.
 //! Stdin is `{ "artifact", "args", "effects", "events", "child" }`. Stdout is the tagged result.
 

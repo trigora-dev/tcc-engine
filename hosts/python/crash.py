@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Trigora, Inc.
+# SPDX-License-Identifier: BUSL-1.1
+# See LICENSE for full terms.
+
 from __future__ import annotations
 
 import os

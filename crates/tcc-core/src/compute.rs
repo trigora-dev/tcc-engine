@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 //! Language-specific arithmetic. Unsupported mixes are type errors.
 //! Python divide-by-zero and out-of-range indexes raise; they do not become
 //! non-finite numbers.

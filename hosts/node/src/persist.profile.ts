@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 /** Internal sequential persistence profile; run with Node's SQLite and strip-types flags. */
 import { ensureEngineLoaded, runOnStore, type PersistProfile } from "./host.ts";
 import { Store, type PersistMode } from "./store.ts";

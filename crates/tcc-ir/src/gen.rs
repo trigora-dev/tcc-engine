@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 //! Bounded valid-IR generator for differential tests. Not a public fuzzer.
 
 use crate::artifact::{Artifact, Envelope, FuncId, Function, LocalId, Pc, Program};

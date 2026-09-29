@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 //! Owned Rust subset. Compounds move, `f64` and `bool` copy, and references are rejected.
 //!
 //! `cargo check` against the prelude owns move checking. This walk emits the

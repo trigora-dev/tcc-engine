@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 //! Continuation-local collections.
 //!
 //! Locals, the operand stack, and cells hold [`Value::Ref`]. Assignment copies

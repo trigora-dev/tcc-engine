@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 import { appendFileSync } from "node:fs";
 
 import { EngineBinding, loadEngine, type Outcome } from "@tcc-engine/bindings-javascript";

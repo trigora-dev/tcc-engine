@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, mkdtempSync } from "node:fs";

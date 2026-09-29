@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 import assert from "node:assert/strict";
 import { mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";

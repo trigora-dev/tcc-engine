@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Trigora, Inc.
+# SPDX-License-Identifier: BUSL-1.1
+# See LICENSE for full terms.
+
 """Internal engineering persist benches. Not the public claim surface.
 
 Use `python bench/python/run.py` for the documented public suite.

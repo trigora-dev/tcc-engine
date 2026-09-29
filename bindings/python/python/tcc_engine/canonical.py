@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Trigora, Inc.
+# SPDX-License-Identifier: BUSL-1.1
+# See LICENSE for full terms.
+
 """Canonical JSON matching `tcc_ir` BTreeMap stringify and the TypeScript frontend."""
 
 import math

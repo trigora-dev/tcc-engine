@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 import { DatabaseSync } from "node:sqlite";
 
 import { emitHostEvent, type HostEventInput, type HostObserver } from "./observe.ts";

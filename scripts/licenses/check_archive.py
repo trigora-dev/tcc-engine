@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Trigora, Inc.
+# SPDX-License-Identifier: BUSL-1.1
+# See LICENSE for full terms.
+
 """Fail when a packed TCC Engine artifact is missing its own license bundle."""
 
 from __future__ import annotations

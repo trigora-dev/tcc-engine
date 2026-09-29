@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Trigora, Inc.
+# SPDX-License-Identifier: BUSL-1.1
+# See LICENSE for full terms.
+
 """Write THIRD_PARTY_LICENSES for the binaries one artifact redistributes.
 
 cargo deny is the license policy. The crate list is the names that appear in

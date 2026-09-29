@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 //! Host protocol driver. Persistence, effects, and scheduling stay in the host.
 
 #![allow(clippy::derive_partial_eq_without_eq)]

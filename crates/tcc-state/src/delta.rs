@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 //! Semantic continuation deltas used as persist intent.
 //!
 //! Deltas name changed continuation fields; they are not a byte-diff of JSON.

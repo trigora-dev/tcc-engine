@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 import { readFileSync } from "node:fs";
 
 export const HOST_ENGINE_VERSION = (

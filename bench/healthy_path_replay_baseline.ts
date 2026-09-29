@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 import { ensureEngineLoaded, runBatchOnStore, runOnStore } from "../hosts/node/src/host.ts";
 import { Store, type PersistMode } from "../hosts/node/src/store.ts";
 import { buildMeta, printReport } from "./lib/report.ts";

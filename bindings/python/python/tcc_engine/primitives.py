@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Trigora, Inc.
+# SPDX-License-Identifier: BUSL-1.1
+# See LICENSE for full terms.
+
 """Compiler intrinsics for TCC durable operations. Compile with tcc_engine.compile; do not call at runtime."""
 
 from __future__ import annotations

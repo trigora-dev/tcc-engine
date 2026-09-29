@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 /** Public bench scale. Set TCC_BENCH_SCALE=quick for smoke runs. */
 
 export type BenchScale = {

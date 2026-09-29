@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 /** Canonical JSON with sorted keys, matching `tcc_ir` BTreeMap stringify (no spaces). */
 export function canonicalStringify(value: unknown): string {
   return write(value);

@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 //! SQLite host. It commits continuation snapshots and durable rows.
 //! The caller injects effects and decides when a ready child or due timer runs.
 

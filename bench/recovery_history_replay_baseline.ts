@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 /**
  * Matched recovery: TCC continuation reconstruct vs history-replay prefix replay.
  *

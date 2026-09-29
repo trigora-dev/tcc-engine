@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 /// Engine-consumable artifact format version. Bump when the envelope or instruction
 /// encoding changes in a way that existing engines cannot execute.
 pub const ENGINE_FORMAT_VERSION: u32 = 1;

@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 //! Types and durable operations for `cargo check` of the Rust subset.
 //!
 //! The lowerer recognizes the call syntax. These bodies exist so rustc can

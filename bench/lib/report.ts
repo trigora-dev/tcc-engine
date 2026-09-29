@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { arch, cpus, platform, release, totalmem } from "node:os";

@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 /** Mirrors `tcc-ir` engine features. Unknown required features are rejected by the engine. */
 export type EngineFeature =
   | "ts.control_flow"

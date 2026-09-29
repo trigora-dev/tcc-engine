@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 use tcc_state::{ContinuationDelta, PersistKind, Value};
 
 /// Host request/response JSON version. Required on every encoded message.

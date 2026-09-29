@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 use std::collections::HashMap;
 
 /// `TCC_CRASH_AT` match. `hook`, `hook:n` (1-based), or `hook:detail`.

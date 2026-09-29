@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 use tcc_state::json::Json;
 use tcc_state::{continuation_delta_to_json, decode_value, encode_value, Value};
 

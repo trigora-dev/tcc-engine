@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 //! Backward liveness of function-level local slots.
 //!
 //! Used by `tcc-core` at persist time so dead slots become `undefined` in place.

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Trigora, Inc.
+# SPDX-License-Identifier: BUSL-1.1
+# See LICENSE for full terms.
+
 """Stage a self-contained tree so cibuildwheel can see the Cargo workspace.
 
 cibuildwheel copies only the directory it is pointed at. The Python project

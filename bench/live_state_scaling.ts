@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Trigora, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+// See LICENSE for full terms.
+
 import { Store } from "../hosts/node/src/store.ts";
 import { buildMeta, printReport } from "./lib/report.ts";
 import { benchScale } from "./lib/scale.ts";

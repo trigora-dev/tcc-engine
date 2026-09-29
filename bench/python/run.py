@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Trigora, Inc.
+# SPDX-License-Identifier: BUSL-1.1
+# See LICENSE for full terms.
+
 """Public Python mirror of the Node persistence benchmark suite.
 
 Same scenario names and JSON field shapes as `bench/run.ts`.
