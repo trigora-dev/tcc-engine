@@ -42,7 +42,7 @@ jobs:
       - run: TCC_BENCH_SCALE=quick pnpm bench
       - uses: actions/upload-artifact@v4
         with:
-          name: engine-packages-0.1.0-rc.1
+          name: engine-packages-26.10.0
           path: dist-packages/*
 
   arm:
