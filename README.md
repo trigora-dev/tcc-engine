@@ -1,8 +1,14 @@
+<p align="center">
+  <img src="https://trigora.dev/tcc-banner.png" alt="TCC Engine — Portable durable execution without history replay" width="100%" />
+</p>
+
 # TCC Engine
 
-A portable compiler and runtime for recovering programs from committed continuation state.
+**A portable compiler and runtime for durable execution from committed continuation state.**
 
 TCC—Transparent Continuation Checkpointing—records the program position and live values needed to continue execution. After a failure, a runtime restores that continuation and resumes without re-executing the completed prefix.
+
+TCC Engine `26.10.0` is the first public CalVer release of the portable engine.
 
 TCC Engine is the portable execution engine underlying [Trigora](https://trigora.dev). You can embed it directly for development, testing, evaluation, and other uses permitted by the license, or use Trigora for a managed production runtime.
 
@@ -10,58 +16,21 @@ The core is Rust. It builds natively and to WebAssembly. A host supplies persist
 
 ## Two paths
 
-**Use Trigora** when you want the product surface: SDK, CLI, and a managed production runtime. Start at [trigora.dev](https://trigora.dev).
+**Use Trigora** when you want the product surface: language authoring packages, the CLI, and a managed production runtime. Start at [trigora.dev](https://trigora.dev).
 
-**Embed TCC Engine** when you want the compiler, native/WASM binding, and a reference SQLite host in your own process. Guide: [docs/embed.md](docs/embed.md).
+**Embed TCC Engine** when you want the compiler and the native or WebAssembly binding in your own process. A host you write uses the published host crates. Guide: [docs/embed.md](docs/embed.md).
 
-```mermaid
-flowchart TD
-  subgraph authoring["Authoring Surface"]
-    direction TB
+The reference host is embeddable infrastructure, not a complete service: your process supplies effects, events, timers, and resume.
 
-    srcTS["TS source"]
-    srcPy["Python source"]
+## Authoring
 
-    primTS["@tcc-engine/primitives"]
-    sdkTS["@trigora/sdk"]
-    primPy["tcc_engine.primitives"]
-    sdkPy["trigora"]
+Trigora spelling compiles to the same durable operations as the engine-native imports.
 
-    srcTS --> primTS
-    srcTS --> sdkTS
-    srcPy --> primPy
-    srcPy --> sdkPy
-  end
-
-  subgraph engine["Portable TCC Engine"]
-    direction TB
-
-    fe["language frontend"]
-    art["TCC artifact"]
-    bind["native / WASM binding"]
-
-    fe --> art --> bind
-  end
-
-  subgraph hosting["Host / Integration"]
-    direction TB
-
-    host["reference host (SQLite)"]
-    app["caller integration"]
-    duties["effects / events / timers / resume"]
-
-    host --> app --> duties
-  end
-
-  primTS --> fe
-  sdkTS --> fe
-  primPy --> fe
-  sdkPy --> fe
-
-  bind --> host
-```
-
-Engine-native authoring is `@tcc-engine/primitives` / `tcc_engine.primitives`. Trigora authoring (`@trigora/sdk` / `trigora`) compiles to the same durable operations. The reference host is embeddable infrastructure, not a complete service: your process supplies effects, events, timers, and resume.
+| Language | Durable operations |
+|---|---|
+| [TypeScript](https://github.com/trigora-dev/trigora-typescript) | `@tcc-engine/primitives` or `@trigora/sdk` |
+| [Python](https://github.com/trigora-dev/trigora-python) | `tcc_engine.primitives` or `trigora` |
+| [Rust](https://github.com/trigora-dev/trigora-rust) | `tcc_rust_prelude` or `trigora` |
 
 ## How it works
 
@@ -76,38 +45,58 @@ Recovery loads the latest committed continuation.
 - A continuation is valid only with the artifact that produced it. The engine does not migrate executions onto incompatible code.
 - Restore cost depends on continuation size and the host's persistence implementation. It is not specified as constant-time.
 - An external operation may succeed before its result is committed. Ambiguous outcomes are represented explicitly; idempotency is the provider's and the application's responsibility.
-- Supported language constructs are those accepted by a frontend. Arbitrary TypeScript, Python, or third-party libraries are not implied.
+- Supported language constructs are those accepted by a frontend. Arbitrary TypeScript, Python, Rust, or third-party libraries are not implied.
 - Persistence, wakeup, and fencing guarantees are properties of the host.
 
 ## Host protocol and conformance
 
 A custom host talks [host protocol v1](spec/host-protocol.md) to the binding. It does not need the reference SQLite hosts or Trigora.
 
-[Host conformance v1](spec/host-conformance-v1.md) is a named claim: protocol versioning, artifact pinning, reconstruct goldens in [`spec/fixtures/persist/`](spec/fixtures/persist/), and SIGKILL recovery at documented crash hooks. The kit is a generic runner plus host drivers. Semantic cases wrap the Node and Python SQLite adapters in this repository; a third-party host implements the same driver contract.
+[Host conformance v1](spec/host-conformance-v1.md) is a named claim: protocol versioning, artifact pinning, continuation reconstruction, and recovery after process termination at documented crash hooks. The kit is a generic runner plus host drivers. Semantic cases wrap the Node and Python SQLite adapters in this repository; a third-party host implements the same driver contract.
 
-## This repository
+## Install
 
-This repository is the engine, its specifications, compiler frontends, embeddings, reference hosts, and conformance kit.
+### TypeScript
 
-Use it to:
+```sh
+npm install @tcc-engine/frontend-typescript @tcc-engine/bindings-javascript
+```
 
-- Read the execution model
-- Embed the engine
-- Implement a host
-- Implement a language frontend
+`@tcc-engine/bindings-javascript` loads the engine through WebAssembly.
 
-## Layout
+### Python
+
+```sh
+pip install tcc-engine
+```
+
+`tcc-engine` includes the Python frontend, `tcc_engine.primitives`, and a SQLite host.
+
+### Rust
+
+```sh
+cargo add tcc-ir tcc-state tcc-core tcc-host tcc-host-sqlite tcc-rust-frontend
+```
+
+`tcc-rust-frontend` compiles Rust programs. A host you embed uses `tcc-host` and, for SQLite, `tcc-host-sqlite`.
+
+The repository also contains workspace packages used by the TypeScript authoring frontend and Node reference host.
+
+## Repository structure
+
+This repository is the engine, its specifications, compiler frontends, embeddings, reference hosts, and conformance kit. Use it to read the execution model, embed the engine, implement a host, or implement a language frontend.
 
 | Path | Role |
 |---|---|
-| `primitives/` | Engine-native TypeScript authoring package (`@tcc-engine/primitives`) |
+| `primitives/` | TypeScript authoring workspace package |
 | `crates/tcc-ir` | Program representation and validation |
 | `crates/tcc-state` | Values and continuation encoding |
 | `crates/tcc-core` | Execution |
 | `crates/tcc-host` | Host protocol types and driver |
+| `crates/tcc-host-sqlite` | SQLite host |
 | `crates/tcc-wasm` | WebAssembly exports |
 | `crates/tcc-python` | Native Python (PyO3) embedding |
-| `frontends/` | Language frontends |
+| `frontends/` | TypeScript, Python, and Rust frontends |
 | `bindings/` | Language embeddings of the engine |
 | `hosts/` | Reference hosts |
 | `conformance/` | Host conformance v1 kit |
@@ -116,47 +105,6 @@ Use it to:
 A frontend compiles source to a TCC artifact. A binding loads the engine in a host language. They are not the same thing.
 
 The execution core does not depend on a particular database, cloud provider, or SDK. WASM is a delivery and conformance target for that core, not TCC itself. Native embedding is the other path. The WASM target is `wasm32-unknown-unknown` and does not use WASI networking, filesystems, or threads.
-
-## Status
-
-The repository is under development. Present:
-
-- Artifact envelope and validation
-- Continuation encoding
-- Host protocol v1 and host-conformance-v1
-- Stepper, objects, arrays, control flow, exceptions, timers, cancellation, and child invoke
-- TypeScript frontend: `@tcc-engine/primitives` and `@trigora/sdk` (`effect`, `waitForEvent`, `sleep`, `invoke`)
-- Python frontend: `tcc_engine.primitives` and `trigora` (`effect`, `wait_for_event`, `sleep`, `invoke`, `gather`, `race`)
-- WASM C ABI, JavaScript binding, and an in-memory Node host
-- Native PyO3 binding and SQLite Node/Python reference hosts
-- Local `0.1.0-rc.1` npm packs and a Python wheel (not published to a registry)
-
-Not present: a public engine registry release or a LICENSE file.
-
-## Local packages (no Rust on the consumer)
-
-Packaged compilers, primitives, the JS engine binding (with bundled WASM), the Node host, and the Python wheel so another repo can pin **local tarballs/wheels**.
-
-```text
-primitives  @tcc-engine/primitives           /  tcc_engine.primitives
-compiler    @tcc-engine/frontend-typescript  /  tcc_engine.compile  /  @tcc-engine/frontend-rust
-binding     @tcc-engine/bindings-javascript  /  tcc_engine.EngineBinding
-host        @tcc-engine/host-node            /  tcc_engine.host
-```
-
-Build packs and a wheel from this checkout:
-
-```sh
-pnpm install
-pnpm pack:js
-python -m venv .venv
-.venv/bin/pip install maturin
-( cd bindings/python && ../../.venv/bin/maturin build --release --out ../../dist-packages )
-```
-
-Tarballs and wheels land in `dist-packages/`. Install them elsewhere with `npm install ./tcc-engine-….tgz` and `pip install ./tcc_engine-….whl`. `@tcc-engine/frontend-rust` is the platform binary of `tcc-rust-compile` plus `compile()`. The private npm package version is `0.1.0-rc.1`; the artifact `frontend_version` follows `PACKAGE_VERSION` (`26.10.0`). Pin that tarball the same way as the TypeScript frontend. The pack is built for the machine that ran `pnpm pack:js`. The JS binding’s `loadEngine()` uses the WASM file inside that package; do not pass a `target/…/tcc_wasm.wasm` path. The Node host needs Node 22 and `--experimental-sqlite`.
-
-Portable manylinux/macOS wheels use cibuildwheel against `bindings/python/pyproject.toml`. Do not `npm publish` or upload to PyPI until the public `v26.10.0` cut.
 
 ## Development
 
@@ -191,14 +139,29 @@ python -m venv .venv
 - [Execution semantics](spec/execution-semantics.md)
 - [TypeScript subset](spec/typescript-subset.md)
 - [Python subset](spec/python-subset.md)
+- [Rust subset](spec/rust-subset.md)
 - [First example](spec/examples/first.md)
 - [First example (Python)](spec/examples/first-python.md)
+- [First example (Rust)](spec/examples/first-rust.md)
 - [Continuation format](spec/continuation-format.md)
 - [Compatibility](spec/compatibility.md)
 
 ## Links
 
-- [trigora.dev](https://trigora.dev)
-- [SDK and CLI](https://github.com/trigora-dev/trigora)
-- [Recovery demo](https://demo.trigora.dev)
-- [Embed TCC Engine](docs/embed.md)
+- **Website:** [trigora.dev](https://trigora.dev)
+- **Cloud:** [cloud.trigora.dev](https://cloud.trigora.dev)
+- **Docs:** [trigora.dev/docs](https://trigora.dev/docs)
+- **Research:** [trigora.dev/research](https://trigora.dev/research)
+- **GitHub:** [github.com/trigora-dev/trigora](https://github.com/trigora-dev/trigora)
+
+## License
+
+TCC Engine is licensed under the **Business Source License 1.1 (BUSL-1.1)**.
+
+Production use is permitted under the Additional Use Grant subject to the license terms. Competitive hosted or embedded execution offerings may require a commercial license.
+
+Each release converts to **Apache License 2.0** on its Change Date.
+
+See [LICENSE](LICENSE) for the full terms.
+
+For commercial licensing: [licensing@trigora.dev](mailto:licensing@trigora.dev)

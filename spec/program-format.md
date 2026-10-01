@@ -114,4 +114,4 @@ In this repository, validation is `tcc_ir::validate`. `tcc_ir::encode_artifact` 
 
 ## Current coverage
 
-Format version `1` is shared by `ts.subset.v1`, `py.subset.v1`, and `rust.subset.v1`. Control, locals, constants, objects, arrays, comparisons, exceptions, and durable-operation instructions are defined. `Call` is encoded in the format and is not executed. Supported source languages are [TypeScript subset](typescript-subset.md), [Python subset](python-subset.md), and [Rust subset](rust-subset.md). First examples: [TypeScript](examples/first.md), [Python](examples/first-python.md).
+Format version `1` is shared by `ts.subset.v1`, `py.subset.v1`, and `rust.subset.v1`. Control, locals, constants, objects, arrays, comparisons, exceptions, and durable-operation instructions are defined. `Call` is encoded in the format and is not executed. Supported source languages are [TypeScript subset](typescript-subset.md), [Python subset](python-subset.md), and [Rust subset](rust-subset.md). First examples: [TypeScript](examples/first.md), [Python](examples/first-python.md), [Rust](examples/first-rust.md).

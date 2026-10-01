@@ -1,27 +1,23 @@
 # Embed TCC Engine
 
-Compile a supported program, run it on a reference SQLite host with your own effects, kill the process, and resume from the same database. There is no CLI or managed runtime in this path.
+Compile a supported program, run it with persistent storage, stop the process, and resume from the committed continuation.
 
-The reference host is a library, not a service. It does not provide a control plane, autoscaling, fleet management, or operational guarantees.
+A host you write is the integration path. It talks to the published binding or to `tcc-host`. The Node SQLite host in this repository is a reference host for local recovery. It is not the production integration path.
 
-## Packages
+## Install
 
-**Node** (Node 22, `--experimental-sqlite`):
-
-```text
-@tcc-engine/primitives
-@tcc-engine/frontend-typescript
-@tcc-engine/bindings-javascript
-@tcc-engine/host-node
+```sh
+npm install @tcc-engine/frontend-typescript @tcc-engine/bindings-javascript
+pip install tcc-engine
 ```
 
-**Python:** one `tcc-engine` wheel. Author with `tcc_engine.primitives`. Embed with `compile`, `EngineBinding`, `Store`, `start_execution`, `resume_execution`.
+From crates.io: `tcc-host`, `tcc-host-sqlite`, `tcc-rust-frontend`, and the engine crates `tcc-ir`, `tcc-state`, and `tcc-core`.
 
-Local tarballs and wheels: see the root README. Packs are not on a public registry yet.
+The `tcc-engine` wheel includes `compile`, `tcc_engine.primitives`, and a SQLite host. `tcc-rust-frontend` compiles Rust programs. `@tcc-engine/bindings-javascript` loads the engine through WebAssembly.
+
+The repository also contains workspace packages used by the TypeScript authoring frontend and Node reference host.
 
 ## Authoring
-
-Engine-native spelling (canonical for embedders):
 
 ```ts
 import { effect, waitForEvent } from "@tcc-engine/primitives";
@@ -45,11 +41,63 @@ async def research():
     return {"result": result, "approval": approval}
 ```
 
-Trigora spelling (`@trigora/sdk` / `trigora`) is still accepted and lowers to the same artifact. A locally declared `function effect` is not durable. Effect callbacks are not compiled; the host answers by string-literal key.
+```rust
+use tcc_rust_prelude::{effect, wait_for_event};
 
-Supported source is the [TypeScript](../spec/typescript-subset.md) and [Python](../spec/python-subset.md) subsets. Arbitrary libraries do not run inside the engine.
+pub async fn main() -> Result<f64, String> {
+    let result: f64 = effect("generate", || 42.0).await?;
+    let _approval: String = wait_for_event("approved").await?;
+    Ok(result)
+}
+```
 
-## Node: compile, start, resume
+Trigora spelling (`@trigora/sdk` / `trigora`) lowers to the same artifact. A locally declared `function effect` is not durable. Effect callbacks are not compiled; the host answers by string-literal key.
+
+Supported source is the [TypeScript](../spec/typescript-subset.md), [Python](../spec/python-subset.md), and [Rust](../spec/rust-subset.md) subsets. Arbitrary libraries do not run inside the engine.
+
+## Python
+
+```python
+from tcc_engine import compile, start_execution, resume_execution
+from tcc_engine.compile import artifact_json
+
+artifact = compile(source, filename="first.py")
+
+def run_effect(key: str):
+    if key != "generate":
+        raise RuntimeError(key)
+    return 42
+
+started = start_execution(
+    db_path="./state.db",
+    artifact_json=artifact_json(artifact),
+    run_effect=run_effect,
+    auto_deliver_event=False,
+)
+
+resumed = resume_execution(
+    db_path="./state.db",
+    run_effect=run_effect,
+    event_payload="ok",
+    auto_deliver_event=False,
+)
+```
+
+`Store` and `run_on_store` are the shared-database path. Import authoring names from `tcc_engine.primitives`. Embedding APIs (`compile`, `Store`, `EngineBinding`) stay on `tcc_engine`.
+
+If you pass `event_payload` and leave `auto_deliver_event` at its default (`true`), the host may deliver that event before returning. Set `auto_deliver_event` to `false` and deliver events, timers, child results, and cancellation from your process by calling `resume_execution`.
+
+Stop the process after `start_execution` has committed. `resume_execution` on the same database loads the last committed continuation and the artifact stored under `artifact.hash`.
+
+## Custom hosts
+
+Implement [host protocol v1](../spec/host-protocol.md) against `EngineBinding`, or against `tcc-host` and `tcc-host-sqlite`. Persist continuations, the effect journal, waits, timers, children, and artifact blobs. Reply `persist_confirmed` only after commit. Resume the stored artifact, not whatever source is currently compiled.
+
+[Host conformance v1](../spec/host-conformance-v1.md) and the reconstruct goldens in [`spec/fixtures/persist/`](../spec/fixtures/persist/) are the correctness target. Implement `HostConformanceDriver` (`applyDelta`, `start`, `crashAt`, `resume`, `readContinuation`, `effectLog`) and run [`conformance/runner.ts`](../conformance/runner.ts) with `--driver`. This repository includes Node and Python SQLite reference hosts. A host you write implements the same contract.
+
+## Node reference host
+
+The Node SQLite host in `hosts/node` is a reference host in this repository. Use it to exercise compile, kill, and resume locally. A production integration implements the host protocol against `@tcc-engine/bindings-javascript` or `tcc-host`.
 
 ```ts
 import { compile } from "@tcc-engine/frontend-typescript";
@@ -84,50 +132,14 @@ const resumed = await resumeExecution({
 });
 ```
 
-`runEffect` is `(key: string) => unknown`. There is no `Host` class.
+`runEffect` is `(key: string) => unknown`.
 
 For a shared database, construct a `Store` and call `runOnStore(store, options)` (or `runBatchOnStore` for coordinated waves). `startExecution` opens `dbPath` and closes it when the drive returns.
 
-`autoDeliverEvent` defaults to `true` as a test convenience: if you pass `eventPayload`, the host may deliver it before returning. For a real integration, set `autoDeliverEvent: false` and deliver events, timers, child results, and cancel from your process by calling `resumeExecution`.
+If you pass `eventPayload` and leave `autoDeliverEvent` at its default (`true`), the reference host may deliver that event before returning. Set `autoDeliverEvent` to `false` and deliver events, timers, child results, and cancellation from your process by calling `resumeExecution`.
 
-Kill the process after `startExecution` has committed; `resumeExecution` on the same `dbPath` loads the last committed continuation and the artifact stored under `artifact.hash`.
-
-## Python: compile, start, resume
-
-```python
-from tcc_engine import compile, start_execution, resume_execution
-from tcc_engine.compile import artifact_json
-
-artifact = compile(source, filename="first.py")
-
-def run_effect(key: str):
-    if key != "generate":
-        raise RuntimeError(key)
-    return 42
-
-started = start_execution(
-    db_path="./state.db",
-    artifact_json=artifact_json(artifact),
-    run_effect=run_effect,
-    auto_deliver_event=False,
-)
-
-resumed = resume_execution(
-    db_path="./state.db",
-    run_effect=run_effect,
-    event_payload="ok",
-    auto_deliver_event=False,
-)
-```
-
-`Store` and `run_on_store` are the shared-database path. Do not import authoring names from `tcc_engine` itself: use `tcc_engine.primitives`.
-
-## Custom hosts
-
-Implement [host protocol v1](../spec/host-protocol.md) against `EngineBinding`. Persist continuations, the effect journal, waits, timers, children, and artifact blobs. Reply `persist_confirmed` only after commit. Resume the stored artifact, not whatever source is currently compiled.
-
-[Host conformance v1](../spec/host-conformance-v1.md) and the reconstruct goldens in [`spec/fixtures/persist/`](../spec/fixtures/persist/) are the correctness target. Implement `HostConformanceDriver` (`applyDelta`, `start`, `crashAt`, `resume`, `readContinuation`, `effectLog`) and run [`conformance/runner.ts`](../conformance/runner.ts) with `--driver`. This repository ships Node and Python SQLite adapters; a Postgres host would implement the same contract. There is no `createPostgresHost()` helper.
+Stop the process after `startExecution` has committed. `resumeExecution` on the same `dbPath` loads the last committed continuation and the artifact stored under `artifact.hash`. The reference host needs Node 22 and `--experimental-sqlite`.
 
 ## What this path does not include
 
-No Docker production server, Kubernetes operator, HA cluster, distributed scheduler, or admin UI. Those belong to a managed or commercially licensed production offering, not the reference library.
+This library does not include a production server, a cluster scheduler, or an admin UI. Those belong to a managed runtime. The reference host does not provide a control plane, autoscaling, or fleet management.

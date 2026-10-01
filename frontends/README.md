@@ -8,7 +8,7 @@ A frontend compiles a source language into a TCC program artifact. It is not a b
 | Binding | Embed and control the engine from a host language |
 | Host | Persistence, effects, events, scheduling |
 
-A Python frontend and a Python binding are different components. This tree has TypeScript at `frontends/typescript` (`ts.subset.v1`), Python at `frontends/python` (`py.subset.v1`), and Rust at `frontends/rust` (`rust.subset.v1`). The installable Python frontend ships inside the `tcc-engine` wheel as `tcc_engine.compile`. The installable Rust frontend ships as the `@tcc-engine/frontend-rust` npm pack (`frontends/rust/npm`), which vendors `tcc-rust-compile` for the platform that built it. Further languages belong in `frontends/<language>/`.
+A Python frontend and a Python binding are different components. This tree has TypeScript at `frontends/typescript` (`ts.subset.v1`), Python at `frontends/python` (`py.subset.v1`), and Rust at `frontends/rust` (`rust.subset.v1`). The Python frontend ships inside the `tcc-engine` wheel as `tcc_engine.compile`. The Rust frontend ships on crates.io as `tcc-rust-frontend`. Further languages belong in `frontends/<language>/`.
 
 ## Artifact
 
@@ -33,7 +33,7 @@ The TypeScript frontend implements `ts.subset.v1`. The Python frontend implement
 
 Arbitrary packages do not run inside the Rust/WASM engine. Supported libraries need compilation or runtime support. External operations need an explicit **host capability** (effects, HTTP, timers). Unsupported constructs are compile errors.
 
-Durable operations are resolved imports. Engine-native spelling is `@tcc-engine/primitives` / `tcc_engine.primitives`. Trigora spelling (`@trigora/sdk` / `trigora`) is also accepted and lowers to the same instructions.
+Durable operations are resolved imports. Engine-native spelling is `@tcc-engine/primitives`, `tcc_engine.primitives`, and `tcc_rust_prelude`. Trigora spelling (`@trigora/sdk` / `trigora`) is also accepted and lowers to the same instructions.
 
 ## Adding a frontend
 

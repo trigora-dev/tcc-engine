@@ -1,8 +1,8 @@
 # Persistence benchmarks
 
-These benchmarks characterize the portable TCC engine on the local host. They are not the research-prototype measurements and do not represent a hosted service.
+These benchmarks measure the portable TCC engine on the local reference host.
 
-## Public suite (canonical: Node / WASM)
+## Suite (Node / WebAssembly)
 
 Build the release WASM once, then run. Benches do not rebuild it; they fail if the artifact is missing.
 
@@ -13,7 +13,7 @@ pnpm bench:persistence     # healthy path + group commit + replay baseline
 pnpm bench:recovery        # history depth + vs-replay + live-state + WAL isolation
 ```
 
-Optional targeted aliases (contributors / CI):
+Targeted runs:
 
 ```bash
 pnpm bench:persistence:healthy
@@ -47,9 +47,9 @@ In `concurrency_group_commit`, `concurrency` is the number of in-flight executio
 
 Healthy-path workloads: A has one effect-result local with no reassignment; B creates eight locals with no reassignment; C creates four locals and reassigns each once; D creates one local and reassigns it three times. `deltaPayloadShare` is delta payload bytes divided by all persisted checkpoint payload bytes. It is not a live-value mutation fraction. `executionsPerSec` counts completed executions, and persistence accounting excludes warmup.
 
-`healthy_path_replay_baseline` is a matched local-host comparison of replay/history persistence against TCC optimized continuation persistence. It is not the research-prototype ~10% number. `overheadVsReplay` is `(tccMedianMs - replayMedianMs) / replayMedianMs` on optimized rows so a single GC/scheduler pause cannot dominate. `executionsPerSec` remains mean throughput and is not the comparison metric. Sequential rows use `coordination: "single"`; waves use `runBatchOnStore` for both models so group commit is not TCC-only. Do not fold this table into `healthy_path_persistence`. Optimized packing defaults to `follow`. Adaptive packing is an internal policy, not a product option; no tested threshold beat `follow` on both sequential A–D and coordinated waves. Optimized is not always faster than naive.
+`healthy_path_replay_baseline` compares replay/history persistence with TCC continuation persistence on the local reference host. `overheadVsReplay` is `(tccMedianMs - replayMedianMs) / replayMedianMs` on optimized rows, so one GC or scheduler pause does not dominate. `executionsPerSec` is mean throughput. Sequential rows use `coordination: "single"`. Waves use `runBatchOnStore` for both models.
 
-`recovery_history_replay_baseline` is the matched recovery comparison. At a measured live continuation (~4 KB primary; 16 KB and 64 KB on full scale) TCC loads/reconstructs the latest committed continuation while the replay baseline starts the engine and replays the committed prefix from the effect journal (`history` WAL, no continuation row). Timed replay recovery must not invoke the effect provider. `liveStateBytes` is actual continuation JSON length, not a local-count proxy. History grows by reassigning one scratch local after the live blob. `overheadVsReplay` uses the same median formula; negative means TCC is faster. Do not fold this table into `recovery_history_depth`. Primary chart series: `liveStateTargetBytes = 4096`. Output is the same `meta` + `results` JSON as the rest of the suite.
+`recovery_history_replay_baseline` is the matched recovery comparison. At a measured live continuation (~4 KB primary; 16 KB and 64 KB on full scale) TCC loads/reconstructs the latest committed continuation while the replay baseline starts the engine and replays the committed prefix from the effect journal (`history` WAL, no continuation row). Timed replay recovery must not invoke the effect provider. `liveStateBytes` is actual continuation JSON length, not a local-count proxy. History grows by reassigning one scratch local after the live blob. `overheadVsReplay` uses the same median formula; a negative value means TCC is faster. The primary series is `liveStateTargetBytes = 4096`. Output is the same `meta` + `results` JSON as the rest of the suite.
 
 ## Python mirror
 
