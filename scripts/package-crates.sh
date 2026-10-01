@@ -25,7 +25,13 @@ package() {
     exit 1
   }
   rm -f "$dir/LICENSE"
-  local crate="${CARGO_TARGET_DIR}/package/${name}-0.1.0.crate"
+  local version
+  version="$(awk -F '"' '/^version = / { print $2; exit }' "$dir/Cargo.toml")"
+  local crate="${CARGO_TARGET_DIR}/package/${name}-${version}.crate"
+  if [[ ! -f "$crate" ]]; then
+    echo "missing packaged crate ${crate}" >&2
+    exit 1
+  fi
   local toml
   toml="$(tar -tzf "$crate" | grep -E '/Cargo.toml$' | head -n 1)"
   if tar -xOf "$crate" "$toml" | grep -E 'path[[:space:]]*=[[:space:]]*"\.\.'; then
