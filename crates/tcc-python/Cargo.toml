@@ -9,6 +9,9 @@ description = "Native Python binding for the TCC core"
 name = "_engine"
 crate-type = ["cdylib"]
 
+[build-dependencies]
+pyo3-build-config = "0.23"
+
 [dependencies]
 pyo3 = { version = "0.23", features = ["extension-module"] }
 tcc-core = { path = "../tcc-core" }
