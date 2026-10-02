@@ -16,8 +16,8 @@ jobs:
       id-token: write
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v7
         with:
           name: tcc-engine-26.10.0
           path: dist-packages
@@ -58,7 +58,7 @@ jobs:
           for name in tcc-ir tcc-state tcc-core tcc-host tcc-host-sqlite tcc-rust-frontend; do
             publish "$name"
           done
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org

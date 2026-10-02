@@ -8,18 +8,18 @@ jobs:
   sources:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
           components: llvm-tools-preview
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install license tools
@@ -72,7 +72,7 @@ jobs:
           node --input-type=module -e "import('@tcc-engine/frontend-typescript').then(m => { if (m.PACKAGE_VERSION !== '26.10.0') process.exit(1) })"
       - name: Stage crate packages
         run: cp target/package/*.crate dist-packages/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: tcc-sources
           path: dist-packages/
@@ -100,11 +100,11 @@ jobs:
           - os: windows-latest
             slot: win32-x64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Build wheels
@@ -135,7 +135,7 @@ jobs:
           python -m venv /tmp/tcc-py
           /tmp/tcc-py/bin/pip install wheelhouse/tcc_engine-*-cp312-*.whl
           /tmp/tcc-py/bin/python -c "import tcc_engine; assert tcc_engine.PACKAGE_VERSION == '26.10.0'"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: tcc-wheels-${{ matrix.slot }}
           path: wheelhouse/*.whl
@@ -144,11 +144,11 @@ jobs:
     needs: [sources, wheels]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: tcc-sources
           path: dist-packages
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: tcc-wheels-*
           path: wheel-artifacts
@@ -170,7 +170,7 @@ jobs:
             printf '%s\n' "${wheels[@]}" >&2
             exit 1
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: tcc-engine-26.10.0
           path: dist-packages/
