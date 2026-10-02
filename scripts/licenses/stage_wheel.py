@@ -5,10 +5,12 @@
 
 """Stage a self-contained tree so cibuildwheel can see the Cargo workspace.
 
-cibuildwheel copies only the directory it is pointed at. The Python project
-lives in bindings/python and the crates live above it, so Linux builds would
-not see the workspace. This writes a copy whose pyproject.toml sits at the
-root and still uses the build selection from bindings/python/pyproject.toml.
+The Python project lives in bindings/python and the crates live above it.
+Linux copies the working directory into the container and requires the
+package to sit inside that directory, so the wheel job runs cibuildwheel
+from this copy. The copy stays outside the repository so it is not copied
+into itself. pyproject.toml sits at the staged root and keeps the build
+selection from bindings/python/pyproject.toml.
 """
 
 from __future__ import annotations
@@ -34,8 +36,8 @@ def staged_project(source: str) -> str:
         )
         .replace('python-source = "python"', 'python-source = "bindings/python/python"')
         .replace(
-            'include = ["python/tcc_engine/_licenses/**/*"]',
-            'include = ["bindings/python/python/tcc_engine/_licenses/**/*"]',
+            'include = ["python/tcc_engine/_licenses/*", "python/tcc_engine/_licenses/**/*"]',
+            'include = ["bindings/python/python/tcc_engine/_licenses/*", "bindings/python/python/tcc_engine/_licenses/**/*"]',
         )
         .replace(
             "bash ../../scripts/licenses/prepare-wheel.sh",

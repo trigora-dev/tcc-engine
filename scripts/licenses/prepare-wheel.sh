@@ -9,8 +9,15 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$script_dir/../.." && pwd)"
 cd "$root"
-export CARGO_TARGET_DIR="$root/target"
+# A Git bash /c/... target dir is a different folder for cargo.exe. Leave the
+# default relative target/ so both see the same files.
+unset CARGO_TARGET_DIR
 
+if ! command -v cargo >/dev/null 2>&1; then
+  if [ -n "${HOME:-}" ] && [ -x "$HOME/.cargo/bin/cargo" ]; then
+    export PATH="$HOME/.cargo/bin:$PATH"
+  fi
+fi
 if ! command -v cargo >/dev/null 2>&1; then
   echo "cargo is not on PATH" >&2
   exit 1
@@ -21,24 +28,58 @@ if ! command -v cargo-about >/dev/null 2>&1; then
   cargo install cargo-about --version 0.6.6 --locked
 fi
 
-cargo build -p tcc-python --release
-
+# A release DLL from link.exe keeps the exported Python entry point and drops
+# the Rust symbol table that ELF and Mach-O retain. /MAP writes that table
+# beside the DLL so the license scan still sees the crates that were linked.
 case "$(uname -s)" in
-  Linux)
-    lib="$CARGO_TARGET_DIR/release/lib_engine.so"
-    ;;
-  Darwin)
-    lib="$CARGO_TARGET_DIR/release/lib_engine.dylib"
-    ;;
   MINGW*|MSYS*|CYGWIN*)
-    lib="$CARGO_TARGET_DIR/release/_engine.dll"
+    cargo rustc -p tcc-python --release -- -C link-arg=/MAP:target/release/_engine.map
     ;;
   *)
-    echo "unsupported OS $(uname -s)" >&2
-    exit 1
+    cargo rustc -p tcc-python --release
     ;;
 esac
-test -f "$lib"
+
+finder="find"
+if [ -x /usr/bin/find ]; then
+  finder="/usr/bin/find"
+fi
+lib=""
+while IFS= read -r candidate; do
+  case "$candidate" in
+    */deps/*|*/incremental/*) continue ;;
+  esac
+  lib="$candidate"
+  break
+done < <("$finder" target -type f \
+  \( -name 'lib_engine.so' -o -name 'lib_engine.dylib' \
+     -o -name '_engine.dll' -o -name 'lib_engine.dll' \
+     -o -name '_engine.pyd' -o -name 'engine.dll' \) \
+  ! -path '*/incremental/*' 2>/dev/null || true)
+if [ -z "$lib" ]; then
+  while IFS= read -r candidate; do
+    lib="$candidate"
+    break
+  done < <("$finder" target -type f -name '_engine-*.dll' ! -path '*/incremental/*' 2>/dev/null || true)
+fi
+if [ -z "$lib" ]; then
+  echo "engine library not found (uname $(uname -s))" >&2
+  "$finder" target -type f \( -name '*.dll' -o -name '*.so' -o -name '*.dylib' -o -name '*.pyd' \) ! -path '*/incremental/*' >&2 || true
+  exit 1
+fi
+echo "engine library: $lib"
+bins=(--bin "$lib")
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    map="target/release/_engine.map"
+    if [ ! -f "$map" ]; then
+      echo "linker map was not written next to the engine DLL" >&2
+      exit 1
+    fi
+    bins+=(--bin "$map")
+    echo "engine link map: $map"
+    ;;
+esac
 
 if command -v python3 >/dev/null 2>&1; then
   py=python3
@@ -59,7 +100,7 @@ stage="$(mktemp -d)"
   --exclude tcc-python \
   --exclude tcc-wasm \
   --out "$stage" \
-  --bin "$lib"
+  "${bins[@]}"
 
 dest="bindings/python/python/tcc_engine/_licenses"
 rm -rf "$dest"

@@ -32,17 +32,21 @@ package() {
     echo "missing packaged crate ${crate}" >&2
     exit 1
   fi
-  local toml
-  toml="$(tar -tzf "$crate" | grep -E '/Cargo.toml$' | head -n 1)"
-  if tar -xOf "$crate" "$toml" | grep -E 'path[[:space:]]*=[[:space:]]*"\.\.'; then
+  # Read the archive in full. grep -q under pipefail closes tar early and
+  # reports a present LICENSE as missing.
+  local files toml manifest
+  files="$(tar -tzf "$crate")"
+  toml="$(printf '%s\n' "$files" | grep -E '/Cargo.toml$' | head -n 1)"
+  manifest="$(tar -xOf "$crate" "$toml")"
+  if printf '%s\n' "$manifest" | grep -E 'path[[:space:]]*=[[:space:]]*"\.\.'; then
     echo "path dependency remains in ${crate}" >&2
     exit 1
   fi
-  if ! tar -tzf "$crate" | grep -q '/LICENSE$'; then
+  if ! printf '%s\n' "$files" | grep -q '/LICENSE$'; then
     echo "LICENSE is missing from ${crate}" >&2
     exit 1
   fi
-  if tar -tzf "$crate" | grep -q 'THIRD_PARTY_LICENSES'; then
+  if printf '%s\n' "$files" | grep -q 'THIRD_PARTY_LICENSES'; then
     echo "THIRD_PARTY_LICENSES must not be packaged in ${crate}" >&2
     exit 1
   fi

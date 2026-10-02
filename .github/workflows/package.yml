@@ -112,7 +112,11 @@ jobs:
           python -m pip install 'cibuildwheel>=2.21,<3'
           stage="$(mktemp -d)"
           python scripts/licenses/stage_wheel.py "$stage"
-          python -m cibuildwheel --output-dir "$GITHUB_WORKSPACE/wheelhouse" "$stage"
+          # Linux copies the working directory into the container. The staged tree has to be that directory.
+          (
+            cd "$stage"
+            python -m cibuildwheel --output-dir "$GITHUB_WORKSPACE/wheelhouse" .
+          )
       - name: Inspect the wheels
         run: |
           shopt -s nullglob

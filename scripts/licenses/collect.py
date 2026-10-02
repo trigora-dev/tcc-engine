@@ -26,7 +26,7 @@ NOTICE_FILES = ("NOTICE", "NOTICE.md", "NOTICE.txt")
 
 
 def run(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, cwd=cwd, text=True, capture_output=True)
+    return subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, encoding="utf-8")
 
 
 def arrow_path(workspace: Path, manifest: Path, crate: str) -> str:
@@ -97,8 +97,11 @@ def crate_names(package: dict) -> set[str]:
 
 def symbol_text(binary: Path) -> str:
     commands: list[list[str]] = []
-    sysroot = run(["rustc", "--print", "sysroot"], binary.parent)
-    if sysroot.returncode == 0:
+    try:
+        sysroot = run(["rustc", "--print", "sysroot"], binary.parent)
+    except OSError:
+        sysroot = None
+    if sysroot is not None and sysroot.returncode == 0:
         root = Path(sysroot.stdout.strip())
         commands.extend(
             [str(tool), str(binary)] for tool in sorted(root.glob("lib/rustlib/*/bin/llvm-nm*"))
@@ -110,11 +113,23 @@ def symbol_text(binary: Path) -> str:
             ["strings", str(binary)],
         )
     )
+    chunks: list[str] = []
+    try:
+        blob = binary.read_bytes().decode("latin-1")
+    except OSError:
+        blob = ""
+    if blob.strip():
+        chunks.append(blob)
     for cmd in commands:
-        result = run(cmd, binary.parent)
+        try:
+            result = run(cmd, binary.parent)
+        except OSError:
+            continue
         if result.returncode == 0 and result.stdout.strip():
-            return result.stdout
-    raise SystemExit(f"could not read symbols from {binary}")
+            chunks.append(result.stdout)
+    if not chunks:
+        raise SystemExit(f"could not read symbols from {binary}")
+    return "\n".join(chunks)
 
 
 def linked_names(binary: Path, known: set[str]) -> set[str]:
@@ -316,7 +331,7 @@ def main() -> None:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--bin", action="append", default=[])
     parser.add_argument("--exclude", action="append", default=[])
-    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--out", type=Path)
     parser.add_argument("--sqlite", action="store_true")
     parser.add_argument("--skip-deny", action="store_true")
     parser.add_argument("--deny-only", action="store_true")
@@ -327,6 +342,8 @@ def main() -> None:
     if args.deny_only:
         deny(workspace, manifest)
         return
+    if args.out is None:
+        raise SystemExit("pass --out")
     if not args.bin:
         raise SystemExit("pass at least one --bin")
     if not args.skip_deny:

@@ -12,7 +12,7 @@ requires-python = ">=3.9"
 manifest-path = "../../crates/tcc-python/Cargo.toml"
 module-name = "tcc_engine._engine"
 python-source = "python"
-include = ["python/tcc_engine/_licenses/**/*"]
+include = ["python/tcc_engine/_licenses/*", "python/tcc_engine/_licenses/**/*"]
 
 [tool.cibuildwheel]
 build = "cp310-* cp311-* cp312-*"
@@ -25,6 +25,14 @@ environment = { PATH = "$HOME/.cargo/bin:$PATH", CARGO_TERM_COLOR = "always" }
 
 [tool.cibuildwheel.macos]
 before-all = "bash ../../scripts/licenses/prepare-wheel.sh"
+
+[[tool.cibuildwheel.overrides]]
+select = "*-macosx_arm64"
+environment = { MACOSX_DEPLOYMENT_TARGET = "11.0", _PYTHON_HOST_PLATFORM = "macosx-11.0-arm64" }
+
+[[tool.cibuildwheel.overrides]]
+select = "*-macosx_x86_64"
+environment = { MACOSX_DEPLOYMENT_TARGET = "11.0", _PYTHON_HOST_PLATFORM = "macosx-11.0-x86_64" }
 
 [tool.cibuildwheel.windows]
 before-all = "bash ../../scripts/licenses/prepare-wheel.sh"
