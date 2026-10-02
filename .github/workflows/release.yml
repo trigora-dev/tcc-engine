@@ -12,6 +12,9 @@ jobs:
     needs: package
     runs-on: ubuntu-latest
     environment: release
+    permissions:
+      id-token: write
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -66,17 +69,15 @@ jobs:
           test -n "$NODE_AUTH_TOKEN"
           npm publish dist-packages/tcc-engine-frontend-typescript-26.10.0.tgz
           npm publish dist-packages/tcc-engine-bindings-javascript-26.10.0.tgz
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Publish the Python wheel
-        env:
-          TWINE_USERNAME: ${{ secrets.PYPI_USERNAME }}
-          TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
+      - name: Stage the wheels
         run: |
-          test -n "$TWINE_PASSWORD"
-          python -m pip install twine
-          twine upload dist-packages/tcc_engine-*.whl
+          mkdir -p dist
+          cp dist-packages/tcc_engine-*.whl dist/
+      - name: Publish the Python wheel
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          attestations: false
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
         with:
