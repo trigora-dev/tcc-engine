@@ -72,8 +72,10 @@ jobs:
           publish() {
             local pkg="$1"
             local output status
+            # A path with a slash and no leading ./ is a GitHub repo spec to npm.
+            test -f "$pkg"
             set +e
-            output=$(npm publish "$pkg" --access public 2>&1)
+            output=$(npm publish "./$pkg" --access public 2>&1)
             status=$?
             set -e
             printf '%s\n' "$output"
