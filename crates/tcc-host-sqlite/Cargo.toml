@@ -1,6 +1,6 @@
 [package]
 name = "tcc-host-sqlite"
-version = "26.10.0"
+version = "26.10.1"
 edition = "2021"
 license = "BUSL-1.1"
 repository = "https://github.com/trigora-dev/tcc-engine"
@@ -11,10 +11,10 @@ libc = "0.2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tcc-core = { version = "26.10.0", path = "../tcc-core" }
-tcc-host = { version = "26.10.0", path = "../tcc-host" }
-tcc-ir = { version = "26.10.0", path = "../tcc-ir" }
-tcc-state = { version = "26.10.0", path = "../tcc-state" }
+tcc-core = { version = "26.10.1", path = "../tcc-core" }
+tcc-host = { version = "26.10.1", path = "../tcc-host" }
+tcc-ir = { version = "26.10.1", path = "../tcc-ir" }
+tcc-state = { version = "26.10.1", path = "../tcc-state" }
 
 [[bin]]
 name = "tcc-host-sqlite"

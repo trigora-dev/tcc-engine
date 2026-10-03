@@ -1,6 +1,6 @@
 {
   "name": "@tcc-engine/host-node",
-  "version": "26.10.0",
+  "version": "26.10.1",
   "private": true,
   "type": "module",
   "description": "Node host with SQLite persistence",

@@ -39,14 +39,20 @@ impl Crash {
             return Ok(());
         }
         if self.kill {
-            unsafe {
-                libc::raise(libc::SIGKILL);
-            }
+            die();
         }
         Err(CrashHit {
             hook: hook.to_string(),
         })
     }
+}
+
+fn die() -> ! {
+    #[cfg(unix)]
+    unsafe {
+        libc::raise(libc::SIGKILL);
+    }
+    std::process::abort();
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

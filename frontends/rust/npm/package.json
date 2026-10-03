@@ -1,6 +1,6 @@
 {
   "name": "@tcc-engine/frontend-rust",
-  "version": "26.10.0",
+  "version": "26.10.1",
   "private": true,
   "type": "module",
   "description": "Rust subset frontend: compile supported programs into TCC artifacts",

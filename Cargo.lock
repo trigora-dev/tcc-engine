@@ -394,7 +394,7 @@ checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 
 [[package]]
 name = "tcc-core"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "tcc-ir",
  "tcc-state",
@@ -402,7 +402,7 @@ dependencies = [
 
 [[package]]
 name = "tcc-host"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "tcc-core",
  "tcc-ir",
@@ -411,7 +411,7 @@ dependencies = [
 
 [[package]]
 name = "tcc-host-sqlite"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "libc",
  "rusqlite",
@@ -425,11 +425,11 @@ dependencies = [
 
 [[package]]
 name = "tcc-ir"
-version = "26.10.0"
+version = "26.10.1"
 
 [[package]]
 name = "tcc-python"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "pyo3",
  "pyo3-build-config",
@@ -447,7 +447,7 @@ dependencies = [
 
 [[package]]
 name = "tcc-rust-frontend"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "proc-macro2",
  "sha2",
@@ -463,7 +463,7 @@ version = "0.0.0"
 
 [[package]]
 name = "tcc-state"
-version = "26.10.0"
+version = "26.10.1"
 
 [[package]]
 name = "tcc-wasm"

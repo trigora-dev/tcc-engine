@@ -8,7 +8,7 @@
 
 TCC—Transparent Continuation Checkpointing—records the program position and live values needed to continue execution. After a failure, a runtime restores that continuation and resumes without re-executing the completed prefix.
 
-TCC Engine `26.10.0` is the first public CalVer release of the portable engine.
+TCC Engine `26.10.1` is the current public release. `26.10.0` was the first public CalVer cut; `26.10.1` fixes Windows compilation of the SQLite host crash handler.
 
 TCC Engine is the portable execution engine underlying [Trigora](https://trigora.dev). You can embed it directly for development, testing, evaluation, and other uses permitted by the license, or use Trigora for a managed production runtime.
 

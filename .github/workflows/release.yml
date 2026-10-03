@@ -2,7 +2,7 @@ name: release
 
 on:
   push:
-    tags: ["v26.10.0"]
+    tags: ["v26.10.1"]
 
 jobs:
   package:
@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v7
         with:
-          name: tcc-engine-26.10.0
+          name: tcc-engine-26.10.1
           path: dist-packages
       - uses: dtolnay/rust-toolchain@stable
       - name: Publish crates
@@ -87,8 +87,8 @@ jobs:
             fi
             return "$status"
           }
-          publish dist-packages/tcc-engine-frontend-typescript-26.10.0.tgz
-          publish dist-packages/tcc-engine-bindings-javascript-26.10.0.tgz
+          publish dist-packages/tcc-engine-frontend-typescript-26.10.1.tgz
+          publish dist-packages/tcc-engine-bindings-javascript-26.10.1.tgz
       - name: Stage the wheels
         run: |
           mkdir -p dist

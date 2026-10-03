@@ -130,7 +130,7 @@ export type Artifact = {
   program: Program;
 };
 
-export const PACKAGE_VERSION = "26.10.0";
+export const PACKAGE_VERSION = "26.10.1";
 export const ENGINE_FORMAT_VERSION = 1;
 export const FRONTEND_IDENTITY = "typescript";
 export const FRONTEND_ID = FRONTEND_IDENTITY;

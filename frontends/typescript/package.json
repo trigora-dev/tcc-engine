@@ -1,6 +1,6 @@
 {
   "name": "@tcc-engine/frontend-typescript",
-  "version": "26.10.0",
+  "version": "26.10.1",
   "license": "BUSL-1.1",
   "type": "module",
   "description": "TypeScript frontend: compile supported programs into TCC artifacts",

@@ -35,7 +35,7 @@ jobs:
       - run: pnpm --filter @tcc-engine/frontend-typescript build
       - run: pnpm --filter @tcc-engine/frontend-typescript exec npm pack --pack-destination "$GITHUB_WORKSPACE/dist-packages"
       - name: Authoring package carries no binary notices
-        run: python3 scripts/licenses/check_archive.py frontend dist-packages/tcc-engine-frontend-typescript-26.10.0.tgz
+        run: python3 scripts/licenses/check_archive.py frontend dist-packages/tcc-engine-frontend-typescript-26.10.1.tgz
       - name: Pack the JavaScript binding
         run: |
           cargo build -p tcc-wasm --target wasm32-unknown-unknown --release
@@ -62,14 +62,14 @@ jobs:
           fi
           pnpm --filter @tcc-engine/bindings-javascript exec npm pack --pack-destination "$GITHUB_WORKSPACE/dist-packages"
       - name: Inspect the wasm package
-        run: python3 scripts/licenses/check_archive.py wasm dist-packages/tcc-engine-bindings-javascript-26.10.0.tgz
+        run: python3 scripts/licenses/check_archive.py wasm dist-packages/tcc-engine-bindings-javascript-26.10.1.tgz
       - name: Install packed npm packages
         run: |
           mkdir -p /tmp/tcc-npm
-          npm install --prefix /tmp/tcc-npm "$GITHUB_WORKSPACE"/dist-packages/tcc-engine-frontend-typescript-26.10.0.tgz
-          npm install --prefix /tmp/tcc-npm "$GITHUB_WORKSPACE"/dist-packages/tcc-engine-bindings-javascript-26.10.0.tgz
+          npm install --prefix /tmp/tcc-npm "$GITHUB_WORKSPACE"/dist-packages/tcc-engine-frontend-typescript-26.10.1.tgz
+          npm install --prefix /tmp/tcc-npm "$GITHUB_WORKSPACE"/dist-packages/tcc-engine-bindings-javascript-26.10.1.tgz
           cd /tmp/tcc-npm
-          node --input-type=module -e "import('@tcc-engine/frontend-typescript').then(m => { if (m.PACKAGE_VERSION !== '26.10.0') process.exit(1) })"
+          node --input-type=module -e "import('@tcc-engine/frontend-typescript').then(m => { if (m.PACKAGE_VERSION !== '26.10.1') process.exit(1) })"
       - name: Stage crate packages
         run: cp target/package/*.crate dist-packages/
       - uses: actions/upload-artifact@v6
@@ -134,7 +134,7 @@ jobs:
         run: |
           python -m venv /tmp/tcc-py
           /tmp/tcc-py/bin/pip install wheelhouse/tcc_engine-*-cp312-*.whl
-          /tmp/tcc-py/bin/python -c "import tcc_engine; assert tcc_engine.PACKAGE_VERSION == '26.10.0'"
+          /tmp/tcc-py/bin/python -c "import tcc_engine; assert tcc_engine.PACKAGE_VERSION == '26.10.1'"
       - uses: actions/upload-artifact@v6
         with:
           name: tcc-wheels-${{ matrix.slot }}
@@ -157,8 +157,8 @@ jobs:
         run: |
           shopt -s nullglob
           cp wheel-artifacts/*.whl dist-packages/
-          test -f dist-packages/tcc-engine-frontend-typescript-26.10.0.tgz
-          test -f dist-packages/tcc-engine-bindings-javascript-26.10.0.tgz
+          test -f dist-packages/tcc-engine-frontend-typescript-26.10.1.tgz
+          test -f dist-packages/tcc-engine-bindings-javascript-26.10.1.tgz
           crates=(dist-packages/*.crate)
           if [ "${#crates[@]}" -ne 6 ]; then
             echo "expected six crate packages, found ${#crates[@]}" >&2
@@ -172,5 +172,5 @@ jobs:
           fi
       - uses: actions/upload-artifact@v6
         with:
-          name: tcc-engine-26.10.0
+          name: tcc-engine-26.10.1
           path: dist-packages/

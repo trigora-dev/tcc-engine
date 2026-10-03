@@ -1,6 +1,6 @@
 [package]
 name = "tcc-python"
-version = "26.10.0"
+version = "26.10.1"
 edition = "2021"
 publish = false
 description = "Native Python binding for the TCC core"

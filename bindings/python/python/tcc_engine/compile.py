@@ -13,7 +13,7 @@ from typing import Any
 
 from .canonical import canonical_stringify
 
-PACKAGE_VERSION = "26.10.0"
+PACKAGE_VERSION = "26.10.1"
 ENGINE_FORMAT_VERSION = 1
 HOST_PROTOCOL_VERSION = 1
 FRONTEND_IDENTITY = "python"
