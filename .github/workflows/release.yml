@@ -102,4 +102,8 @@ jobs:
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          body: |
+            - Fix Windows compilation of `tcc-host-sqlite` crash handling.
+            - Unix crash injection still uses SIGKILL. Windows uses process abort.
+            - No protocol, artifact-format, or language-semantics changes.
           files: dist-packages/**
