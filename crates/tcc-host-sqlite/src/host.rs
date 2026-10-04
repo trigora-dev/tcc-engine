@@ -6,6 +6,9 @@ use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+use crate::trace::{HostTrace, HostTraceEvent, HostTraceKind};
 
 use tcc_core::{ChildSpec, EffectStatus, HostRequest, HostResponse};
 use tcc_host::{Host, HostError};
@@ -33,7 +36,11 @@ pub struct SqliteHost {
     pub event_payload: Option<Value>,
     pub completion_reverse: bool,
     pub cancel: bool,
+    /// When set, checkpoint and restore events include the continuation body.
+    /// The copy happens after the timed region.
+    pub trace_continuations: bool,
     effect_provider: Option<EffectProvider>,
+    trace: Option<HostTrace>,
     continuation_json: Option<String>,
     staged_status: ContinuationStatus,
     staged_result: Option<Value>,
@@ -54,7 +61,9 @@ impl SqliteHost {
             event_payload: None,
             completion_reverse: false,
             cancel: false,
+            trace_continuations: false,
             effect_provider: None,
+            trace: None,
             continuation_json: None,
             staged_status: ContinuationStatus::Runnable,
             staged_result: None,
@@ -75,6 +84,18 @@ impl SqliteHost {
 
     pub fn set_effect_provider(&mut self, provider: EffectProvider) {
         self.effect_provider = Some(provider);
+    }
+
+    pub fn set_trace(&mut self, trace: HostTrace) {
+        self.trace = Some(trace);
+    }
+
+    pub(crate) fn emit_trace(&mut self, event: HostTraceEvent) {
+        let Some(mut trace) = self.trace.take() else {
+            return;
+        };
+        trace(event);
+        self.trace = Some(trace);
     }
 
     fn crash_at(&mut self, hook: &str, detail: Option<&str>) -> Result<(), HostError> {
@@ -116,12 +137,28 @@ impl SqliteHost {
             child,
             completed_child,
         };
-        if let Err(err) = self.store.commit_snapshot(&snap) {
+        let started = Instant::now();
+        let committed = self.store.commit_snapshot(&snap);
+        let duration = started.elapsed();
+        if let Err(err) = committed {
             self.staged_child = snap.child;
             return Err(store_err(err));
         }
+        let bytes = snap.body.len();
+        let suspended = status == "suspended";
+        let body = self.trace_continuations.then(|| snap.body.clone());
+        self.emit_trace(HostTraceEvent {
+            kind: HostTraceKind::CheckpointPersisted,
+            revision: Some(revision),
+            duration,
+            bytes: Some(bytes),
+            body,
+            effect_key: None,
+            journal_hit: false,
+            suspended,
+        });
         self.crash_at("after_persist_checkpoint", None)?;
-        if status == "suspended" {
+        if suspended {
             self.crash_at("after_wait_checkpoint", None)?;
         }
         Ok(HostResponse::PersistConfirmed { revision })
@@ -136,6 +173,7 @@ impl SqliteHost {
         let input_json = canonical(&input)?;
         loop {
             self.crash_at("before_effect_provider", None)?;
+            let lookup_started = Instant::now();
             if let Some(existing) = self
                 .store
                 .effect(&self.execution_id, &key)
@@ -155,6 +193,17 @@ impl SqliteHost {
                         )));
                     };
                     let value = decode_value(result.as_bytes()).map_err(state_err)?;
+                    let duration = lookup_started.elapsed();
+                    self.emit_trace(HostTraceEvent {
+                        kind: HostTraceKind::Effect,
+                        revision: None,
+                        duration,
+                        bytes: None,
+                        body: None,
+                        effect_key: Some(key.clone()),
+                        journal_hit: true,
+                        suspended: false,
+                    });
                     return Ok(HostResponse::EffectResult { value });
                 }
             }
@@ -179,6 +228,7 @@ impl SqliteHost {
                 continue;
             }
             self.append_log(&key)?;
+            let started = Instant::now();
             let produced = if let Some(value) = self.effects.get(&key).cloned() {
                 value
             } else if let Some(mut provider) = self.effect_provider.take() {
@@ -188,7 +238,18 @@ impl SqliteHost {
             } else {
                 return Err(HostError::Message(format!("no effect for `{key}`")));
             };
+            let duration = started.elapsed();
             let response = validate_effect_value(produced)?;
+            self.emit_trace(HostTraceEvent {
+                kind: HostTraceKind::Effect,
+                revision: None,
+                duration,
+                bytes: None,
+                body: None,
+                effect_key: Some(key.clone()),
+                journal_hit: false,
+                suspended: false,
+            });
             if matches!(response, HostResponse::EffectResult { .. }) {
                 self.crash_at("after_effect_provider", None)?;
             }

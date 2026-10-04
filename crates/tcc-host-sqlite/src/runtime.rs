@@ -3,10 +3,11 @@
 // See LICENSE for full terms.
 
 use std::path::Path;
+use std::time::Instant;
 
 use tcc_core::{decode_args_array, Engine, EngineOutcome, HostRequest, HostResponse};
 use tcc_host::{Host, HostError};
-use tcc_ir::{decode_artifact, EngineCaps};
+use tcc_ir::{decode_artifact, Artifact, EngineCaps};
 use tcc_state::{
     decode_continuation, decode_value, BranchOp, BranchPhase, JoinState, JoinStatus, PendingOp,
     Value, WaitKind,
@@ -14,6 +15,7 @@ use tcc_state::{
 
 use crate::host::{canonical, core_err, SqliteHost};
 use crate::store::StoreError;
+use crate::trace::{HostTraceEvent, HostTraceKind};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunResult {
@@ -78,12 +80,37 @@ pub fn resume_execution(
     host.execution_id = execution_id.to_string();
     let caps = EngineCaps::current();
     let engine = if let Some(saved) = host.store.checkpoint(execution_id).map_err(store_err)? {
-        let continuation = decode_continuation(saved.body.as_bytes()).map_err(core_err)?;
-        Engine::resume(artifact, continuation, &caps).map_err(core_err)?
+        restore_engine(host, artifact, &saved.body, saved.revision, &caps)?
     } else {
         Engine::start(artifact, execution_id, &caps).map_err(core_err)?
     };
     drive(host, engine)
+}
+
+fn restore_engine(
+    host: &mut SqliteHost,
+    artifact: Artifact,
+    body: &str,
+    revision: u64,
+    caps: &EngineCaps,
+) -> Result<Engine, HostError> {
+    let started = Instant::now();
+    let continuation = decode_continuation(body.as_bytes()).map_err(core_err)?;
+    let engine = Engine::resume(artifact, continuation, caps).map_err(core_err)?;
+    let duration = started.elapsed();
+    let bytes = body.len();
+    let retained = host.trace_continuations.then(|| body.to_string());
+    host.emit_trace(HostTraceEvent {
+        kind: HostTraceKind::ContinuationRestored,
+        revision: Some(revision),
+        duration,
+        bytes: Some(bytes),
+        body: retained,
+        effect_key: None,
+        journal_hit: false,
+        suspended: false,
+    });
+    Ok(engine)
 }
 
 pub fn read_continuation(path: &Path, execution_id: &str) -> Result<String, HostError> {
@@ -313,8 +340,7 @@ fn deliver_child(
     }
     let caps = EngineCaps::current();
     let child_engine = if let Some(saved) = host.store.checkpoint(&child_id).map_err(store_err)? {
-        let continuation = decode_continuation(saved.body.as_bytes()).map_err(core_err)?;
-        Engine::resume(artifact, continuation, &caps).map_err(core_err)?
+        restore_engine(host, artifact, &saved.body, saved.revision, &caps)?
     } else {
         Engine::start_with_args(artifact, &child_id, &caps, &args).map_err(core_err)?
     };

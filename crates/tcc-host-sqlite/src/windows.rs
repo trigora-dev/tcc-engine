@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tcc_core::{ChildSpec, EffectRecord, EffectStatus, HostRequest, HostResponse};
@@ -19,6 +19,7 @@ use tcc_state::{Continuation, ContinuationStatus, PersistKind, Value};
 use crate::host::SqliteHost;
 use crate::runtime::{resume_execution, start_execution_with_args};
 use crate::store::{CompletedChild, NewChild, Snapshot, Store};
+use crate::trace::HostTraceKind;
 
 fn db_path(label: &str) -> PathBuf {
     let nanos = SystemTime::now()
@@ -383,6 +384,107 @@ fn effect_provider_runs_only_when_the_map_and_journal_miss() {
         .unwrap_err();
     assert!(mismatch.to_string().contains("input mismatch"));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn trace_records_each_committed_checkpoint_without_timing_the_callback() {
+    let path = db_path("trace-checkpoint");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let seen = events.clone();
+    let mut host = SqliteHost::open(&path, "ex").unwrap();
+    host.store.create_execution("ex", "hash").unwrap();
+    host.trace_continuations = true;
+    host.set_trace(Box::new(move |event| seen.lock().unwrap().push(event)));
+    stage(&mut host, ContinuationStatus::Suspended);
+    host.handle(checkpoint_request(1)).unwrap();
+    stage(&mut host, ContinuationStatus::Completed);
+    host.crash.want = Some("after_persist_checkpoint:2".to_string());
+    let err = host.handle(checkpoint_request(2)).unwrap_err();
+    assert!(err.to_string().contains("after_persist_checkpoint"));
+    let saved = host.store.checkpoint("ex").unwrap().expect("committed");
+    assert_eq!(saved.revision, 2);
+    let events = events.lock().unwrap();
+    let checkpoints: Vec<_> = events
+        .iter()
+        .filter(|event| event.kind == HostTraceKind::CheckpointPersisted)
+        .collect();
+    assert_eq!(checkpoints.len(), 2);
+    assert!(checkpoints[0].suspended);
+    assert!(!checkpoints[1].suspended);
+    assert!(checkpoints.iter().all(|event| event.bytes.unwrap_or(0) > 0));
+    assert!(checkpoints[0].body.as_ref().unwrap().contains("revision"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn trace_marks_a_completed_effect_as_a_journal_hit() {
+    let path = db_path("trace-effect");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let seen = events.clone();
+    let calls = Arc::new(AtomicU32::new(0));
+    let seen_calls = calls.clone();
+    let mut host = SqliteHost::open(&path, "ex").unwrap();
+    host.set_trace(Box::new(move |event| seen.lock().unwrap().push(event)));
+    host.set_effect_provider(Box::new(move |_key, _input| {
+        seen_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(Value::Number(9.0))
+    }));
+    host.handle(effect_request_for("live", object_input(1.0)))
+        .unwrap();
+    host.handle(effect_record_for("live", EffectStatus::Completed, 9.0))
+        .unwrap();
+    host.handle(effect_request_for("live", object_input(1.0)))
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let effects: Vec<_> = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| event.kind == HostTraceKind::Effect)
+        .cloned()
+        .collect();
+    assert_eq!(effects.len(), 2);
+    assert!(!effects[0].journal_hit);
+    assert!(effects[1].journal_hit);
+    assert_eq!(effects[0].effect_key.as_deref(), Some("live"));
+    assert_eq!(effects[1].effect_key.as_deref(), Some("live"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn trace_records_continuation_restore_on_resume() {
+    let path = db_path("trace-restore");
+    let artifact = encode_artifact(&wait_then_return_first_arg()).unwrap();
+    {
+        let mut host = SqliteHost::open(&path, "ex").unwrap();
+        start_execution_with_args(
+            &mut host,
+            &artifact,
+            "ex",
+            &[Value::String("original".to_string())],
+        )
+        .unwrap();
+    }
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let seen = events.clone();
+    let resumed = {
+        let mut host = SqliteHost::open(&path, "ex").unwrap();
+        host.trace_continuations = true;
+        host.set_trace(Box::new(move |event| seen.lock().unwrap().push(event)));
+        resume_execution(&mut host, None, "ex").unwrap()
+    };
+    assert_eq!(resumed.status, "completed");
+    let restores: Vec<_> = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| event.kind == HostTraceKind::ContinuationRestored)
+        .cloned()
+        .collect();
+    assert_eq!(restores.len(), 1);
+    assert!(restores[0].bytes.unwrap_or(0) > 0);
+    assert!(restores[0].body.is_some());
     let _ = std::fs::remove_file(&path);
 }
 
