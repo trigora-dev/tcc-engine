@@ -1,6 +1,6 @@
 [package]
 name = "tcc-core"
-version = "26.10.2"
+version = "26.10.3"
 edition = "2021"
 license = "BUSL-1.1"
 repository = "https://github.com/trigora-dev/tcc-engine"
@@ -11,5 +11,5 @@ name = "tcc-drive"
 path = "src/bin/drive.rs"
 
 [dependencies]
-tcc-ir = { version = "26.10.2", path = "../tcc-ir" }
-tcc-state = { version = "26.10.2", path = "../tcc-state" }
+tcc-ir = { version = "26.10.3", path = "../tcc-ir" }
+tcc-state = { version = "26.10.3", path = "../tcc-state" }

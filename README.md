@@ -68,7 +68,7 @@ npm install @tcc-engine/frontend-typescript @tcc-engine/bindings-javascript
 pip install tcc-engine
 ```
 
-`tcc-engine` includes the Python frontend, `tcc_engine.primitives`, and a SQLite host.
+`tcc-engine` includes the Python frontend, `tcc_engine.primitives`, and a SQLite host. Python support is 3.10–3.14. Free-threaded builds are not published.
 
 ### Rust
 

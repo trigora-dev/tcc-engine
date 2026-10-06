@@ -32,7 +32,7 @@ def _engine_version() -> str:
 
         return PACKAGE_VERSION
     except Exception:
-        return "26.10.2"
+        return "26.10.3"
 
 
 def emit_host_event(observer: HostObserver | None, event: dict[str, Any]) -> None:

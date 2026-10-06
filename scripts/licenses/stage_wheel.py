@@ -46,9 +46,9 @@ def staged_project(source: str) -> str:
     )
     if staged == source:
         raise SystemExit("the wheel project was not rewritten for the staged build")
-    if 'build = "cp310-* cp311-* cp312-*"' not in staged:
-        raise SystemExit("the staged build lost the CPython 3.10-3.12 selection")
-    if 'skip = "pp* *-win32 *-musllinux_*"' not in staged:
+    if 'build = "cp310-* cp311-* cp312-* cp313-* cp314-*"' not in staged:
+        raise SystemExit("the staged build lost the CPython 3.10-3.14 selection")
+    if 'skip = "pp* *-win32 *-musllinux_* cp3??t-*"' not in staged:
         raise SystemExit("the staged build lost the win32 and musllinux skip")
     if "bash ../../scripts/" in staged:
         raise SystemExit("the staged before-all still points outside the build")

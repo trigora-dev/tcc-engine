@@ -2,7 +2,7 @@ name: release
 
 on:
   push:
-    tags: ["v26.10.2"]
+    tags: ["v26.10.3"]
 
 jobs:
   package:
@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v7
         with:
-          name: tcc-engine-26.10.2
+          name: tcc-engine-26.10.3
           path: dist-packages
       - uses: dtolnay/rust-toolchain@stable
       - name: Publish crates
@@ -87,8 +87,8 @@ jobs:
             fi
             return "$status"
           }
-          publish dist-packages/tcc-engine-frontend-typescript-26.10.2.tgz
-          publish dist-packages/tcc-engine-bindings-javascript-26.10.2.tgz
+          publish dist-packages/tcc-engine-frontend-typescript-26.10.3.tgz
+          publish dist-packages/tcc-engine-bindings-javascript-26.10.3.tgz
       - name: Stage the wheels
         run: |
           mkdir -p dist
@@ -103,7 +103,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           body: |
-            - Add optional SQLite-host tracing for checkpoint, effect, and continuation-restore diagnostics.
-            - Add instrumentation used by local benchmark and recovery-verification tooling.
+            - Publish CPython 3.13 and 3.14 wheels. Python support is 3.10–3.14. Free-threaded builds are not included.
+            - The Business Source License parameters name this Licensed Work as TCC Engine 26.10.3. The Change Date remains 2030-10-01.
             - No changes to the host protocol, artifact format, language semantics, or conformance requirements.
           files: dist-packages/**
