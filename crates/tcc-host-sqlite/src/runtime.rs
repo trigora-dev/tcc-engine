@@ -315,7 +315,13 @@ fn deliver_child(
                 "child `{invoke_id}` completed without a result"
             )));
         };
-        return apply_child_result(host, engine, &result_json, branch);
+        return apply_child_result(
+            host,
+            engine,
+            &result_json,
+            &child.child_execution_id,
+            branch,
+        );
     }
     let artifact_json = host
         .store
@@ -359,13 +365,14 @@ fn deliver_child(
         .map_err(store_err)?
         .and_then(|row| row.result_json)
         .ok_or_else(|| HostError::Message(format!("child `{invoke_id}` has no stored result")))?;
-    apply_child_result(host, engine, &stored, branch)
+    apply_child_result(host, engine, &stored, &child.child_execution_id, branch)
 }
 
 fn apply_child_result(
     host: &mut SqliteHost,
     engine: &mut Engine,
     result_json: &str,
+    child_execution_id: &str,
     branch: Option<String>,
 ) -> Result<Step, HostError> {
     host.crash
@@ -373,7 +380,11 @@ fn apply_child_result(
         .map_err(|hit| HostError::Message(hit.to_string()))?;
     let value = decode_value(result_json.as_bytes()).map_err(core_err)?;
     engine
-        .apply_host_response(HostResponse::ChildResult { value, branch })
+        .apply_host_response(HostResponse::ChildResult {
+            value,
+            child_execution_id: child_execution_id.to_string(),
+            branch,
+        })
         .map_err(core_err)?;
     Ok(Step::Continue)
 }

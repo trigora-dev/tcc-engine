@@ -92,6 +92,12 @@ pub enum HostResponse {
     },
     ChildResult {
         value: Value,
+        child_execution_id: String,
+        branch: Option<String>,
+    },
+    ChildFailed {
+        message: String,
+        child_execution_id: String,
         branch: Option<String>,
     },
     Cancel,
@@ -110,6 +116,7 @@ impl HostResponse {
             HostResponse::EventPayload { .. } => "event_payload",
             HostResponse::TimerFired { .. } => "timer_fired",
             HostResponse::ChildResult { .. } => "child_result",
+            HostResponse::ChildFailed { .. } => "child_failed",
             HostResponse::Cancel => "cancel",
             HostResponse::Artifact { .. } => "artifact",
         }

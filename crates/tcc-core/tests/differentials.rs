@@ -40,27 +40,28 @@ fn drive(engine: &mut Engine) -> Value {
                     .unwrap();
                 last_confirmed = Some(engine.continuation().clone());
             }
-            EngineOutcome::Suspended => match &engine.continuation().pending {
-                Some(tcc_state::PendingOp::Wait {
-                    kind: tcc_state::WaitKind::Timer { .. },
-                }) => engine
-                    .apply_host_response(HostResponse::TimerFired { branch: None })
-                    .unwrap(),
-                Some(tcc_state::PendingOp::Wait {
-                    kind: tcc_state::WaitKind::Child { .. },
-                }) => engine
-                    .apply_host_response(HostResponse::ChildResult {
+            EngineOutcome::Suspended => {
+                let wake = match &engine.continuation().pending {
+                    Some(tcc_state::PendingOp::Wait {
+                        kind: tcc_state::WaitKind::Timer { .. },
+                    }) => HostResponse::TimerFired { branch: None },
+                    Some(tcc_state::PendingOp::Wait {
+                        kind:
+                            tcc_state::WaitKind::Child {
+                                child_execution_id, ..
+                            },
+                    }) => HostResponse::ChildResult {
                         value: Value::Number(7.0),
+                        child_execution_id: child_execution_id.clone(),
                         branch: None,
-                    })
-                    .unwrap(),
-                _ => engine
-                    .apply_host_response(HostResponse::EventPayload {
+                    },
+                    _ => HostResponse::EventPayload {
                         value: Value::String("ok".into()),
                         branch: None,
-                    })
-                    .unwrap(),
-            },
+                    },
+                };
+                engine.apply_host_response(wake).unwrap();
+            }
             EngineOutcome::Completed { result } => return result,
             EngineOutcome::Cancelled => panic!("cancelled"),
             EngineOutcome::Failed { message } => panic!("failed: {message}"),

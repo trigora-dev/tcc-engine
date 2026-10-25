@@ -49,7 +49,7 @@ A construct is supported only when compile, native PyO3 execution, WASM executio
 | `failed` | Terminal failure |
 | `cancelled` | Terminal cancellation |
 
-`completed`, `failed`, and `cancelled` are terminal. Resuming a terminal continuation is an error.
+`completed`, `failed`, and `cancelled` are terminal. Resuming a terminal continuation is an error. `cancel` does not change a terminal continuation.
 
 A suspended execution does not proceed until the host delivers the matching wake. Wake delivery is host-driven.
 
@@ -57,4 +57,4 @@ The first example, including expected host requests and continuation snapshots, 
 
 ## Implemented instructions
 
-The stepper implements `Nop`, jumps, locals, constants, `Pop`, `NewObject`, `SetProp`, `GetProp`, `NewArray`, `ArrayPush`, `StrictEq` / `StrictNeq`, numeric compare, `Not`, `Return`, `Throw` / `PushTry` / `PopTry`, durable-operation yield, event-wait wake via `event_payload`, timer wake via `timer_fired`, child wake via `child_result`, and host `cancel`. `Call` is defined in the format and is not executed.
+The stepper implements `Nop`, jumps, locals, constants, `Pop`, `NewObject`, `SetProp`, `GetProp`, `NewArray`, `ArrayPush`, `StrictEq` / `StrictNeq`, numeric compare, `Not`, `Return`, `Throw` / `PushTry` / `PopTry`, durable-operation yield, event-wait wake via `event_payload`, timer wake via `timer_fired`, child wake via `child_result`, child failure via `child_failed`, and host `cancel`. `Call` is defined in the format and is not executed.

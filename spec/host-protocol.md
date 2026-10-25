@@ -82,8 +82,9 @@ The host owns durable state. The engine’s in-memory `outstanding` request is n
 | `effect_failed` | Effect failed |
 | `event_payload` | Matching event delivered. `value` plus optional `branch`. Required when the continuation is in a concurrent group. One delivery resolves one wait, in registration order |
 | `timer_fired` | Matching timer delivered. Optional `branch`, required inside a join. Two sleeps are two timers even when `resume_at_ms` matches |
-| `child_result` | Child execution completed. `value` plus optional `branch`, required inside a join |
-| `cancel` | Host-delivered cancellation. Takes effect at a durable boundary; does not interrupt an in-flight `run_effect` |
+| `child_result` | Child execution completed. `value` and `child_execution_id` are required. `branch` is required inside a join and must name that child. A different child id is rejected and does not change the continuation |
+| `child_failed` | Child execution failed. `message` and `child_execution_id` are required. `branch` is required inside a join and must name that child. A plain invoke throws `message`. A join fails that branch |
+| `cancel` | Host-delivered cancellation. Takes effect at a durable boundary; does not interrupt an in-flight `run_effect`. Rejected when the continuation is already `completed`, `failed`, or `cancelled` |
 | `artifact` | Requested artifact identity |
 
 A response that does not match the outstanding request is an error.

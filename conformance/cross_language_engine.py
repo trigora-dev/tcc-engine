@@ -19,6 +19,7 @@ def loads(text: str):
 
 def drive(engine: EngineBinding, child: str | None):
     child_result = None
+    child_execution_id = None
     for _ in range(10000):
         outcome = loads(engine.run_until_host(100000))
         kind = outcome["type"]
@@ -29,7 +30,15 @@ def drive(engine: EngineBinding, child: str | None):
         if kind == "suspended":
             if child_result is None:
                 raise RuntimeError("suspended without a child result")
-            engine.apply_response(json.dumps({"type": "child_result", "value": child_result}))
+            engine.apply_response(
+                json.dumps(
+                    {
+                        "type": "child_result",
+                        "child_execution_id": child_execution_id,
+                        "value": child_result,
+                    }
+                )
+            )
             continue
         if kind != "host":
             raise RuntimeError(f"unexpected outcome {kind}")
@@ -42,6 +51,7 @@ def drive(engine: EngineBinding, child: str | None):
         elif request_type == "create_child":
             if child is None:
                 raise RuntimeError("child artifact missing")
+            child_execution_id = request["child_execution_id"]
             engine.apply_response(json.dumps({"type": "ack"}))
             args = request.get("args") or []
             child_engine = EngineBinding(

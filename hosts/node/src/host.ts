@@ -637,6 +637,7 @@ function deliverChild(
     maybeCrash("before_child_result");
     state.engine.applyHostResponse({
       type: "child_result",
+      child_execution_id: child.child_execution_id,
       value: JSON.parse(child.result_json),
       ...(branch ? { branch } : {}),
     });
@@ -682,6 +683,7 @@ function deliverChild(
   maybeCrash("before_child_result");
   state.engine.applyHostResponse({
     type: "child_result",
+    child_execution_id: child.child_execution_id,
     value: childResult.result,
     ...(branch ? { branch } : {}),
   });

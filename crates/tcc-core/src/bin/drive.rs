@@ -78,7 +78,10 @@ fn drive(
                 return Json::parse(&encode_value_json(&result)?).map_err(|err| err.to_string());
             }
             EngineOutcome::Failed { message } => return Err(message),
-            EngineOutcome::Suspended => apply(engine, &wake(events, child)?)?,
+            EngineOutcome::Suspended => {
+                let response = wake(engine, events, child)?;
+                apply(engine, &response)?;
+            }
             EngineOutcome::Host(request) => apply_request(engine, &request, effects)?,
             other => return Err(format!("unexpected outcome {other:?}")),
         }
@@ -129,7 +132,8 @@ fn resume_from(
     let mut resumed = Engine::resume(artifact.clone(), continuation, &EngineCaps::current())
         .map_err(|err| err.to_string())?;
     if deliver_event {
-        apply(&mut resumed, &wake(events, child)?)?;
+        let response = wake(&resumed, events, child)?;
+        apply(&mut resumed, &response)?;
     }
     drive(&mut resumed, effects, events, child).map(|_| ())
 }
@@ -196,15 +200,38 @@ fn ack() -> BTreeMap<String, Json> {
     map
 }
 
-fn wake(events: &BTreeMap<String, Value>, child: Option<&Value>) -> Result<Json, String> {
+fn wake(
+    engine: &Engine,
+    events: &BTreeMap<String, Value>,
+    child: Option<&Value>,
+) -> Result<Json, String> {
     if let Some(value) = child {
-        return tagged_response("child_result", value);
+        let mut response = tagged_response("child_result", value)?;
+        let Json::Object(map) = &mut response else {
+            return Err("child result was not an object".into());
+        };
+        map.insert(
+            "child_execution_id".into(),
+            Json::String(pending_child(engine)?),
+        );
+        return Ok(response);
     }
     let value = events
         .values()
         .next()
         .ok_or_else(|| "suspended without an event".to_string())?;
     tagged_response("event_payload", value)
+}
+
+fn pending_child(engine: &Engine) -> Result<String, String> {
+    match &engine.continuation().pending {
+        Some(tcc_state::PendingOp::Wait {
+            kind: tcc_state::WaitKind::Child {
+                child_execution_id, ..
+            },
+        }) => Ok(child_execution_id.clone()),
+        _ => Err("child result without a child wait".into()),
+    }
 }
 
 fn tagged_response(kind: &str, value: &Value) -> Result<Json, String> {

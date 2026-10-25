@@ -2,8 +2,14 @@
 // SPDX-License-Identifier: BUSL-1.1
 // See LICENSE for full terms.
 
-use super::host::response_branch;
+use super::host::{response_branch, response_child};
 use super::*;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChildDelivery {
+    Ready,
+    Stale,
+}
 
 impl Engine {
     pub(super) fn begin_join(
@@ -411,22 +417,116 @@ impl Engine {
             }
             return Ok(());
         };
-        if !active {
+        if let Some(child_execution_id) = response_child(&response) {
+            if self.child_delivery(&branch_id, &child_execution_id)? == ChildDelivery::Stale {
+                return Ok(());
+            }
+        } else if !active {
             return Ok(());
         }
-        let value = match response {
-            HostResponse::EventPayload { value, .. } => value,
-            HostResponse::TimerFired { .. } => Value::Undefined,
-            HostResponse::ChildResult { value, .. } => value,
-            other => {
-                return Err(CoreError::UnexpectedHostResponse {
-                    expected: "join wake",
-                    got: other.kind_name(),
-                });
+        match response {
+            HostResponse::ChildFailed { message, .. } => {
+                self.fail_registered_child(&branch_id, message);
+                Ok(())
+            }
+            HostResponse::EventPayload { value, .. } => {
+                let value = absorb_value(&mut self.continuation.heap, value);
+                self.complete_registered_branch(&branch_id, value)
+            }
+            HostResponse::TimerFired { .. } => {
+                self.complete_registered_branch(&branch_id, Value::Undefined)
+            }
+            HostResponse::ChildResult { value, .. } => {
+                let value = absorb_value(&mut self.continuation.heap, value);
+                self.complete_registered_branch(&branch_id, value)
+            }
+            other => Err(CoreError::UnexpectedHostResponse {
+                expected: "join wake",
+                got: other.kind_name(),
+            }),
+        }
+    }
+
+    fn child_delivery(
+        &self,
+        branch_id: &str,
+        child_execution_id: &str,
+    ) -> Result<ChildDelivery, CoreError> {
+        let join = self
+            .continuation
+            .join
+            .as_ref()
+            .ok_or_else(|| CoreError::TypeError("no join".into()))?;
+        let Some(branch) = join
+            .branches
+            .iter()
+            .find(|branch| branch.branch_id == branch_id)
+        else {
+            return Err(CoreError::TypeError(format!(
+                "unknown branch `{branch_id}`"
+            )));
+        };
+        let expected = match &branch.op {
+            Some(BranchOp::Child {
+                child_execution_id, ..
+            }) => child_execution_id,
+            _ => {
+                return Err(CoreError::TypeError(format!(
+                    "branch `{branch_id}` is not a child"
+                )))
             }
         };
-        let value = absorb_value(&mut self.continuation.heap, value);
-        self.complete_registered_branch(&branch_id, value)
+        if expected != child_execution_id {
+            return Err(CoreError::TypeError(format!(
+                "child `{child_execution_id}` does not match branch `{branch_id}`"
+            )));
+        }
+        if join.state != JoinStatus::Active || branch.phase != BranchPhase::Registered {
+            return Ok(ChildDelivery::Stale);
+        }
+        Ok(ChildDelivery::Ready)
+    }
+
+    fn fail_registered_child(&mut self, branch_id: &str, message: String) {
+        let Some((kind, index)) = self.mark_registered_child_failed(branch_id, message) else {
+            return;
+        };
+        if kind == JoinKind::Any {
+            self.after_race_branch_progress();
+            return;
+        }
+        let Some(join) = self.continuation.join.as_mut() else {
+            return;
+        };
+        join.state = JoinStatus::Failed;
+        join.failure_branch = Some(index);
+        for branch in &mut join.branches {
+            if branch.index != index
+                && matches!(branch.phase, BranchPhase::Planned | BranchPhase::Registered)
+            {
+                branch.phase = BranchPhase::Detached;
+            }
+        }
+        self.continuation.pending = None;
+        self.continuation.status = ContinuationStatus::Runnable;
+        self.queue_persist();
+    }
+
+    fn mark_registered_child_failed(
+        &mut self,
+        branch_id: &str,
+        message: String,
+    ) -> Option<(JoinKind, u32)> {
+        let join = self.continuation.join.as_mut()?;
+        let branch = join
+            .branches
+            .iter_mut()
+            .find(|branch| branch.branch_id == branch_id)?;
+        let index = branch.index;
+        let kind = join.kind;
+        branch.phase = BranchPhase::Failed;
+        branch.error = Some(message);
+        Some((kind, index))
     }
 
     fn complete_registered_branch(

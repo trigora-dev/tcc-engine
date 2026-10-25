@@ -91,6 +91,7 @@ function drive(
   start: (artifact: string, args: unknown[]) => { run: () => Outcome; apply: (response: Record<string, unknown>) => void },
 ): unknown {
   let childResult: unknown;
+  let childExecutionId: string | undefined;
   for (let step = 0; step < 10000; step += 1) {
     const outcome = engine.run();
     if (outcome.type === "completed") {
@@ -103,7 +104,11 @@ function drive(
       if (childResult === undefined) {
         throw new Error("suspended without a child result");
       }
-      engine.apply({ type: "child_result", value: childResult });
+      engine.apply({
+        type: "child_result",
+        child_execution_id: childExecutionId,
+        value: childResult,
+      });
       continue;
     }
     const kind = String(outcome.request.type);
@@ -113,6 +118,7 @@ function drive(
       if (!child) {
         throw new Error("child artifact missing");
       }
+      childExecutionId = String(outcome.request.child_execution_id);
       engine.apply({ type: "ack" });
       const args = Array.isArray(outcome.request.args) ? outcome.request.args : [];
       childResult = drive(start(child, args), undefined, start);

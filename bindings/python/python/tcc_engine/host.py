@@ -650,7 +650,11 @@ def deliver_child(
         return snapshot(store, options["execution_id"], "suspended", None)
     if child["status"] == "completed" and child["result_json"]:
         crash("before_child_result", None)
-        payload = {"type": "child_result", "value": json.loads(child["result_json"])}
+        payload = {
+            "type": "child_result",
+            "child_execution_id": child["child_execution_id"],
+            "value": json.loads(child["result_json"]),
+        }
         if branch:
             payload["branch"] = branch
         state["engine"].apply_response(json.dumps(payload))
@@ -686,7 +690,11 @@ def deliver_child(
     )
     store.complete_child(invoke_id, json.dumps(child_result.get("result") or {"t": "undefined"}))
     crash("before_child_result", None)
-    payload = {"type": "child_result", "value": child_result.get("result")}
+    payload = {
+        "type": "child_result",
+        "child_execution_id": child["child_execution_id"],
+        "value": child_result.get("result"),
+    }
     if branch:
         payload["branch"] = branch
     state["engine"].apply_response(json.dumps(payload))

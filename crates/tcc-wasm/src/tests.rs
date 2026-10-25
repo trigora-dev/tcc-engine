@@ -383,27 +383,28 @@ fn drive_native(artifact: Artifact, execution_id: &str) -> String {
                     .apply_host_response(HostResponse::PersistConfirmed { revision })
                     .unwrap();
             }
-            EngineOutcome::Suspended => match &engine.continuation().pending {
-                Some(tcc_state::PendingOp::Wait {
-                    kind: tcc_state::WaitKind::Timer { .. },
-                }) => engine
-                    .apply_host_response(HostResponse::TimerFired { branch: None })
-                    .unwrap(),
-                Some(tcc_state::PendingOp::Wait {
-                    kind: tcc_state::WaitKind::Child { .. },
-                }) => engine
-                    .apply_host_response(HostResponse::ChildResult {
+            EngineOutcome::Suspended => {
+                let wake = match &engine.continuation().pending {
+                    Some(tcc_state::PendingOp::Wait {
+                        kind: tcc_state::WaitKind::Timer { .. },
+                    }) => HostResponse::TimerFired { branch: None },
+                    Some(tcc_state::PendingOp::Wait {
+                        kind:
+                            tcc_state::WaitKind::Child {
+                                child_execution_id, ..
+                            },
+                    }) => HostResponse::ChildResult {
                         value: Value::Number(7.0),
+                        child_execution_id: child_execution_id.clone(),
                         branch: None,
-                    })
-                    .unwrap(),
-                _ => engine
-                    .apply_host_response(HostResponse::EventPayload {
+                    },
+                    _ => HostResponse::EventPayload {
                         value: Value::String("ok".into()),
                         branch: None,
-                    })
-                    .unwrap(),
-            },
+                    },
+                };
+                engine.apply_host_response(wake).unwrap();
+            }
             EngineOutcome::Completed { .. } => {
                 return String::from_utf8(
                     tcc_state::encode_continuation(engine.continuation()).unwrap(),
@@ -437,7 +438,13 @@ fn drive_cabi() -> String {
             if continuation.contains("\"timer\"") {
                 apply(r#"{"type":"timer_fired"}"#);
             } else if continuation.contains("\"child\"") {
-                apply(r#"{"type":"child_result","value":{"t":"number","v":7}}"#);
+                let key = "\"child_execution_id\":\"";
+                let start = continuation.find(key).expect("child id") + key.len();
+                let end = continuation[start..].find('"').expect("child id end");
+                let child_execution_id = &continuation[start..start + end];
+                apply(&format!(
+                    r#"{{"type":"child_result","child_execution_id":"{child_execution_id}","value":{{"t":"number","v":7}}}}"#
+                ));
             } else {
                 apply(r#"{"type":"event_payload","value":{"t":"string","v":"ok"}}"#);
             }

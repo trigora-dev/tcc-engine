@@ -15,7 +15,7 @@ The engine rejects an artifact whose `engine_format_version` it does not impleme
 
 Host JSON without `host_protocol_version` is `MissingHostProtocolVersion`. A present value other than `1` is `UnsupportedHostProtocol { got, supported }`. There is no “missing means 1” rule.
 
-Protocol v1 is the finalized shape in [host-protocol.md](host-protocol.md). It includes ordinary single-op delivery and correlated join delivery. There is no protocol v2 and no decoder for the pre-correlation payloads (`event_payload` / `timer_fired` / `child_result` that cannot name a branch when the execution is in a join).
+Protocol v1 is the finalized shape in [host-protocol.md](host-protocol.md). It includes ordinary single-op delivery and correlated join delivery. There is no protocol v2 and no decoder for the pre-correlation payloads (`event_payload` / `timer_fired` / `child_result` that cannot name a branch when the execution is in a join). `child_result` and `child_failed` also require `child_execution_id`. The continuation encoding is unchanged.
 
 | Artifact | Host protocol v1 | Runs |
 |---|---|---|

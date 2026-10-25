@@ -275,6 +275,17 @@ fn require_host_protocol_version(
     }
 }
 
+fn required_text(
+    map: &std::collections::BTreeMap<String, Json>,
+    key: &str,
+) -> Result<String, CoreError> {
+    Ok(Json::get(map, key)
+        .map_err(core_state)?
+        .as_str()
+        .map_err(core_state)?
+        .to_string())
+}
+
 fn optional_branch(
     map: &std::collections::BTreeMap<String, Json>,
 ) -> Result<Option<String>, CoreError> {
@@ -318,6 +329,12 @@ fn json_to_response(json: &Json) -> Result<HostResponse, CoreError> {
         }),
         "child_result" => Ok(HostResponse::ChildResult {
             value: json_value(Json::get(map, "value").map_err(core_state)?)?,
+            child_execution_id: required_text(map, "child_execution_id")?,
+            branch: optional_branch(map)?,
+        }),
+        "child_failed" => Ok(HostResponse::ChildFailed {
+            message: required_text(map, "message")?,
+            child_execution_id: required_text(map, "child_execution_id")?,
             branch: optional_branch(map)?,
         }),
         "cancel" => Ok(HostResponse::Cancel),
@@ -376,6 +393,30 @@ mod tests {
         assert_eq!(
             decode_response(r#"{"host_protocol_version":1,"type":"ack"}"#).unwrap(),
             HostResponse::Ack
+        );
+    }
+
+    #[test]
+    fn child_result_requires_the_child_execution_id() {
+        let err = decode_response(
+            r#"{"host_protocol_version":1,"type":"child_result","value":{"t":"number","v":1}}"#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, CoreError::TypeError(_)));
+    }
+
+    #[test]
+    fn child_failed_names_the_child_and_the_message() {
+        assert_eq!(
+            decode_response(
+                r#"{"branch":"b","child_execution_id":"child:1","host_protocol_version":1,"message":"nope","type":"child_failed"}"#
+            )
+            .unwrap(),
+            HostResponse::ChildFailed {
+                message: "nope".into(),
+                child_execution_id: "child:1".into(),
+                branch: Some("b".into()),
+            }
         );
     }
 

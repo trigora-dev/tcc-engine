@@ -162,6 +162,11 @@ impl Engine {
     }
 
     fn apply_wake(&mut self, response: HostResponse) -> Result<(), CoreError> {
+        if matches!(response, HostResponse::Cancel) && terminal_status(self.continuation.status) {
+            return Err(CoreError::TypeError(
+                "cancel does not apply to a terminal continuation".into(),
+            ));
+        }
         if self.continuation.join.is_some() {
             return self.apply_join_wake(response);
         }
@@ -201,13 +206,46 @@ impl Engine {
             (
                 ContinuationStatus::Suspended,
                 Some(PendingOp::Wait {
-                    kind: WaitKind::Child { .. },
+                    kind:
+                        WaitKind::Child {
+                            child_execution_id, ..
+                        },
                 }),
-                HostResponse::ChildResult { value, .. },
+                HostResponse::ChildResult {
+                    value,
+                    child_execution_id: delivered,
+                    ..
+                },
             ) => {
+                if child_execution_id != &delivered {
+                    return Err(child_mismatch(&delivered, child_execution_id));
+                }
                 let value = absorb_value(&mut self.continuation.heap, value);
                 self.continuation.stack.push(value);
                 self.clear_wait_and_persist();
+                Ok(())
+            }
+            (
+                ContinuationStatus::Suspended,
+                Some(PendingOp::Wait {
+                    kind:
+                        WaitKind::Child {
+                            child_execution_id, ..
+                        },
+                }),
+                HostResponse::ChildFailed {
+                    message,
+                    child_execution_id: delivered,
+                    ..
+                },
+            ) => {
+                if child_execution_id != &delivered {
+                    return Err(child_mismatch(&delivered, child_execution_id));
+                }
+                self.continuation.pending = None;
+                if self.throw_value(Value::String(message))?.is_none() {
+                    self.continuation.status = ContinuationStatus::Runnable;
+                }
                 Ok(())
             }
             (_, _, HostResponse::Cancel) => {
@@ -228,7 +266,33 @@ pub(super) fn response_branch(response: &HostResponse) -> Option<String> {
     match response {
         HostResponse::EventPayload { branch, .. }
         | HostResponse::TimerFired { branch }
-        | HostResponse::ChildResult { branch, .. } => branch.clone(),
+        | HostResponse::ChildResult { branch, .. }
+        | HostResponse::ChildFailed { branch, .. } => branch.clone(),
         _ => None,
     }
+}
+
+pub(super) fn response_child(response: &HostResponse) -> Option<String> {
+    match response {
+        HostResponse::ChildResult {
+            child_execution_id, ..
+        }
+        | HostResponse::ChildFailed {
+            child_execution_id, ..
+        } => Some(child_execution_id.clone()),
+        _ => None,
+    }
+}
+
+fn terminal_status(status: ContinuationStatus) -> bool {
+    matches!(
+        status,
+        ContinuationStatus::Completed | ContinuationStatus::Failed | ContinuationStatus::Cancelled
+    )
+}
+
+fn child_mismatch(delivered: &str, expected: &str) -> CoreError {
+    CoreError::TypeError(format!(
+        "child `{delivered}` does not match wait `{expected}`"
+    ))
 }

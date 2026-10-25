@@ -90,9 +90,19 @@ fn run(
             }
             EngineOutcome::Suspended => {
                 if let Some(value) = child.clone() {
+                    let child_execution_id = match &engine.continuation().pending {
+                        Some(tcc_state::PendingOp::Wait {
+                            kind:
+                                tcc_state::WaitKind::Child {
+                                    child_execution_id, ..
+                                },
+                        }) => child_execution_id.clone(),
+                        _ => panic!("{name}: child result without a child wait"),
+                    };
                     engine
                         .apply_host_response(HostResponse::ChildResult {
                             value,
+                            child_execution_id,
                             branch: None,
                         })
                         .unwrap();

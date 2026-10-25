@@ -107,7 +107,7 @@ export async function drive(engine: Driver, program: Program): Promise<unknown> 
       throw new Error(outcome.message);
     }
     if (outcome.type === "suspended") {
-      const response = wake(program);
+      const response = wake(program, engine);
       if (!response) {
         throw new Error("suspended without an event");
       }
@@ -142,15 +142,30 @@ export async function drive(engine: Driver, program: Program): Promise<unknown> 
   throw new Error("drive did not finish");
 }
 
-function wake(program: Program): Record<string, unknown> | undefined {
+function wake(program: Program, engine: Driver): Record<string, unknown> | undefined {
   if (program.child) {
-    return { type: "child_result", value: program.child };
+    return {
+      type: "child_result",
+      child_execution_id: waitingChild(engine),
+      value: program.child,
+    };
   }
   const name = Object.keys(program.events ?? {})[0];
   if (!name) {
     return undefined;
   }
   return { type: "event_payload", value: program.events?.[name] };
+}
+
+function waitingChild(engine: Driver): string {
+  const continuation = JSON.parse(engine.continuation()) as {
+    pending?: { kind?: { type?: string; child_execution_id?: string } };
+  };
+  const kind = continuation.pending?.kind;
+  if (kind?.type !== "child" || !kind.child_execution_id) {
+    throw new Error("child result without a child wait");
+  }
+  return kind.child_execution_id;
 }
 
 function valuesEqual(actual: unknown, expected: unknown): boolean {
@@ -315,7 +330,7 @@ async function resumeFromHere(
   }
   const resumed = engine.resume(artifact, engine.continuation());
   if (deliverEvent) {
-    const response = wake(program);
+    const response = wake(program, resumed);
     if (!response) {
       throw new Error(`${program.id} resume without an event`);
     }

@@ -10,6 +10,15 @@ from tcc_engine.compile import compile
 from tcc_engine.canonical import canonical_stringify
 
 
+def waiting_child(engine: EngineBinding) -> str:
+    continuation = loads(engine.continuation_json())
+    kind = (continuation.get("pending") or {}).get("kind") or {}
+    child_execution_id = kind.get("child_execution_id")
+    if kind.get("type") != "child" or not child_execution_id:
+        raise RuntimeError("child result without a child wait")
+    return child_execution_id
+
+
 def loads(text: str):
     return json.loads(text, parse_int=_parse_int)
 
@@ -31,7 +40,13 @@ def drive(engine: EngineBinding, effects: dict, events: dict, child=None):
         if kind == "suspended":
             if child is not None:
                 engine.apply_response(
-                    json.dumps({"type": "child_result", "value": child})
+                    json.dumps(
+                        {
+                            "type": "child_result",
+                            "child_execution_id": waiting_child(engine),
+                            "value": child,
+                        }
+                    )
                 )
             elif events:
                 name = next(iter(events))
@@ -82,7 +97,13 @@ def resume_once(artifact: str, args: list, effects: dict, events: dict, child=No
             resumed = EngineBinding.resume(artifact, engine.continuation_json())
             if child is not None:
                 resumed.apply_response(
-                    json.dumps({"type": "child_result", "value": child})
+                    json.dumps(
+                        {
+                            "type": "child_result",
+                            "child_execution_id": waiting_child(resumed),
+                            "value": child,
+                        }
+                    )
                 )
             else:
                 name = next(iter(events))
