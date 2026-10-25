@@ -1,9 +1,14 @@
 {
   "name": "@tcc-engine/frontend-typescript",
-  "version": "26.10.3",
+  "version": "26.10.4",
   "license": "BUSL-1.1",
   "type": "module",
   "description": "TypeScript frontend: compile supported programs into TCC artifacts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/trigora-dev/tcc-engine",
+    "directory": "frontends/typescript"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
